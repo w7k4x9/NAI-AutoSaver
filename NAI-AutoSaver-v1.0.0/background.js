@@ -4,7 +4,6 @@ const TAB_ACTIONS = new Set([
   "ping",
   "togglePanel",
   "openPanel",
-  "applySelectorPrompt",
   "generateOnce",
   "startAutoGenerate",
   "cancelAutoGenerate",
@@ -57,7 +56,7 @@ function createCompletionNotification(count) {
 
   chrome.storage.sync.get(["autoCompletionNotificationEnabled"], (result = {}) => {
     if (result.autoCompletionNotificationEnabled !== false) {
-      chrome.notifications.create(`nai-prompt-selector-complete-${Date.now()}`, {
+      chrome.notifications.create(`nai-auto-saver-complete-${Date.now()}`, {
         type: "basic",
         iconUrl: chrome.runtime.getURL("icons/icon48.png"),
         title: "자동 생성 완료",
