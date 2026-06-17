@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>NAI 자동저장</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <header class="header">
+      <h1>NAI 자동저장</h1>
+      <p id="pageStatus">페이지 확인 중...</p>
+    </header>
+    <main>
+      <section class="section">
+        <button id="openPanelBtn" class="primary" type="button">패널 열기</button>
+      </section>
+      <section class="section">
+        <div class="toggle-row">
+          <span>완료 이미지 자동 저장</span>
+          <label class="switch">
+            <input id="autoSaveCheckbox" type="checkbox">
+            <span class="slider"></span>
+          </label>
+        </div>
+        <p class="hint">생성 · 대기열 · 저장 이름 설정은 NovelAI 페이지의 패널에서 합니다.</p>
+      </section>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>
