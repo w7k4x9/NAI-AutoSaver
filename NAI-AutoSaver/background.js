@@ -18,6 +18,23 @@ function sanitizeFilenamePart(value) {
     .slice(0, 120) || "prompt";
 }
 
+// A download subfolder may contain nested paths ("Proj/CharA"), but each
+// segment must be a safe filename. Empty/invalid input falls back to "NovelAI".
+function sanitizeDownloadFolder(value) {
+  let raw = String(value == null ? "" : value).replace(/\\/g, "/");
+  if (/^[a-zA-Z]:/.test(raw)) {
+    const segs = raw.split("/").map((s) => s.trim()).filter(Boolean);
+    raw = segs.length ? segs[segs.length - 1] : "NovelAI";
+  }
+  raw = raw.replace(/^\/+/, "");
+  const cleaned = raw
+    .split("/")
+    .map((segment) => segment.replace(/[:*?"<>|]/g, "_").replace(/\s+/g, " ").trim())
+    .filter((segment) => segment && segment !== "." && segment !== "..")
+    .map((segment) => segment.slice(0, 80));
+  return cleaned.length ? cleaned.join("/") : "NovelAI";
+}
+
 function sendMessageToActiveNovelAiTab(request, sendResponse) {
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     const tab = tabs?.[0];
@@ -95,9 +112,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request?.action === "downloadImage" && request.imageUrl) {
+    const folder = sanitizeDownloadFolder(request.folder);
     let filename;
     if (request.fileName) {
-      filename = `NovelAI/${sanitizeFilenamePart(request.fileName)}.png`;
+      filename = `${folder}/${sanitizeFilenamePart(request.fileName)}.png`;
     } else {
       const now = new Date();
       const stamp = [
@@ -108,7 +126,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         String(now.getMinutes()).padStart(2, "0"),
         String(now.getSeconds()).padStart(2, "0"),
       ].join("");
-      filename = `NovelAI/${stamp}_${sanitizeFilenamePart(request.promptText)}.png`;
+      filename = `${folder}/${stamp}_${sanitizeFilenamePart(request.promptText)}.png`;
     }
 
     chrome.downloads.download({ url: request.imageUrl, filename, saveAs: false }, (downloadId) => {

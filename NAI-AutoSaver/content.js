@@ -21,6 +21,39 @@
   const MIN_IMAGE_DIM = 256;
   const HOST_ID = "nai-auto-saver-host";
 
+  // NovelAI V4 splits each prompt area into "Prompt" and "Undesired Content"
+  // tabs. The UC editor lives under this wrapper. Positive prompts must never be
+  // written into it, and the negative prompt must only be written into it.
+  const UC_SELECTOR = ".prompt-input-box-undesired-content";
+  function isInUndesired(element) {
+    return Boolean(element && element.closest && element.closest(UC_SELECTOR));
+  }
+
+  // NovelAI versions the character-prompt wrapper class with a 1-based suffix
+  // (e.g. ".prompt-input-box-character-prompts-1", ".prompt-input-box-character-prompts-2").
+  // Older builds used the unsuffixed singular ".prompt-input-box-character-prompt".
+  // Match BOTH with a substring selector so a NovelAI rename can't silently break
+  // character detection (which previously caused character-negative to be dropped
+  // and the base prompt to swallow the character-negative box).
+  const CHAR_WRAPPER_SELECTOR = '[class*="prompt-input-box-character-prompt"]';
+  // Base prompt wrapper. Accept the known stable names plus any versioned
+  // "...base-prompt" variant defensively, mirroring the character fix above.
+  const BASE_WRAPPER_SELECTOR =
+    '.prompt-input-box-base-prompt, .prompt-input-box-prompt, [class*="prompt-input-box-base-prompt"]';
+
+  // Downloads can only go to a SUBFOLDER under the browser's Downloads dir, never
+  // an absolute path. If the user pastes "C:\...\NovelAI", keep just the final
+  // folder name so we don't create an ugly "C_/Users/.../NovelAI" tree.
+  function normalizeFolderInput(value) {
+    let v = String(value == null ? "" : value).trim().replace(/\\/g, "/");
+    const looksAbsolute = /^[a-zA-Z]:/.test(v) || v.startsWith("/") || v.startsWith("//");
+    if (looksAbsolute) {
+      const segs = v.split("/").map((s) => s.trim()).filter(Boolean);
+      v = segs.length ? segs[segs.length - 1] : "NovelAI";
+    }
+    return v;
+  }
+
   // Google Material Symbols Rounded (FILL=1, wght=400, opsz=24). Font coords (y-up), flipped in icon().
   const ICON_PATHS = {
     play_arrow: "M320 273V687Q320 704 332.0 715.5Q344 727 360 727Q365 727 370.5 725.5Q376 724 381 721L707 514Q716 508 720.5 499.0Q725 490 725.0 480.0Q725 470 720.5 461.0Q716 452 707 446L381 239Q376 236 370.5 234.5Q365 233 360 233Q344 233 332.0 244.5Q320 256 320 273ZM400 614 610 480 400 346ZM400 346 610 480 400 614Z",
@@ -59,6 +92,11 @@
     "intervalTime",
     "gcount",
     "singleSaveName",
+    "saveFolder",
+    "autoBase",
+    "autoBaseNeg",
+    "autoChar",
+    "autoCharNeg",
     "autoSaveEnabled",
     "autoCompletionNotificationEnabled",
     "volume",
@@ -99,6 +137,7 @@
     timeoutId: null,
     waitingForCompletion: false,
     waitingForExistingGeneration: false,
+    stopAfterCurrent: false,
     ignoreReadyUntil: 0,
     token: 0,
     onComplete: null,
@@ -188,6 +227,7 @@
       .filter((element) => element.isContentEditable)
       .filter(isVisible)
       .filter((element) => !element.closest(`#${HOST_ID}`))
+      .filter((element) => !isInUndesired(element))
       .filter((element) => {
         const rect = element.getBoundingClientRect();
         return rect.width >= 140 && rect.height >= 24;
@@ -205,15 +245,18 @@
       const editors = Array.from(root.querySelectorAll("[contenteditable]"))
         .filter((element) => element instanceof HTMLElement)
         .filter((element) => element.isContentEditable)
+        .filter((element) => !isInUndesired(element))
         .filter(isVisible);
       for (const editor of editors) {
-        const wrapper = editor.closest(".prompt-input-box-base-prompt, .prompt-input-box-prompt");
-        if (wrapper) {
+        const wrapper = editor.closest(BASE_WRAPPER_SELECTOR);
+        if (wrapper && !editor.closest(CHAR_WRAPPER_SELECTOR)) {
           return editor;
         }
       }
     }
-    return findPromptEditors()[0] || null;
+    // Fallback: topmost prompt editor that is NOT a character box, so the base
+    // prompt can never accidentally read/write a character-negative box.
+    return findPromptEditors().filter((el) => !el.closest(CHAR_WRAPPER_SELECTOR))[0] || null;
   }
 
   function plainTextToHTML(text) {
@@ -251,18 +294,45 @@
     editor.dispatchEvent(new Event("change", { bubbles: true }));
   }
 
-  function readCurrentNaiPrompt() {
+  async function readCurrentNaiPrompt() {
+    const scope = getBaseArea() || document.body;
+    await revealTabInScope(scope, "prompt", { excludeCharacterBoxes: true });
     const editor = getBasePromptEditor();
     return editor ? htmlToPlainText(editor.innerHTML) : "";
+  }
+
+  async function readCurrentNaiNegativePrompt() {
+    const scope = getBaseArea() || document.body;
+    await revealTabInScope(scope, "uc", { excludeCharacterBoxes: true });
+    const editor = getBaseNegativeEditor();
+    const text = editor ? htmlToPlainText(editor.innerHTML) : "";
+    await revealTabInScope(scope, "prompt", { excludeCharacterBoxes: true });
+    return text;
+  }
+
+  async function readCurrentNaiCharacterNegative() {
+    const containers = getCharacterContainers();
+    if (!containers.length) {
+      return "";
+    }
+    const parts = [];
+    for (const container of containers) {
+      await revealTabInScope(container, "uc");
+      const editor = getCharacterBoxEditor(container);
+      parts.push(editor ? htmlToPlainText(editor.innerHTML).trim() : "");
+      await revealTabInScope(container, "prompt");
+    }
+    return parts.join(" ;; ").replace(/(\s*;;\s*)+$/, "").trim();
   }
 
   function getCharacterPromptEditors() {
     const root = Array.from(document.querySelectorAll(".image-gen-prompt-main")).filter(isVisible)[0] || document;
     // Preferred: explicit character-prompt wrappers.
-    let editors = Array.from(root.querySelectorAll(".prompt-input-box-character-prompt [contenteditable]"))
+    let editors = Array.from(root.querySelectorAll(`${CHAR_WRAPPER_SELECTOR} [contenteditable]`))
       .filter((element) => element instanceof HTMLElement)
       .filter((element) => element.isContentEditable)
       .filter(isVisible)
+      .filter((element) => !isInUndesired(element))
       .filter((element) => !element.closest(`#${HOST_ID}`));
     // Fallback: every visible prompt editor except the base prompt editor.
     if (!editors.length) {
@@ -291,21 +361,29 @@
     return true;
   }
 
-  function readCurrentNaiCharacterPrompt() {
-    const editors = getCharacterPromptEditors();
-    if (!editors.length) {
+  async function readCurrentNaiCharacterPrompt() {
+    const containers = getCharacterContainers();
+    if (!containers.length) {
       return "";
     }
-    return editors
-      .map((editor) => htmlToPlainText(editor.innerHTML).trim())
-      .filter((text) => text.length > 0)
-      .join(" | ");
+    const parts = [];
+    for (const container of containers) {
+      await revealTabInScope(container, "prompt");
+      const editor = getCharacterBoxEditor(container);
+      const text = editor ? htmlToPlainText(editor.innerHTML).trim() : "";
+      if (text) {
+        parts.push(text);
+      }
+    }
+    return parts.join(" ;; ");
   }
 
   async function applyPromptToNovelAi(text) {
     if (text == null || String(text).trim() === "") {
       return { ok: true, skipped: true };
     }
+    const scope = getBaseArea() || document.body;
+    await revealTabInScope(scope, "prompt", { excludeCharacterBoxes: true });
     const editor = getBasePromptEditor();
     if (!editor) {
       return { ok: false, error: "NovelAI 프롬프트 입력 영역을 찾지 못했습니다." };
@@ -315,6 +393,226 @@
     return { ok: true };
   }
 
+  // NovelAI V4 gives the base prompt AND each character their own "Prompt" /
+  // "Undesired Content" tab pair. We must write negatives ONLY into a real UC
+  // editor, never into a prompt editor. The prompt wrappers below are the
+  // known-correct positive-prompt boxes, so "a visible editor that is NOT inside
+  // one of these" is the UC editor — this avoids guessing the UC class name and
+  // makes it impossible to contaminate a prompt box.
+  const UC_TAB_RE = /undesired|네거티브|negative|^\s*uc\s*$/i;
+  const PROMPT_TAB_RE = /^\s*prompt\s*$|프롬프트|base\s*prompt/i;
+  const PROMPT_WRAPPER_SELECTOR =
+    `${BASE_WRAPPER_SELECTOR}, ${CHAR_WRAPPER_SELECTOR}`;
+
+  function isPromptEditor(element) {
+    return Boolean(element && element.closest && element.closest(PROMPT_WRAPPER_SELECTOR));
+  }
+
+  function findTabButton(root, labelRegex, { excludeCharacterBoxes = false } = {}) {
+    if (!root) {
+      return null;
+    }
+    return Array.from(root.querySelectorAll("button"))
+      .filter(isVisible)
+      .filter((button) => !button.closest(`#${HOST_ID}`))
+      .filter((button) => !excludeCharacterBoxes || !button.closest(CHAR_WRAPPER_SELECTOR))
+      .find((button) => labelRegex.test(normalizeButtonText(button))) || null;
+  }
+
+  function getBaseArea() {
+    return Array.from(document.querySelectorAll(".image-gen-prompt-main")).filter(isVisible)[0] || null;
+  }
+
+  // The smallest box that holds exactly one character's prompt AND its own
+  // "Undesired Content" tab — found by walking up from the character prompt box.
+  function getCharacterContainers() {
+    const promptBoxes = Array.from(document.querySelectorAll(CHAR_WRAPPER_SELECTOR))
+      .filter(isVisible);
+    const containers = [];
+    for (const box of promptBoxes) {
+      let node = box.parentElement;
+      let found = null;
+      while (node && node !== document.body) {
+        const hasUcTab = Array.from(node.querySelectorAll("button"))
+          .some((b) => !b.closest(`#${HOST_ID}`) && UC_TAB_RE.test(normalizeButtonText(b)));
+        const charCount = node.querySelectorAll(CHAR_WRAPPER_SELECTOR).length;
+        if (hasUcTab && charCount === 1) {
+          found = node;
+          break;
+        }
+        node = node.parentElement;
+      }
+      const container = found || box.parentElement;
+      if (container && !containers.includes(container)) {
+        containers.push(container);
+      }
+    }
+    return containers.sort((a, b) => {
+      const ar = a.getBoundingClientRect();
+      const br = b.getBoundingClientRect();
+      return ar.top - br.top || ar.left - br.left;
+    });
+  }
+
+  // Within `scope`, return the visible editable element that is NOT a prompt box
+  // (i.e. the Undesired Content editor) and, optionally, not inside a character
+  // container (for the base UC). Excludes our own panel.
+  function findUcEditorInScope(scope, { excludeContainers = [] } = {}) {
+    return Array.from(scope.querySelectorAll("[contenteditable]"))
+      .filter((el) => el instanceof HTMLElement)
+      .filter((el) => el.isContentEditable)
+      .filter((el) => !el.closest(`#${HOST_ID}`))
+      .filter((el) => !isPromptEditor(el))
+      .filter((el) => !excludeContainers.some((c) => c.contains(el)))
+      .filter(isVisible)[0] || null;
+  }
+
+  // NovelAI V4 reuses ONE box per scope and swaps its contents by tab. For a
+  // character, the "Prompt" and "Undesired Content" tabs share the same wrapper
+  // class (e.g. prompt-input-box-character-prompts-1), so the ONLY reliable way
+  // to target the prompt vs the negative is to click the right tab first, then
+  // read/write whatever box is now visible. `which` is "prompt" or "uc".
+  async function revealTabInScope(scope, which, { excludeCharacterBoxes = false } = {}) {
+    if (!scope) {
+      return false;
+    }
+    const re = which === "uc" ? UC_TAB_RE : PROMPT_TAB_RE;
+    const tab = findTabButton(scope, re, { excludeCharacterBoxes });
+    if (tab) {
+      tab.click();
+      await delay(180);
+      return true;
+    }
+    return false;
+  }
+
+  // The single visible editable box inside a character container — whatever the
+  // currently active tab (Prompt or Undesired Content) is showing.
+  function getCharacterBoxEditor(container) {
+    if (!container) {
+      return null;
+    }
+    return Array.from(container.querySelectorAll(`${CHAR_WRAPPER_SELECTOR} [contenteditable]`))
+      .filter((el) => el instanceof HTMLElement)
+      .filter((el) => el.isContentEditable)
+      .filter((el) => !el.closest(`#${HOST_ID}`))
+      .filter(isVisible)[0] || null;
+  }
+
+  // Reveal the UC tab in `scope` if needed, write, then restore the Prompt tab.
+  // The editor is resolved AFTER the tab switch so we always target the box that
+  // is actually visible. Returns {ok} — never writes into a prompt editor.
+  async function writeNegativeIntoScope(scope, resolveEditor, text, { excludeCharacterBoxes = false } = {}) {
+    let editor = resolveEditor();
+    let switchedTab = false;
+    if (!editor) {
+      const ucTab = findTabButton(scope, UC_TAB_RE, { excludeCharacterBoxes });
+      if (ucTab) {
+        ucTab.click();
+        switchedTab = true;
+        await delay(200);
+        editor = resolveEditor();
+      }
+    }
+    if (!editor || isPromptEditor(editor)) {
+      if (switchedTab) {
+        const promptTab = findTabButton(scope, PROMPT_TAB_RE, { excludeCharacterBoxes });
+        if (promptTab) {
+          promptTab.click();
+          await delay(110);
+        }
+      }
+      return { ok: false };
+    }
+    setEditablePlainText(editor, text);
+    await delay(150);
+    if (switchedTab) {
+      const promptTab = findTabButton(scope, PROMPT_TAB_RE, { excludeCharacterBoxes });
+      if (promptTab) {
+        promptTab.click();
+        await delay(110);
+      }
+    }
+    return { ok: true };
+  }
+
+  // Base (image-level) UC editor: the non-prompt visible editor in the base area
+  // that is not inside any character container.
+  function getBaseNegativeEditor() {
+    const root = getBaseArea() || document;
+    // The base UC box has its own dedicated class, distinct from per-character
+    // UC boxes (which reuse the character-prompt wrapper). Prefer it directly.
+    const direct = Array.from(root.querySelectorAll(`${UC_SELECTOR} [contenteditable]`))
+      .filter((el) => el instanceof HTMLElement)
+      .filter((el) => el.isContentEditable)
+      .filter((el) => !el.closest(`#${HOST_ID}`))
+      .filter(isVisible)[0];
+    if (direct) {
+      return direct;
+    }
+    return findUcEditorInScope(root, { excludeContainers: getCharacterContainers() });
+  }
+  function getNegativePromptEditor() {
+    return getBaseNegativeEditor();
+  }
+
+  async function applyBaseNegativeToNovelAi(text) {
+    if (text == null || String(text).trim() === "") {
+      return { ok: true, skipped: true };
+    }
+    const scope = getBaseArea() || document.body;
+    await revealTabInScope(scope, "uc", { excludeCharacterBoxes: true });
+    const editor = getBaseNegativeEditor();
+    if (!editor) {
+      await revealTabInScope(scope, "prompt", { excludeCharacterBoxes: true });
+      setStatus("베이스 네거티브(Undesired Content) 입력란을 찾지 못해 건너뛰었습니다.", "warn");
+      return { ok: false };
+    }
+    setEditablePlainText(editor, text);
+    await delay(150);
+    await revealTabInScope(scope, "prompt", { excludeCharacterBoxes: true });
+    return { ok: true };
+  }
+
+  function getCharacterNegativeEditor(container) {
+    return findUcEditorInScope(container);
+  }
+
+  // Apply per-character negatives to each character's own Undesired Content box.
+  // "|" separates negatives per character; a single block applies to character 1.
+  async function applyCharacterNegativesToNovelAi(text) {
+    if (text == null || String(text).trim() === "") {
+      return { ok: true, skipped: true };
+    }
+    const segments = String(text).split(";;").map((part) => part.trim());
+    const containers = getCharacterContainers();
+    if (!containers.length) {
+      setStatus("캐릭터 박스를 찾지 못해 캐릭터 네거티브를 건너뛰었습니다.", "warn");
+      return { ok: false };
+    }
+    let applied = 0;
+    for (let i = 0; i < segments.length && i < containers.length; i += 1) {
+      const seg = segments[i];
+      if (!seg) {
+        continue;
+      }
+      const container = containers[i];
+      await revealTabInScope(container, "uc");
+      const editor = getCharacterBoxEditor(container);
+      if (editor) {
+        setEditablePlainText(editor, seg);
+        await delay(140);
+        applied += 1;
+      }
+      await revealTabInScope(container, "prompt");
+    }
+    if (!applied) {
+      setStatus("캐릭터 네거티브를 적용하지 못했습니다. (캐릭터 박스의 Undesired Content 칸을 못 찾음)", "warn");
+      return { ok: false };
+    }
+    return { ok: true, applied };
+  }
+
   // Write each character segment into NovelAI's real character prompt box,
   // adding boxes when needed. This is what makes the queue actually drive the
   // output (the "|" merge into the base box is ignored once character boxes exist).
@@ -322,19 +620,19 @@
     if (!segments.length) {
       return { ok: true, applied: 0, requested: 0 };
     }
-    let editors = getCharacterPromptEditors();
+    let containers = getCharacterContainers();
     let guard = 0;
-    while (editors.length < segments.length && guard < 8) {
+    while (containers.length < segments.length && guard < 8) {
       const added = await clickAddCharacterBox();
       if (!added) {
         break;
       }
       await delay(240);
-      editors = getCharacterPromptEditors();
+      containers = getCharacterContainers();
       guard += 1;
     }
 
-    if (!editors.length) {
+    if (!containers.length) {
       // Last resort: no character boxes at all -> use NovelAI's "|" syntax in base.
       const baseEditor = getBasePromptEditor();
       if (!baseEditor) {
@@ -347,10 +645,15 @@
       return { ok: true, applied: segments.length, requested: segments.length, fallback: true };
     }
 
-    const count = Math.min(segments.length, editors.length);
+    const count = Math.min(segments.length, containers.length);
     for (let i = 0; i < count; i += 1) {
-      setEditablePlainText(editors[i], segments[i]);
-      await delay(130);
+      const container = containers[i];
+      await revealTabInScope(container, "prompt");
+      const editor = getCharacterBoxEditor(container);
+      if (editor) {
+        setEditablePlainText(editor, segments[i]);
+        await delay(130);
+      }
     }
     return { ok: true, applied: count, requested: segments.length };
   }
@@ -360,12 +663,14 @@
   async function applyStructuredPrompt(basePrompt, characterPrompt) {
     let base = basePrompt == null ? "" : String(basePrompt);
     let segments = String(characterPrompt == null ? "" : characterPrompt)
-      .split("|")
+      .split(";;")
       .map((part) => part.trim())
       .filter((part) => part.length > 0);
     // If the base prompt itself carries "|" character pipes, peel them off so the
     // base box never duplicates character content. Use them as characters only
     // when the character field is empty.
+    // 이 블록 전체를 삭제하거나 주석 처리하세요.
+    /*
     if (base.includes("|")) {
       const parts = base.split("|");
       base = parts[0].trim();
@@ -374,6 +679,7 @@
         segments = basePipes;
       }
     }
+    */
     if (base.trim() !== "") {
       const baseResult = await applyPromptToNovelAi(base);
       if (!baseResult.ok) {
@@ -500,6 +806,10 @@
         const ctx = canvas.getContext("2d");
         ctx.drawImage(image, 0, 0);
         const dataUrl = canvas.toDataURL("image/png");
+        // Free the (potentially multi-MB) bitmap immediately instead of waiting
+        // for GC. Over a long batch this keeps the renderer's peak memory down.
+        canvas.width = 0;
+        canvas.height = 0;
         if (dataUrl && dataUrl.length > "data:image/png;base64,".length) {
           return dataUrl;
         }
@@ -588,10 +898,12 @@
     saveContext.lastSavedSrc = image.src;
     saveContext.counter += 1;
     const base = Store.sanitizeFileName(saveContext.baseName || defaultSaveName());
+    const folder = (ui.folderInput?.value || "").trim() || "NovelAI";
     chrome.runtime.sendMessage({
       action: "downloadImage",
       imageUrl: dataUrl,
       fileName: `${base} (${saveContext.counter})`,
+      folder,
     }, () => {
       void chrome.runtime.lastError;
     });
@@ -635,13 +947,27 @@
     }
   }
 
-  async function stopAutoGenerate({ playAudio = false } = {}) {
+  async function stopAutoGenerate({ playAudio = false, force = false } = {}) {
+    // If an image is currently being generated, let it finish and get saved
+    // before we tear everything down — otherwise the last image is lost. A
+    // second stop click (force) skips the wait and stops immediately.
+    if (!force && autoRun.active && autoRun.waitingForCompletion && !autoRun.stopAfterCurrent) {
+      autoRun.stopAfterCurrent = true;
+      renderControls();
+      setStatus("정지 대기 중 — 마지막 이미지를 저장한 뒤 정지합니다. (다시 누르면 즉시 정지)", "warn");
+      return { ok: true, pending: true };
+    }
+    return finalizeStop({ playAudio });
+  }
+
+  async function finalizeStop({ playAudio = false } = {}) {
     const wasActive = autoRun.active;
     clearAutoTimers();
     autoRun.token += 1;
     autoRun.active = false;
     autoRun.waitingForCompletion = false;
     autoRun.waitingForExistingGeneration = false;
+    autoRun.stopAfterCurrent = false;
     autoRun.onComplete = null;
     if (queueRun.active && !queueRun.advancing) {
       cancelQueueRun();
@@ -745,6 +1071,11 @@
     recordImageCompletion();
     setStatus(progressLine() + liveEtaSuffix(), "ok");
     renderControls();
+    if (autoRun.stopAfterCurrent) {
+      setStatus("마지막 이미지를 저장하고 정지했습니다.", "ok");
+      await finalizeStop({ playAudio: true });
+      return;
+    }
     if (autoRun.target > 0 && autoRun.count >= autoRun.target) {
       await completeAutoRun();
       return;
@@ -752,7 +1083,7 @@
     await scheduleNextAutoClick();
   }
 
-  async function startAutoGenerate({ target = 0, saveName = "", applyPrompt = null, applyBasePrompt = null, applyCharacterPrompt = null } = {}) {
+  async function startAutoGenerate({ target = 0, saveName = "", applyPrompt = null, applyBasePrompt = null, applyCharacterPrompt = null, applyBaseNegative = null, applyCharacterNegative = null } = {}) {
     if (!runSafetyChecks({ alertUser: true })) {
       return { ok: false, error: "안전 점검 실패" };
     }
@@ -771,6 +1102,16 @@
         setStatus(applied.error, "warn");
         return applied;
       }
+    }
+
+    // Negatives are independent of the positive flow. The common/global negative
+    // goes to the base Undesired Content; per-character negatives go to each
+    // character's own Undesired Content. Failures are non-fatal (warn, continue).
+    if (applyCharacterNegative != null && String(applyCharacterNegative).trim() !== "") {
+      await applyCharacterNegativesToNovelAi(applyCharacterNegative);
+    }
+    if (applyBaseNegative != null && String(applyBaseNegative).trim() !== "") {
+      await applyBaseNegativeToNovelAi(applyBaseNegative);
     }
 
     // Reset per-run name/counter, but carry the last saved image src forward so
@@ -792,6 +1133,7 @@
     autoRun.target = Math.max(0, Number.parseInt(target, 10) || 0);
     autoRun.waitingForCompletion = false;
     autoRun.waitingForExistingGeneration = false;
+    autoRun.stopAfterCurrent = false;
     autoRun.ignoreReadyUntil = 0;
     renderControls();
 
@@ -843,22 +1185,25 @@
 
   async function addQueueItem() {
     await loadQueueState();
-    let basePrompt = readCurrentNaiPrompt();
-    let characterPrompt = readCurrentNaiCharacterPrompt();
+    let basePrompt = await readCurrentNaiPrompt();
+    let characterPrompt = await readCurrentNaiCharacterPrompt();
     // If the base box itself uses NovelAI's "|" syntax and there are no separate
     // character boxes, split it so base/character land in the right fields.
+    // 이 블록 역시 전체를 삭제하거나 주석 처리하세요.
+    /*
     if (!characterPrompt && basePrompt.includes("|")) {
       const parts = basePrompt.split("|");
       basePrompt = parts[0].trim();
       characterPrompt = parts.slice(1).map((part) => part.trim()).filter(Boolean).join(" | ");
     }
+    */
     const count = Math.max(1, Number.parseInt(ui.countInput?.value, 10) || 1);
+    const negativePrompt = await readCurrentNaiCharacterNegative();
+    const baseNegativePrompt = await readCurrentNaiNegativePrompt();
     const pattern = queueState.options.namePattern || "";
     const patterned = pattern.trim() ? Store.applyNamePattern(pattern, queueState.items.length) : "";
-    const title = patterned
-      || (ui.saveNameInput?.value || "").trim()
-      || `대기열 ${queueState.items.length + 1}`;
-    const newItem = Store.createItem({ title, basePrompt, characterPrompt, count });
+    const title = patterned || `대기열 ${queueState.items.length + 1}`;
+    const newItem = Store.createItem({ title, basePrompt, baseNegativePrompt, characterPrompt, negativePrompt, count });
     queueState.items.push(newItem);
     selectedQueueId = newItem.id;
     await persistQueueState();
@@ -915,7 +1260,9 @@
     const copy = Store.createItem({
       title: nextDuplicateName(src.title),
       basePrompt: src.basePrompt,
+      baseNegativePrompt: src.baseNegativePrompt,
       characterPrompt: src.characterPrompt,
+      negativePrompt: src.negativePrompt,
       count: src.count,
     });
     queueState.items.splice(index + 1, 0, copy);
@@ -986,8 +1333,12 @@
       queueState.items[index].title = Store.normalizeTitle(value);
     } else if (field === "basePrompt") {
       queueState.items[index].basePrompt = Store.normalizePrompt(value);
+    } else if (field === "baseNegativePrompt") {
+      queueState.items[index].baseNegativePrompt = Store.normalizePrompt(value);
     } else if (field === "characterPrompt") {
       queueState.items[index].characterPrompt = Store.normalizePrompt(value);
+    } else if (field === "negativePrompt") {
+      queueState.items[index].negativePrompt = Store.normalizePrompt(value);
     } else if (field === "count") {
       queueState.items[index].count = Store.normalizeCount(value);
     }
@@ -1049,11 +1400,16 @@
         }
         queueRun.advancing = true;
         const itemBase = Store.effectiveBase(item, queueState.options);
+        const itemBaseNeg = (item.baseNegativePrompt && item.baseNegativePrompt.trim())
+          ? item.baseNegativePrompt
+          : null;
         const startResult = await startAutoGenerate({
           target: item.count,
           saveName: item.title,
           applyBasePrompt: itemBase && itemBase.trim() ? itemBase : null,
           applyCharacterPrompt: item.characterPrompt && item.characterPrompt.trim() ? item.characterPrompt : null,
+          applyBaseNegative: itemBaseNeg,
+          applyCharacterNegative: item.negativePrompt && item.negativePrompt.trim() ? item.negativePrompt : null,
         });
         queueRun.advancing = false;
         if (!startResult.ok && !startResult.delayed) {
@@ -1159,8 +1515,17 @@
   }
 
   async function stopQueueRun() {
-    cancelQueueRun();
-    await stopAutoGenerate({ playAudio: false });
+    // 자동 생성을 먼저 멈추도록 지시합니다.
+    const result = await stopAutoGenerate({ playAudio: false });
+    
+    if (result.pending) {
+      // 마지막 이미지를 기다리는 중(정지 대기)이라면 대기열 루프만 끊습니다.
+      // 큐 활성 상태를 유지해야 UI가 자동 생성 탭으로 튕기지 않습니다.
+      queueRun.token += 1; 
+    } else {
+      // 즉시 정지된 상태라면 대기열을 완전히 끕니다.
+      cancelQueueRun();
+    }
   }
 
   function exportQueue() {
@@ -1228,27 +1593,36 @@
     const code = data.code != null ? String(data.code) : "";
     const appearance = data.appearance != null ? String(data.appearance) : "";
     const expressions = data.expressions != null ? String(data.expressions) : "";
+    const negative = data.negative != null ? String(data.negative) : "";
     return `
       <div class="ias-gen-char-row">
         <div class="ias-gen-row-head">
           <input class="ias-input ias-gc-code" type="text" maxlength="40" placeholder="코드 (예: w)" value="${escapeAttr(code)}">
           <button class="ias-icon-btn ias-gc-del" type="button" title="이 캐릭터 삭제">${icon("delete", 16)}</button>
         </div>
-        <textarea class="ias-input ias-gc-appear" rows="2" placeholder="외형 태그">${escapeHtml(appearance)}</textarea>
-        <textarea class="ias-input ias-gc-expr" rows="4" placeholder="표정 세트 — 한 줄에 감정 1개 (줄 순서 = 감정번호)&#10;예:&#10;1 hooded eyes&#10;2 smiling">${escapeHtml(expressions)}</textarea>
+        <label class="ias-gc-label">외형 태그</label>
+        <textarea class="ias-input ias-gc-appear" rows="2" placeholder="예: girl, black hair, long hair">${escapeHtml(appearance)}</textarea>
+        <label class="ias-gc-label">표정 세트 (한 줄에 감정 1개, 줄 순서 = 감정번호)</label>
+        <textarea class="ias-input ias-gc-expr" rows="4" placeholder="예:&#10;1 hooded eyes&#10;2 smiling">${escapeHtml(expressions)}</textarea>
+        <label class="ias-gc-label">캐릭터 네거티브 (이 캐릭터 Undesired Content)</label>
+        <textarea class="ias-input ias-gc-neg" rows="2" placeholder="이 캐릭터의 Undesired Content에 적용 · 비우면 없음">${escapeHtml(negative)}</textarea>
       </div>`;
   }
 
   function genBgRowHtml(data = {}) {
     const code = data.code != null ? String(data.code) : "";
     const tags = data.tags != null ? String(data.tags) : "";
+    const negative = data.negative != null ? String(data.negative) : "";
     return `
       <div class="ias-gen-bg-row">
         <div class="ias-gen-row-head">
           <input class="ias-input ias-gb-code" type="text" maxlength="40" placeholder="코드 (예: h)" value="${escapeAttr(code)}">
           <button class="ias-icon-btn ias-gb-del" type="button" title="이 배경 삭제">${icon("delete", 16)}</button>
         </div>
+        <label class="ias-gc-label">배경 태그 (긍정 · 캐릭터 프롬프트에 합쳐짐)</label>
         <textarea class="ias-input ias-gb-tags" rows="2" placeholder="배경 태그">${escapeHtml(tags)}</textarea>
+        <label class="ias-gc-label">배경 네거티브 (캐릭터 Undesired Content에 합쳐짐 · 비우면 없음)</label>
+        <textarea class="ias-input ias-gb-neg" rows="2" placeholder="이 배경의 네거티브">${escapeHtml(negative)}</textarea>
       </div>`;
   }
 
@@ -1286,16 +1660,19 @@
           code: row.querySelector(".ias-gc-code")?.value || "",
           appearance: row.querySelector(".ias-gc-appear")?.value || "",
           expressions: row.querySelector(".ias-gc-expr")?.value || "",
+          negative: row.querySelector(".ias-gc-neg")?.value || "",
         }))
       : [];
     const bgs = ui.genBgs
       ? Array.from(ui.genBgs.querySelectorAll(".ias-gen-bg-row")).map((row) => ({
           code: row.querySelector(".ias-gb-code")?.value || "",
           tags: row.querySelector(".ias-gb-tags")?.value || "",
+          negative: row.querySelector(".ias-gb-neg")?.value || "",
         }))
       : [];
     return {
       base: ui.genBase?.value || "",
+      baseNeg: ui.genBaseNeg?.value || "",
       count: ui.genCount?.value || "1",
       split: ui.genSplit?.value || "0",
       chars,
@@ -1318,14 +1695,27 @@
 
   function updateGenPreview() {
     if (ui.genPreview) {
-      ui.genPreview.textContent = `총 ${genPreviewCount()}개 생성됨`;
+      ui.genPreview.innerHTML = `총 <strong>${genPreviewCount()}</strong>개 생성됨`;
     }
+  }
+
+  // NovelAI separates tags by comma. When appearance / expression / background
+  // groups are stacked on separate lines, each group must end with a comma or
+  // NAI fuses the boundary tags (e.g. "long hair" + "smiling" -> "long hair
+  // smiling"). Force exactly one trailing comma per non-empty group.
+  function ensureTrailingComma(value) {
+    const t = String(value == null ? "" : value).trim();
+    if (!t) {
+      return "";
+    }
+    return /,\s*$/.test(t) ? t.replace(/\s*$/, "") : `${t},`;
   }
 
   // Expand the raw input into queue items (character × background × expression).
   function buildGenItems() {
     const raw = collectGenRaw();
     const base = raw.base;
+    const baseNeg = String(raw.baseNeg || "").trim();
     const count = Math.max(1, Number.parseInt(raw.count, 10) || 1);
     const items = [];
     for (const ch of raw.chars) {
@@ -1335,19 +1725,27 @@
       }
       const expressions = parseExpressionSet(ch.expressions);
       const appearance = String(ch.appearance || "").trim();
+      const negative = String(ch.negative || "").trim();
       for (const bg of raw.bgs) {
         const bgCode = bg.code.trim();
         if (!bgCode) {
           continue;
         }
         const bgTags = String(bg.tags || "").trim();
+        const bgNeg = String(bg.negative || "").trim();
         expressions.forEach((expr, index) => {
           const emotionNumber = index + 1;
-          const characterPrompt = [appearance, expr.trim(), bgTags].join("\n\n");
+          const characterPrompt = [appearance, expr.trim(), bgTags]
+            .map(ensureTrailingComma)
+            .filter(Boolean)
+            .join("\n");
+          const combinedNegative = [negative, bgNeg].filter(Boolean).join(", ");
           items.push(Store.createItem({
             title: `${charCode}_${bgCode}_${emotionNumber}`,
             basePrompt: base,
+            baseNegativePrompt: baseNeg,
             characterPrompt,
+            negativePrompt: combinedNegative,
             count,
           }));
         });
@@ -1443,6 +1841,9 @@
     if (ui.genBase) {
       ui.genBase.value = stored.base || "";
     }
+    if (ui.genBaseNeg) {
+      ui.genBaseNeg.value = stored.baseNeg || "";
+    }
     if (ui.genCount) {
       ui.genCount.value = stored.count || "1";
     }
@@ -1498,6 +1899,11 @@
       intervalTime = 3,
       gcount = "",
       singleSaveName = "",
+      saveFolder = "NovelAI",
+      autoBase = "",
+      autoBaseNeg = "",
+      autoChar = "",
+      autoCharNeg = "",
       autoSaveEnabled = true,
       autoCompletionNotificationEnabled = true,
     } = settings;
@@ -1509,6 +1915,21 @@
     }
     if (ui.saveNameInput) {
       ui.saveNameInput.value = singleSaveName;
+    }
+    if (ui.autoBaseInput) {
+      ui.autoBaseInput.value = autoBase;
+    }
+    if (ui.autoBaseNegInput) {
+      ui.autoBaseNegInput.value = autoBaseNeg;
+    }
+    if (ui.autoCharInput) {
+      ui.autoCharInput.value = autoChar;
+    }
+    if (ui.autoCharNegInput) {
+      ui.autoCharNegInput.value = autoCharNeg;
+    }
+    if (ui.folderInput) {
+      ui.folderInput.value = normalizeFolderInput(saveFolder);
     }
     if (ui.autoSaveToggle) {
       ui.autoSaveToggle.checked = autoSaveEnabled !== false;
@@ -1530,6 +1951,11 @@
       intervalTime,
       gcount: gcount === "" ? "" : gcount,
       singleSaveName: (ui.saveNameInput?.value || "").trim(),
+      saveFolder: (ui.folderInput?.value || "").trim(),
+      autoBase: ui.autoBaseInput?.value || "",
+      autoBaseNeg: ui.autoBaseNegInput?.value || "",
+      autoChar: ui.autoCharInput?.value || "",
+      autoCharNeg: ui.autoCharNegInput?.value || "",
     });
   }
 
@@ -1935,13 +2361,7 @@
     header.className = "ias-qeditor-head ias-qeditor-headrow";
     const headTitle = document.createElement("span");
     headTitle.textContent = `항목 ${orderIndex} 편집`;
-    const fsBtn = document.createElement("button");
-    fsBtn.type = "button";
-    fsBtn.className = "ias-fs-btn";
-    fsBtn.dataset.action = "fullscreen";
-    fsBtn.title = "넓게 편집";
-    fsBtn.innerHTML = `${icon(editorExpanded ? "fullscreen_exit" : "fullscreen", 18)}<span>${editorExpanded ? "접기" : "넓게 편집"}</span>`;
-    header.append(headTitle, fsBtn);
+    header.append(headTitle);
     ui.queueEditor.append(header);
 
     const topRow = document.createElement("div");
@@ -1986,11 +2406,25 @@
     baseInput.className = "ias-input ias-qbig";
     baseInput.value = item.basePrompt || "";
     baseInput.placeholder = "장면 · 스타일 · 화질 태그 (비우면 현재 NovelAI 베이스 프롬프트 사용)";
-    baseInput.rows = editorExpanded ? 10 : 5;
+    baseInput.rows = editorExpanded ? 8 : 4;
     baseInput.dataset.field = "basePrompt";
     baseInput.disabled = disabled || usingGlobal;
     baseField.append(baseLabel, baseInput);
     ui.queueEditor.append(baseField);
+
+    const baseNegField = document.createElement("div");
+    baseNegField.className = "ias-field ias-qeditor-field";
+    const baseNegLabel = document.createElement("label");
+    baseNegLabel.textContent = "베이스 네거티브 (베이스 Undesired Content)";
+    const baseNegInput = document.createElement("textarea");
+    baseNegInput.className = "ias-input ias-qbig";
+    baseNegInput.value = item.baseNegativePrompt || "";
+    baseNegInput.placeholder = "이 항목의 베이스 Undesired Content에 적용 · 비우면 현재 NovelAI 값 그대로";
+    baseNegInput.rows = editorExpanded ? 6 : 3;
+    baseNegInput.dataset.field = "baseNegativePrompt";
+    baseNegInput.disabled = disabled;
+    baseNegField.append(baseNegLabel, baseNegInput);
+    ui.queueEditor.append(baseNegField);
 
     const charField = document.createElement("div");
     charField.className = "ias-field ias-qeditor-field";
@@ -2000,11 +2434,25 @@
     charInput.className = "ias-input ias-qbig";
     charInput.value = item.characterPrompt || "";
     charInput.placeholder = "예: girl, black hair, long hair  (여러 명은 | 로 구분)";
-    charInput.rows = editorExpanded ? 12 : 6;
+    charInput.rows = editorExpanded ? 8 : 4;
     charInput.dataset.field = "characterPrompt";
     charInput.disabled = disabled;
     charField.append(charLabel, charInput);
     ui.queueEditor.append(charField);
+
+    const negField = document.createElement("div");
+    negField.className = "ias-field ias-qeditor-field";
+    const negLabel = document.createElement("label");
+    negLabel.textContent = "캐릭터 네거티브 (캐릭터 Undesired Content)";
+    const negInput = document.createElement("textarea");
+    negInput.className = "ias-input ias-qbig";
+    negInput.value = item.negativePrompt || "";
+    negInput.placeholder = "이 항목의 캐릭터 Undesired Content에 적용 · 여러 캐릭터는 | 로 구분";
+    negInput.rows = editorExpanded ? 6 : 3;
+    negInput.dataset.field = "negativePrompt";
+    negInput.disabled = disabled;
+    negField.append(negLabel, negInput);
+    ui.queueEditor.append(negField);
   }
 
   function updateRowDisplay(item) {
@@ -2538,9 +2986,11 @@
       .ias-side-logo {
         display: flex; align-items: center; justify-content: center;
         width: 38px; height: 38px; border-radius: 11px;
-        background: #007aff; color: #fff; margin-bottom: 18px;
-        box-shadow: 0 4px 10px rgba(0,122,255,0.35);
+        background: transparent; color: rgba(0,0,0,0.22); margin-bottom: 18px;
+        cursor: grab; touch-action: none;
       }
+      .ias-side-logo:hover { color: rgba(0,0,0,0.38); }
+      .ias-side-logo:active { cursor: grabbing; }
       .ias-tabs { display: flex; flex-direction: column; gap: 6px; width: 100%; align-items: center; }
       .ias-tab {
         display: flex; flex-direction: column; align-items: center; gap: 3px;
@@ -2578,7 +3028,9 @@
       .ias-main-head {
         font-size: 22px; font-weight: 700; letter-spacing: -0.4px;
         color: #1c1c1e; margin-bottom: 16px; flex: 0 0 auto;
+        cursor: grab; touch-action: none; user-select: none;
       }
+      .ias-main-head:active { cursor: grabbing; }
       .ias-pane { display: none; flex-direction: column; min-height: 0; flex: 1 1 auto; }
       .ias-pane[data-active="true"] { display: flex; }
       .ias-scroll { overflow-y: auto; overflow-x: hidden; flex: 1 1 auto; padding-right: 4px; margin-right: -4px; }
@@ -2703,6 +3155,7 @@
       }
       .ias-gen-row-head { display: flex; align-items: center; gap: 8px; }
       .ias-gen-row-head .ias-input { flex: 1; }
+      .ias-gc-label { font-size: 11px; font-weight: 600; color: #8e8e93; margin: 2px 0 -3px 2px; }
       .ias-gen-empty { font-size: 12px; color: #b0b0b5; padding: 10px 2px; }
       .ias-icon-btn {
         display: flex; align-items: center; justify-content: center;
@@ -2717,10 +3170,11 @@
         border-top: 1px solid rgba(0, 0, 0, 0.07);
       }
       .ias-gen-preview {
-        font-size: 13px; font-weight: 700; color: #007aff;
-        text-align: center; padding: 8px; margin-bottom: 8px;
-        background: rgba(0, 122, 255, 0.10); border-radius: 12px;
+        font-size: 12.5px; font-weight: 600; color: #6e6e73;
+        text-align: center; padding: 6px 0 10px;
+        background: transparent; border: none;
       }
+      .ias-gen-preview strong { color: #007aff; font-weight: 700; }
       .ias-gen-foot .ias-btn.secondary { width: 100%; }
       .ias-gen-foot .ias-row .ias-btn.secondary { flex: 1; }
 
@@ -2806,8 +3260,7 @@
       <div class="ias-shell" data-collapsed="true">
         <button class="ias-fab" type="button" title="NAI 자동저장">${icon("play_arrow", 26)}</button>
         <div class="ias-card">
-          <div class="ias-side">
-            <div class="ias-side-logo">${icon("auto_awesome", 22)}</div>
+          <div class="ias-side" title="여기 빈 공간이나 상단 제목을 잡고 드래그하면 창을 옮길 수 있어요">
             <div class="ias-tabs">
               <button class="ias-tab" type="button" data-tab="auto" data-active="true">${icon("bolt", 22)}<span>자동생성</span></button>
               <button class="ias-tab" type="button" data-tab="queue">${icon("lists", 22)}<span>대기열</span></button>
@@ -2827,7 +3280,23 @@
                 <div class="ias-field">
                   <label>저장 이름</label>
                   <input class="ias-input ias-save-name" type="text" placeholder="예: 1_b_c">
-                  <p class="ias-hint">단발 실행에만 적용됩니다. 대기열은 항목마다 따로 저장 이름을 씁니다.</p>
+                  <p class="ias-hint">단발 실행에만 적용됩니다. 대기열은 항목마다 따로 저장 이름을 씁니다. (저장 폴더는 설정 탭)</p>
+                </div>
+                <div class="ias-field">
+                  <label>베이스 프롬프트</label>
+                  <textarea class="ias-input ias-auto-base" rows="3" placeholder="장면 · 스타일 · 화질 태그 · 비우면 현재 NovelAI 베이스 프롬프트 그대로 사용"></textarea>
+                </div>
+                <div class="ias-field">
+                  <label>베이스 네거티브 (베이스 Undesired Content)</label>
+                  <textarea class="ias-input ias-auto-base-neg" rows="3" placeholder="베이스 Undesired Content에 적용 · 비우면 현재 NovelAI 값 그대로"></textarea>
+                </div>
+                <div class="ias-field">
+                  <label>캐릭터 프롬프트</label>
+                  <textarea class="ias-input ias-auto-char" rows="3" placeholder="예: girl, black hair  ·  여러 명은 | 로 구분 · 비우면 현재 NovelAI 캐릭터 그대로"></textarea>
+                </div>
+                <div class="ias-field">
+                  <label>캐릭터 네거티브 (캐릭터 Undesired Content)</label>
+                  <textarea class="ias-input ias-auto-char-neg" rows="3" placeholder="각 캐릭터 Undesired Content에 적용 · 여러 캐릭터는 | 로 구분 · 비우면 그대로"></textarea>
                 </div>
                 <div class="ias-row">
                   <div class="ias-field">
@@ -2884,11 +3353,15 @@
             </div>
             <!-- COMBINATION GENERATOR -->
             <div class="ias-pane" data-pane="gen">
-              <div class="ias-main-head">조합 생성기</div>
+              <div class="ias-main-head">조합생성</div>
               <div class="ias-scroll ias-gen-scroll">
                 <div class="ias-field">
                   <label>Base 프롬프트 (모든 항목 공통)</label>
                   <textarea class="ias-input ias-gen-base" rows="3" placeholder="공통 Base 프롬프트 — 모든 조합 항목이 공유합니다 (globalBase로 저장)"></textarea>
+                </div>
+                <div class="ias-field">
+                  <label>Base 네거티브 (모든 항목 공통 · 베이스 Undesired Content)</label>
+                  <textarea class="ias-input ias-gen-base-neg" rows="3" placeholder="공통 Base 네거티브 — 생성되는 모든 항목의 베이스 Undesired Content에 들어갑니다 · 비우면 없음"></textarea>
                 </div>
 
                 <div class="ias-gen-section-head">
@@ -2917,18 +3390,26 @@
               </div>
 
               <div class="ias-gen-foot">
-                <div class="ias-gen-preview">총 0개 생성됨</div>
                 <div class="ias-row" style="gap:8px;">
                   <button class="ias-btn secondary ias-gen-append" type="button" style="font-size:13px;padding:10px;">${icon("playlist_add", 18)}<span>현재 큐에 추가</span></button>
                   <button class="ias-btn secondary ias-gen-replace" type="button" style="font-size:13px;padding:10px;">${icon("lists", 18)}<span>새 큐로 교체</span></button>
                 </div>
                 <button class="ias-btn secondary ias-gen-export" type="button" style="font-size:13px;padding:10px;margin-top:8px;">${icon("download", 18)}<span>JSON 내보내기</span></button>
+                <div class="ias-gen-preview">총 <strong>0</strong>개 생성됨</div>
               </div>
             </div>
             <!-- SETTINGS -->
             <div class="ias-pane" data-pane="settings">
               <div class="ias-main-head">설정</div>
               <div class="ias-scroll">
+                <div class="ias-block">
+                  <div class="ias-block-title">저장</div>
+                  <div class="ias-field">
+                    <label>저장 폴더</label>
+                    <input class="ias-input ias-folder" type="text" placeholder="NovelAI">
+                    <p class="ias-hint">브라우저 다운로드 폴더 안의 하위 경로입니다. 예: NovelAI 또는 NovelAI/프로젝트A. 비우면 NovelAI. (브라우저 보안상 다운로드 폴더 바깥 경로는 지정할 수 없습니다 — 부모 폴더는 Chrome 설정에서 변경)</p>
+                  </div>
+                </div>
                 <div class="ias-block">
                   <div class="ias-block-title">생성</div>
                   <div class="ias-toggle-row">
@@ -3074,6 +3555,22 @@
     ui.intervalInput.addEventListener("change", saveSingleSettings);
     ui.countInput.addEventListener("change", saveSingleSettings);
     ui.saveNameInput.addEventListener("change", saveSingleSettings);
+    [ui.autoBaseInput, ui.autoBaseNegInput, ui.autoCharInput, ui.autoCharNegInput].forEach((el) => {
+      if (el) {
+        el.addEventListener("change", saveSingleSettings);
+      }
+    });
+    if (ui.folderInput) {
+      ui.folderInput.addEventListener("change", () => {
+        const raw = ui.folderInput.value || "";
+        const fixed = normalizeFolderInput(raw);
+        if (fixed !== raw.trim().replace(/\\/g, "/")) {
+          ui.folderInput.value = fixed;
+          setStatus("저장 폴더는 다운로드 폴더 안의 하위 경로만 가능합니다. 절대경로(C:\\...)는 쓸 수 없어 폴더명만 남겼습니다. 부모 위치는 Chrome 다운로드 설정에서 바꿔주세요.", "warn");
+        }
+        saveSingleSettings();
+      });
+    }
 
     for (const button of ui.presetButtons) {
       button.addEventListener("click", () => {
@@ -3083,6 +3580,7 @@
     }
 
     enableDrag(ui.sidebar);
+    panelShadow.querySelectorAll(".ias-main-head").forEach((head) => enableDrag(head));
     enableResize(ui.resizeHandle);
     enableDrag(ui.fab, { tapToOpen: true });
   }
@@ -3101,7 +3599,14 @@
     saveSingleSettings();
     const target = Math.max(0, Number.parseInt(ui.countInput?.value, 10) || 0);
     const saveName = (ui.saveNameInput?.value || "").trim();
-    await startAutoGenerate({ target, saveName });
+    await startAutoGenerate({
+      target,
+      saveName,
+      applyBasePrompt: (ui.autoBaseInput?.value || "").trim() || null,
+      applyBaseNegative: (ui.autoBaseNegInput?.value || "").trim() || null,
+      applyCharacterPrompt: (ui.autoCharInput?.value || "").trim() || null,
+      applyCharacterNegative: (ui.autoCharNegInput?.value || "").trim() || null,
+    });
   }
 
   async function createPanel() {
@@ -3125,6 +3630,11 @@
       card: panelShadow.querySelector(".ias-card"),
       resizeHandle: panelShadow.querySelector(".ias-resize"),
       saveNameInput: panelShadow.querySelector(".ias-save-name"),
+      autoBaseInput: panelShadow.querySelector(".ias-auto-base"),
+      autoBaseNegInput: panelShadow.querySelector(".ias-auto-base-neg"),
+      autoCharInput: panelShadow.querySelector(".ias-auto-char"),
+      autoCharNegInput: panelShadow.querySelector(".ias-auto-char-neg"),
+      folderInput: panelShadow.querySelector(".ias-folder"),
       countInput: panelShadow.querySelector(".ias-count"),
       intervalInput: panelShadow.querySelector(".ias-interval"),
       presetButtons: Array.from(panelShadow.querySelectorAll(".ias-presets button")),
@@ -3149,6 +3659,7 @@
       queueClearButton: panelShadow.querySelector(".ias-queue-clear"),
       genPane: panelShadow.querySelector('.ias-pane[data-pane="gen"]'),
       genBase: panelShadow.querySelector(".ias-gen-base"),
+      genBaseNeg: panelShadow.querySelector(".ias-gen-base-neg"),
       genChars: panelShadow.querySelector(".ias-gen-chars"),
       genBgs: panelShadow.querySelector(".ias-gen-bgs"),
       genCount: panelShadow.querySelector(".ias-gen-count"),

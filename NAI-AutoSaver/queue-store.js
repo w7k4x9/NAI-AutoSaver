@@ -41,14 +41,14 @@
   function buildCombinedPrompt(basePrompt, characterPrompt) {
     const base = normalizePrompt(basePrompt).trim();
     const chars = normalizePrompt(characterPrompt)
-      .split("|")
+      .split(";;")
       .map((part) => part.trim())
       .filter((part) => part.length > 0);
     if (!chars.length) {
       return base;
     }
     // When base is empty the result starts with "| ..." (empty base segment).
-    return [base, ...chars].join(" | ").trimStart();
+    return [base, ...chars].join(" ;; ").trimStart();
   }
 
   function createItem(options = {}) {
@@ -56,7 +56,9 @@
       id: generateId(options.id),
       title: normalizeTitle(options.title),
       basePrompt: normalizePrompt(options.basePrompt),
+      baseNegativePrompt: normalizePrompt(options.baseNegativePrompt),
       characterPrompt: normalizePrompt(options.characterPrompt),
+      negativePrompt: normalizePrompt(options.negativePrompt),
       count: normalizeCount(options.count),
     };
   }
@@ -104,7 +106,9 @@
       id: generateId(value.id),
       title: normalizeTitle(value.title),
       basePrompt: normalizePrompt(basePrompt),
+      baseNegativePrompt: normalizePrompt(value.baseNegativePrompt),
       characterPrompt: normalizePrompt(characterPrompt),
+      negativePrompt: normalizePrompt(value.negativePrompt),
       count: normalizeCount(value.count),
     };
   }
