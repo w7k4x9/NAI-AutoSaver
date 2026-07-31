@@ -1,14 +1,15 @@
 {
   "manifest_version": 3,
   "name": "NAI 자동저장",
-  "version": "1.0.18",
+  "version": "1.0.19",
   "description": "NovelAI 이미지 자동 생성 · 대기열(Base/캐릭터 프롬프트 분리) · iOS 스타일 UI.",
   "permissions": [
     "activeTab",
     "downloads",
     "notifications",
     "scripting",
-    "storage"
+    "storage",
+    "offscreen"
   ],
   "host_permissions": [
     "https://novelai.net/*"

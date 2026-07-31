@@ -1485,13 +1485,24 @@
 
   async function playSound(filename) {
     const { volume = 0.5 } = await storageGet("sync", ["volume"]);
-    try {
-      const audio = new Audio(chrome.runtime.getURL(`assets/${filename}`));
-      audio.volume = Math.max(0, Math.min(1, Number(volume)));
-      audio.play().catch(() => {});
-    } catch (error) {
-      void error;
-    }
+    const parsedVolume = Number(volume);
+    const safeVolume = Number.isFinite(parsedVolume)
+      ? Math.max(0, Math.min(1, parsedVolume))
+      : 0.5;
+
+    // Content-script audio is subject to the host page's autoplay policy.
+    // Route playback through an extension offscreen document instead so both
+    // click-triggered start sounds and asynchronous completion sounds work.
+    return new Promise((resolve) => {
+      chrome.runtime.sendMessage({
+        action: "playExtensionSound",
+        filename,
+        volume: safeVolume,
+      }, (response) => {
+        void chrome.runtime.lastError;
+        resolve(Boolean(response?.ok));
+      });
+    });
   }
 
   function defaultSaveName() {

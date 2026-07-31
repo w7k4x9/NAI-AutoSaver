@@ -10,6 +10,41 @@ const TAB_ACTIONS = new Set([
   "getContentStatus",
 ]);
 
+const OFFSCREEN_AUDIO_PATH = "offscreen.html";
+let creatingOffscreenDocument = null;
+
+async function ensureOffscreenAudioDocument() {
+  const offscreenUrl = chrome.runtime.getURL(OFFSCREEN_AUDIO_PATH);
+  const contexts = await chrome.runtime.getContexts({
+    contextTypes: ["OFFSCREEN_DOCUMENT"],
+    documentUrls: [offscreenUrl],
+  });
+  if (contexts.length > 0) {
+    return;
+  }
+
+  if (!creatingOffscreenDocument) {
+    creatingOffscreenDocument = chrome.offscreen.createDocument({
+      url: OFFSCREEN_AUDIO_PATH,
+      reasons: ["AUDIO_PLAYBACK"],
+      justification: "Play automatic generation start and completion sounds.",
+    }).finally(() => {
+      creatingOffscreenDocument = null;
+    });
+  }
+  await creatingOffscreenDocument;
+}
+
+async function playExtensionSound(filename, volume) {
+  await ensureOffscreenAudioDocument();
+  return chrome.runtime.sendMessage({
+    target: "nai-offscreen-audio",
+    action: "playSound",
+    filename,
+    volume,
+  });
+}
+
 function sanitizeFilenamePart(value) {
   return String(value || "prompt")
     .replace(/[\\/:*?"<>|]/g, "_")
@@ -94,6 +129,13 @@ function resetPopupButtons() {
 }
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request?.action === "playExtensionSound") {
+    void playExtensionSound(request.filename, request.volume)
+      .then((response) => sendResponse(response || { ok: true }))
+      .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
+    return true;
+  }
+
   if (TAB_ACTIONS.has(request?.action)) {
     sendMessageToActiveNovelAiTab(request, sendResponse);
     return true;
