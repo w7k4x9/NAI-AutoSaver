@@ -14,6 +14,7 @@
   const QUEUE_STORAGE_KEY = "naiAutoSaver.queue";
   const UI_STORAGE_KEY = "naiAutoSaver.ui";
   const GENERATOR_STORAGE_KEY = "naiAutoSaver.generator";
+  const MEMO_STORAGE_KEY = "naiAutoSaver.promptMemos";
   const AUTO_REFRESH_MS = 500;
   // NovelAI generations are at least 512px on the short side. Low-res preview
   // placeholders that flash in during the image swap are much smaller in their
@@ -108,6 +109,8 @@
   let queueState = { schemaVersion: 3, items: [], options: { loop: false } };
   let selectedQueueId = null;
   let queueSaveTimer = null;
+  let memoState = { schemaVersion: 1, items: [] };
+  let selectedMemoId = null;
   let panelCollapsed = true;
   let activeTab = "auto";
   let editorExpanded = false;
@@ -990,14 +993,15 @@
   }
 
   async function ensureCharacterExpandedAt(index) {
+    // Prompt writing does not require locating the trash button. The previous
+    // implementation used the selected card's icon-only control as proof of
+    // selection, but NovelAI reuses that icon for prompt/position actions. That
+    // made queue startup spend many seconds retrying every Character card.
     let resolved = await waitForCharacterEditorAt(index, 1);
     if (resolved.editor) {
       return resolved;
     }
 
-    // A compact character card is not "collapsed" in the old accordion sense;
-    // it is simply not selected. Use full pointer/mouse events and several safe
-    // areas of the card until NovelAI mounts that card's editor.
     for (let attempt = 0; attempt < 7; attempt += 1) {
       const container = getCharacterContainers()[index];
       if (!container) {
@@ -1020,48 +1024,137 @@
     if (!container) {
       return null;
     }
-    const buttons = Array.from(container.querySelectorAll("button,[role='button']"))
-      .filter((element) => !element.closest(`#${HOST_ID}`))
-      .filter(isVisible)
-      .filter((element) => element.getAttribute?.("aria-disabled") !== "true" && !element.disabled);
-    const labelled = buttons.find((element) => /delete|remove|trash|삭제/i.test(accessibleControlText(element)));
-    if (labelled) {
-      return labelled;
+    const characterRoot = container.matches?.('.character-prompt-input,[class*="character-prompt-input-"]')
+      ? container
+      : container.closest?.('.character-prompt-input,[class*="character-prompt-input-"]')
+        || Array.from(container.querySelectorAll?.('.character-prompt-input,[class*="character-prompt-input-"]') || [])
+          .find(isVisible)
+        || null;
+    if (!characterRoot) {
+      return null;
     }
-    // Icon-only fallback: the delete control is the lowest/right-most small
-    // button in the character card. Header move/enable buttons sit at the top.
-    const cardRect = container.getBoundingClientRect();
-    return buttons
-      .map((button) => ({ button, rect: button.getBoundingClientRect() }))
-      .filter(({ rect }) => rect.top >= cardRect.top + Math.min(44, cardRect.height * 0.35))
-      .sort((a, b) => b.rect.bottom - a.rect.bottom || b.rect.right - a.rect.right)[0]?.button || null;
+
+    const usable = (element) => !element.closest(`#${HOST_ID}`)
+      && isVisible(element)
+      && element.getAttribute?.("aria-disabled") !== "true"
+      && !element.disabled;
+
+    // Current NovelAI renders three controls in each Character header:
+    // move up (...-9), move down (...-8), and trash (...-17). The previously
+    // supplied ...-33 icon belongs to prompt/position actions and must never be
+    // used for deletion. Restricting this lookup to the requested Character card
+    // also guarantees that Base Image/reference upload buttons are untouched.
+    const exactTrash = Array.from(characterRoot.querySelectorAll("button,[role='button']"))
+      .filter(usable)
+      .find((button) => Boolean(button.querySelector('.sc-7d0727b8-17')));
+    if (exactTrash) {
+      return exactTrash;
+    }
+
+    // Accessibility-labelled fallback for future NovelAI builds.
+    return Array.from(characterRoot.querySelectorAll("button,[role='button']"))
+      .filter(usable)
+      .find((element) => /delete|remove|trash|삭제/i.test(accessibleControlText(element))) || null;
+  }
+
+  function findCharacterDeleteConfirmationButton() {
+    const scopes = Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"]'))
+      .filter(isVisible);
+    for (const scope of scopes) {
+      const button = Array.from(scope.querySelectorAll("button,[role='button']"))
+        .filter(isVisible)
+        .filter((element) => !element.closest(`#${HOST_ID}`))
+        .find((element) => {
+          const label = accessibleControlText(element);
+          return /delete|remove|confirm|yes|삭제|지우기|확인/i.test(label)
+            && !/cancel|no|취소|아니/i.test(label);
+        });
+      if (button) {
+        return button;
+      }
+    }
+    return null;
+  }
+
+  async function waitForCharacterCountBelow(before, attempts = 20) {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      await delay(100);
+      if (getCharacterContainers().length < before) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  async function removeLastCharacterBox() {
+    const beforeContainers = getCharacterContainers();
+    const before = beforeContainers.length;
+    if (!before) {
+      return true;
+    }
+
+    // The trash button is permanently present in each Character header, so no
+    // card-selection/expansion step is needed. Delete the final card directly.
+    const lastIndex = before - 1;
+    const container = beforeContainers[lastIndex];
+    const button = findDeleteCharacterButton(container);
+    if (!button || !container?.contains(button)) {
+      return false;
+    }
+
+    clickControlLikeUser(button);
+    if (await waitForCharacterCountBelow(before, 10)) {
+      return true;
+    }
+
+    const confirmation = findCharacterDeleteConfirmationButton();
+    if (confirmation) {
+      clickControlLikeUser(confirmation);
+      if (await waitForCharacterCountBelow(before, 14)) {
+        return true;
+      }
+    }
+
+    // One plain click retry is safe because the button was resolved inside the
+    // exact last Character card and contains the confirmed trash icon.
+    const currentContainer = getCharacterContainers()[lastIndex] || container;
+    const retryButton = findDeleteCharacterButton(currentContainer);
+    if (!retryButton || !currentContainer?.contains(retryButton)) {
+      return false;
+    }
+    retryButton.click();
+    return waitForCharacterCountBelow(before, 14);
   }
 
   async function trimExtraCharacterBoxes(targetCount) {
-    let containers = getCharacterContainers();
     let guard = 0;
-    while (containers.length > targetCount && guard < 8) {
-      const before = containers.length;
-      const button = findDeleteCharacterButton(containers[containers.length - 1]);
-      if (!button) {
-        break;
-      }
-      clickControlLikeUser(button);
-      let removed = false;
-      for (let attempt = 0; attempt < 12; attempt += 1) {
-        await delay(100);
-        if (getCharacterContainers().length < before) {
-          removed = true;
-          break;
-        }
-      }
+    while (getCharacterContainers().length > targetCount && guard < 16) {
+      const removed = await removeLastCharacterBox();
       if (!removed) {
         break;
       }
-      containers = getCharacterContainers();
       guard += 1;
     }
-    return containers.length <= targetCount;
+    return getCharacterContainers().length <= targetCount;
+  }
+
+  async function resetCharacterBoxes() {
+    // Queue items are authoritative. Rebuilding the cards prevents stale Character
+    // 3 from surviving when the next item contains only two `;;` blocks, and also
+    // guarantees that gender/card order cannot leak in from the previous item.
+    const before = getCharacterContainers().length;
+    if (!before) {
+      return true;
+    }
+    setStatus(`캐릭터 카드 초기화 중: ${before}개 → 0개`, "ok");
+    const removed = await trimExtraCharacterBoxes(0);
+    const remaining = getCharacterContainers().length;
+    if (!removed || remaining !== 0) {
+      setStatus(`캐릭터 카드 삭제 실패: ${remaining}개가 남았습니다. 생성하지 않습니다.`, "warn");
+      return false;
+    }
+    await delay(250);
+    return true;
   }
 
 
@@ -1098,39 +1191,59 @@
     return -1;
   }
 
-  async function ensureCharacterCardLayout(segments) {
-    // Preserve every correctly-typed leading card. From the first gender
-    // mismatch onward, remove cards from the end and recreate them in order.
-    // This fixes a stale Female Character 2 when the second ;; block is 1boy.
-    for (let cycle = 0; cycle < 4; cycle += 1) {
-      await trimExtraCharacterBoxes(segments.length);
-      let containers = getCharacterContainers();
-      const mismatch = firstCharacterGenderMismatch(segments, containers);
-      if (mismatch >= 0) {
-        const trimmed = await trimExtraCharacterBoxes(mismatch);
-        if (!trimmed) {
-          return false;
-        }
-        containers = getCharacterContainers();
+  async function addMissingCharacterBoxes(segments) {
+    let containers = getCharacterContainers();
+    let guard = 0;
+    while (containers.length < segments.length && guard < 16) {
+      const nextSegment = segments[containers.length] || "";
+      const added = await clickAddCharacterBox(nextSegment);
+      if (!added) {
+        return false;
       }
-
-      let guard = 0;
-      while (containers.length < segments.length && guard < 8) {
-        const nextSegment = segments[containers.length] || "";
-        const added = await clickAddCharacterBox(nextSegment);
-        if (!added) {
-          return false;
-        }
-        containers = getCharacterContainers();
-        guard += 1;
-      }
-
       containers = getCharacterContainers();
-      if (containers.length >= segments.length && firstCharacterGenderMismatch(segments, containers) < 0) {
-        return true;
-      }
+      guard += 1;
     }
-    return false;
+    return containers.length === segments.length;
+  }
+
+  async function ensureCharacterCardLayout(segments) {
+    const targetCount = segments.length;
+    let containers = getCharacterContainers();
+
+    // Do not wipe every Character on every queue item. Reconcile only the count
+    // difference: 4 → 2 deletes Character 4 and 3, while 2 → 4 adds two cards.
+    // This avoids stopping the first item merely because existing cards already
+    // match its requested count.
+    if (containers.length > targetCount) {
+      setStatus(`캐릭터 카드 수 조정 중: ${containers.length}개 → ${targetCount}개`, "ok");
+      const trimmed = await trimExtraCharacterBoxes(targetCount);
+      if (!trimmed) {
+        return false;
+      }
+      containers = getCharacterContainers();
+    }
+
+    if (containers.length < targetCount) {
+      const added = await addMissingCharacterBoxes(segments);
+      if (!added) {
+        return false;
+      }
+      containers = getCharacterContainers();
+    }
+
+    // Card gender/type cannot be edited in place. Only in that uncommon case do
+    // a full reset and rebuild; ordinary prompt changes reuse the existing cards.
+    if (containers.length === targetCount
+      && firstCharacterGenderMismatch(segments, containers) >= 0) {
+      const reset = await resetCharacterBoxes();
+      if (!reset || !(await addMissingCharacterBoxes(segments))) {
+        return false;
+      }
+      containers = getCharacterContainers();
+    }
+
+    return containers.length === targetCount
+      && firstCharacterGenderMismatch(segments, containers) < 0;
   }
 
 
@@ -1360,7 +1473,10 @@
     const layoutReady = await ensureCharacterCardLayout(segments);
     let containers = getCharacterContainers();
     if (!layoutReady) {
-      setStatus("캐릭터 카드의 수 또는 성별을 프롬프트와 맞추지 못했습니다.", "warn");
+      return {
+        ok: false,
+        error: `캐릭터 카드 재구성에 실패했습니다. 현재 ${containers.length}개 / 필요한 ${segments.length}개입니다. 잘못된 캐릭터 구성으로는 생성하지 않습니다.`,
+      };
     }
 
     if (!containers.length) {
@@ -2151,10 +2267,22 @@
           return;
         }
         queueRun.advancing = true;
+        // The Generate button becomes enabled slightly before NovelAI finishes
+        // committing the previous character-card UI. Give that React update one
+        // turn to settle before deleting/recreating cards for the next item.
+        if (index > 0) {
+          try {
+            document.activeElement?.blur?.();
+          } catch (error) {
+            void error;
+          }
+          await delay(550);
+        }
         const itemBase = Store.effectiveBase(item, queueState.options);
         const itemBaseNeg = (item.baseNegativePrompt && item.baseNegativePrompt.trim())
           ? item.baseNegativePrompt
           : null;
+        setStatus(`대기열 ${index + 1}/${queueRun.items.length} · ${item.title} · 프롬프트 적용 중`, "ok");
         const startResult = await startAutoGenerate({
           target: item.count,
           saveName: item.title,
@@ -2640,6 +2768,467 @@
         scheduleGenSave();
       }
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // prompt memos
+  // ---------------------------------------------------------------------------
+  const MEMO_FIELDS = [
+    { key: "basePrompt", label: "베이스 프롬프트", input: "memoBaseInput", check: "memoBaseCheck", auto: "autoBaseInput" },
+    { key: "baseNegativePrompt", label: "베이스 네거티브", input: "memoBaseNegInput", check: "memoBaseNegCheck", auto: "autoBaseNegInput" },
+    { key: "characterPrompt", label: "캐릭터 태그", input: "memoCharInput", check: "memoCharCheck", auto: "autoCharInput" },
+    { key: "characterNegativePrompt", label: "캐릭터 네거티브", input: "memoCharNegInput", check: "memoCharNegCheck", auto: "autoCharNegInput" },
+  ];
+
+  function createMemoId() {
+    try {
+      if (globalThis.crypto?.randomUUID) {
+        return globalThis.crypto.randomUUID();
+      }
+    } catch (error) {
+      void error;
+    }
+    return `memo-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  }
+
+  function normalizeMemoItem(raw, index = 0) {
+    const source = raw && typeof raw === "object" ? raw : {};
+    const rawValues = source.values && typeof source.values === "object" ? source.values : {};
+    const values = {};
+    for (const field of MEMO_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(rawValues, field.key)) {
+        values[field.key] = String(rawValues[field.key] == null ? "" : rawValues[field.key]);
+      }
+    }
+    return {
+      id: String(source.id || createMemoId()),
+      name: String(source.name || `메모 ${index + 1}`).trim().slice(0, 80) || `메모 ${index + 1}`,
+      values,
+      createdAt: Number(source.createdAt) || Date.now(),
+      updatedAt: Number(source.updatedAt) || Number(source.createdAt) || Date.now(),
+    };
+  }
+
+  function normalizeMemoState(raw) {
+    const source = raw && typeof raw === "object" ? raw : {};
+    const items = Array.isArray(source.items)
+      ? source.items.map((item, index) => normalizeMemoItem(item, index)).filter((item) => Object.keys(item.values).length)
+      : [];
+    return { schemaVersion: 1, items };
+  }
+
+  async function loadMemoState() {
+    try {
+      const result = await storageGet("local", [MEMO_STORAGE_KEY]);
+      memoState = normalizeMemoState(result[MEMO_STORAGE_KEY]);
+    } catch (error) {
+      memoState = { schemaVersion: 1, items: [] };
+    }
+    renderMemoList();
+  }
+
+  async function persistMemoState() {
+    memoState = normalizeMemoState(memoState);
+    await storageSet("local", { [MEMO_STORAGE_KEY]: memoState });
+    renderMemoList();
+  }
+
+  function memoFieldNames(item) {
+    return MEMO_FIELDS
+      .filter((field) => Object.prototype.hasOwnProperty.call(item.values || {}, field.key))
+      .map((field) => field.label);
+  }
+
+  function memoPreview(item) {
+    for (const field of MEMO_FIELDS) {
+      const value = item.values?.[field.key];
+      if (typeof value === "string" && value.trim()) {
+        return value.trim().replace(/\s+/g, " ").slice(0, 120);
+      }
+    }
+    return "내용 없음";
+  }
+
+  function resetMemoDraft({ keepValues = false } = {}) {
+    selectedMemoId = null;
+    if (ui.memoNameInput) {
+      ui.memoNameInput.value = "";
+    }
+    for (const field of MEMO_FIELDS) {
+      const checkbox = ui[field.check];
+      const input = ui[field.input];
+      if (checkbox) {
+        checkbox.checked = true;
+      }
+      if (input && !keepValues) {
+        input.value = "";
+      }
+    }
+    renderMemoEditorState();
+  }
+
+  function renderMemoEditorState() {
+    if (ui.memoSaveButton) {
+      const label = ui.memoSaveButton.querySelector("span");
+      if (label) {
+        label.textContent = selectedMemoId ? "메모 수정 저장" : "새 메모 저장";
+      }
+    }
+    if (ui.memoCancelEditButton) {
+      ui.memoCancelEditButton.hidden = !selectedMemoId;
+    }
+    for (const field of MEMO_FIELDS) {
+      const checkbox = ui[field.check];
+      const input = ui[field.input];
+      if (input && checkbox) {
+        input.disabled = !checkbox.checked;
+      }
+    }
+  }
+
+  function collectMemoDraft() {
+    const values = {};
+    const emptySelected = [];
+    for (const field of MEMO_FIELDS) {
+      const checkbox = ui[field.check];
+      const input = ui[field.input];
+      if (!checkbox?.checked) {
+        continue;
+      }
+      const value = input?.value || "";
+      if (!value.trim()) {
+        emptySelected.push(field.label);
+      } else {
+        values[field.key] = value;
+      }
+    }
+    return {
+      name: (ui.memoNameInput?.value || "").trim(),
+      values,
+      emptySelected,
+      selectedCount: MEMO_FIELDS.filter((field) => ui[field.check]?.checked).length,
+    };
+  }
+
+  async function savePromptMemo() {
+    const draft = collectMemoDraft();
+    if (!draft.selectedCount) {
+      setStatus("메모할 항목을 1개 이상 선택해 주세요.", "warn");
+      return;
+    }
+    if (draft.emptySelected.length) {
+      setStatus(`선택한 항목의 내용이 비어 있습니다: ${draft.emptySelected.join(", ")}`, "warn");
+      return;
+    }
+    const now = Date.now();
+    const existingIndex = memoState.items.findIndex((item) => item.id === selectedMemoId);
+    if (existingIndex >= 0) {
+      const existing = memoState.items[existingIndex];
+      memoState.items[existingIndex] = normalizeMemoItem({
+        ...existing,
+        name: draft.name || existing.name,
+        values: draft.values,
+        updatedAt: now,
+      }, existingIndex);
+      await persistMemoState();
+      setStatus(`메모 “${memoState.items[existingIndex].name}”을 수정했습니다.`, "ok");
+    } else {
+      const item = normalizeMemoItem({
+        id: createMemoId(),
+        name: draft.name || `메모 ${memoState.items.length + 1}`,
+        values: draft.values,
+        createdAt: now,
+        updatedAt: now,
+      }, memoState.items.length);
+      memoState.items.unshift(item);
+      await persistMemoState();
+      setStatus(`메모 “${item.name}”을 저장했습니다.`, "ok");
+    }
+    resetMemoDraft();
+  }
+
+  function editPromptMemo(id) {
+    const item = memoState.items.find((entry) => entry.id === id);
+    if (!item) {
+      return;
+    }
+    selectedMemoId = item.id;
+    if (ui.memoNameInput) {
+      ui.memoNameInput.value = item.name;
+    }
+    for (const field of MEMO_FIELDS) {
+      const included = Object.prototype.hasOwnProperty.call(item.values, field.key);
+      if (ui[field.check]) {
+        ui[field.check].checked = included;
+      }
+      if (ui[field.input]) {
+        ui[field.input].value = included ? item.values[field.key] : "";
+      }
+    }
+    renderMemoEditorState();
+    ui.memoNameInput?.focus();
+  }
+
+  async function deletePromptMemo(id) {
+    const item = memoState.items.find((entry) => entry.id === id);
+    if (!item) {
+      return;
+    }
+    if (!window.confirm(`“${item.name}” 메모를 삭제할까요?`)) {
+      return;
+    }
+    memoState.items = memoState.items.filter((entry) => entry.id !== id);
+    if (selectedMemoId === id) {
+      resetMemoDraft();
+    }
+    await persistMemoState();
+    setStatus("메모를 삭제했습니다.", "ok");
+  }
+
+  function copyAutoValuesToMemo() {
+    const pairs = [
+      ["memoBaseInput", "autoBaseInput"],
+      ["memoBaseNegInput", "autoBaseNegInput"],
+      ["memoCharInput", "autoCharInput"],
+      ["memoCharNegInput", "autoCharNegInput"],
+    ];
+    for (const [memoKey, autoKey] of pairs) {
+      if (ui[memoKey]) {
+        ui[memoKey].value = ui[autoKey]?.value || "";
+      }
+    }
+    for (const field of MEMO_FIELDS) {
+      if (ui[field.check]) {
+        ui[field.check].checked = true;
+      }
+    }
+    renderMemoEditorState();
+    setStatus("자동생성 탭의 4개 값을 메모 편집기에 가져왔습니다.", "ok");
+  }
+
+  async function captureNovelAiValuesToMemo() {
+    if (ui.memoCaptureButton) {
+      ui.memoCaptureButton.disabled = true;
+    }
+    try {
+      const values = {
+        basePrompt: await readCurrentNaiPrompt(),
+        baseNegativePrompt: await readCurrentNaiNegativePrompt(),
+        characterPrompt: await readCurrentNaiCharacterPrompt(),
+        characterNegativePrompt: await readCurrentNaiCharacterNegative(),
+      };
+      for (const field of MEMO_FIELDS) {
+        if (ui[field.input]) {
+          ui[field.input].value = values[field.key] || "";
+        }
+        if (ui[field.check]) {
+          ui[field.check].checked = true;
+        }
+      }
+      renderMemoEditorState();
+      setStatus("NovelAI의 현재 프롬프트 4종을 읽어왔습니다.", "ok");
+    } catch (error) {
+      setStatus("NovelAI의 현재 프롬프트를 읽지 못했습니다.", "warn");
+    } finally {
+      if (ui.memoCaptureButton) {
+        ui.memoCaptureButton.disabled = false;
+      }
+    }
+  }
+
+  function applyMemoToAuto(id) {
+    const item = memoState.items.find((entry) => entry.id === id);
+    if (!item) {
+      return;
+    }
+    for (const field of MEMO_FIELDS) {
+      if (!Object.prototype.hasOwnProperty.call(item.values, field.key)) {
+        continue;
+      }
+      const target = ui[field.auto];
+      if (target) {
+        target.value = item.values[field.key];
+      }
+    }
+    saveSingleSettings();
+    setActiveTab("auto");
+    setStatus(`“${item.name}” 메모를 자동생성 입력칸에 불러왔습니다.`, "ok");
+  }
+
+  async function addMemoToQueue(id) {
+    const item = memoState.items.find((entry) => entry.id === id);
+    if (!item) {
+      return;
+    }
+    if (queueRun.active) {
+      setStatus("대기열 실행 중에는 메모를 추가할 수 없습니다.", "warn");
+      return;
+    }
+    await loadQueueState();
+    const values = item.values || {};
+    const count = Math.max(1, Number.parseInt(ui.countInput?.value, 10) || 1);
+    const newItem = Store.createItem({
+      title: item.name,
+      basePrompt: Object.prototype.hasOwnProperty.call(values, "basePrompt") ? values.basePrompt : "",
+      baseNegativePrompt: Object.prototype.hasOwnProperty.call(values, "baseNegativePrompt") ? values.baseNegativePrompt : "",
+      characterPrompt: Object.prototype.hasOwnProperty.call(values, "characterPrompt") ? values.characterPrompt : "",
+      negativePrompt: Object.prototype.hasOwnProperty.call(values, "characterNegativePrompt") ? values.characterNegativePrompt : "",
+      count,
+    });
+    queueState.items.push(newItem);
+    selectedQueueId = newItem.id;
+    await persistQueueState();
+    setStatus(`메모 “${item.name}”을 대기열에 추가했습니다. (${queueState.items.length}개)`, "ok");
+  }
+
+  async function applyMemoDirectly(id) {
+    const item = memoState.items.find((entry) => entry.id === id);
+    if (!item) {
+      return;
+    }
+    const values = item.values || {};
+    const promptResult = await applyStructuredPrompt(
+      Object.prototype.hasOwnProperty.call(values, "basePrompt") ? values.basePrompt : null,
+      Object.prototype.hasOwnProperty.call(values, "characterPrompt") ? values.characterPrompt : null
+    );
+    if (!promptResult.ok) {
+      setStatus(promptResult.error || "메모 프롬프트를 NovelAI에 적용하지 못했습니다.", "warn");
+      return;
+    }
+    if (Object.prototype.hasOwnProperty.call(values, "baseNegativePrompt")) {
+      const result = await applyBaseNegativeToNovelAi(values.baseNegativePrompt);
+      if (!result.ok) {
+        return;
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(values, "characterNegativePrompt")) {
+      const result = await applyCharacterNegativesToNovelAi(values.characterNegativePrompt);
+      if (!result.ok) {
+        return;
+      }
+    }
+    setStatus(`“${item.name}” 메모를 NovelAI에 직접 적용했습니다.`, "ok");
+  }
+
+  function renderMemoList() {
+    if (!ui.memoList) {
+      return;
+    }
+    ui.memoList.innerHTML = "";
+    if (!memoState.items.length) {
+      const empty = document.createElement("div");
+      empty.className = "ias-empty";
+      empty.textContent = "저장된 메모가 없습니다.";
+      ui.memoList.append(empty);
+      return;
+    }
+    memoState.items.forEach((item, index) => {
+      const card = document.createElement("div");
+      card.className = "ias-memo-card";
+      card.dataset.id = item.id;
+
+      const top = document.createElement("div");
+      top.className = "ias-memo-card-top";
+      const order = document.createElement("span");
+      order.className = "ias-memo-order";
+      order.textContent = String(index + 1);
+      const title = document.createElement("strong");
+      title.className = "ias-memo-title";
+      title.textContent = item.name;
+      const meta = document.createElement("span");
+      meta.className = "ias-memo-count";
+      meta.textContent = `${memoFieldNames(item).length}/4`;
+      top.append(order, title, meta);
+
+      const preview = document.createElement("div");
+      preview.className = "ias-memo-preview";
+      preview.textContent = memoPreview(item);
+
+      const chips = document.createElement("div");
+      chips.className = "ias-memo-chips";
+      for (const name of memoFieldNames(item)) {
+        const chip = document.createElement("span");
+        chip.textContent = name;
+        chips.append(chip);
+      }
+
+      const actions = document.createElement("div");
+      actions.className = "ias-memo-card-actions";
+
+      const queueButton = document.createElement("button");
+      queueButton.type = "button";
+      queueButton.className = "ias-memo-queue";
+      queueButton.dataset.action = "queue";
+      queueButton.innerHTML = `${icon("playlist_add", 16)}<span>대기열에 추가</span>`;
+
+      const actionSelect = document.createElement("select");
+      actionSelect.className = "ias-memo-action-select";
+      actionSelect.dataset.role = "memo-actions";
+      actionSelect.setAttribute("aria-label", `${item.name} 메모 작업`);
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = "불러오기 · 관리";
+      actionSelect.append(placeholder);
+
+      const loadGroup = document.createElement("optgroup");
+      loadGroup.label = "불러오기";
+      const loadOption = document.createElement("option");
+      loadOption.value = "load";
+      loadOption.textContent = "자동생성 입력칸에 불러오기";
+      const applyOption = document.createElement("option");
+      applyOption.value = "apply";
+      applyOption.textContent = "NovelAI에 직접 적용";
+      loadGroup.append(loadOption, applyOption);
+
+      const manageGroup = document.createElement("optgroup");
+      manageGroup.label = "관리";
+      const editOption = document.createElement("option");
+      editOption.value = "edit";
+      editOption.textContent = "메모 수정";
+      const deleteOption = document.createElement("option");
+      deleteOption.value = "delete";
+      deleteOption.textContent = "메모 삭제";
+      manageGroup.append(editOption, deleteOption);
+
+      actionSelect.append(loadGroup, manageGroup);
+      actions.append(queueButton, actionSelect);
+      card.append(top, preview, chips, actions);
+      ui.memoList.append(card);
+    });
+  }
+
+  function runMemoAction(id, action) {
+    if (action === "queue") {
+      void addMemoToQueue(id);
+    } else if (action === "load") {
+      applyMemoToAuto(id);
+    } else if (action === "apply") {
+      void applyMemoDirectly(id);
+    } else if (action === "edit") {
+      editPromptMemo(id);
+    } else if (action === "delete") {
+      void deletePromptMemo(id);
+    }
+  }
+
+  function handleMemoListClick(event) {
+    const button = event.target.closest('button[data-action="queue"]');
+    const card = event.target.closest(".ias-memo-card");
+    if (!button || !card?.dataset.id) {
+      return;
+    }
+    runMemoAction(card.dataset.id, "queue");
+  }
+
+  function handleMemoListChange(event) {
+    const select = event.target.closest('select[data-role="memo-actions"]');
+    const card = event.target.closest(".ias-memo-card");
+    if (!select || !card?.dataset.id || !select.value) {
+      return;
+    }
+    const action = select.value;
+    select.value = "";
+    runMemoAction(card.dataset.id, action);
   }
 
   // ---------------------------------------------------------------------------
@@ -3420,8 +4009,12 @@
       item.title = event.target.value;
     } else if (field === "basePrompt") {
       item.basePrompt = event.target.value;
+    } else if (field === "baseNegativePrompt") {
+      item.baseNegativePrompt = event.target.value;
     } else if (field === "characterPrompt") {
       item.characterPrompt = event.target.value;
+    } else if (field === "negativePrompt") {
+      item.negativePrompt = event.target.value;
     } else if (field === "count") {
       const numeric = Number.parseInt(event.target.value, 10);
       item.count = Number.isFinite(numeric) && numeric > 0 ? Math.min(9999, numeric) : 1;
@@ -3930,6 +4523,59 @@
       .ias-gen-foot .ias-btn.secondary { width: 100%; }
       .ias-gen-foot .ias-row .ias-btn.secondary { flex: 1; }
 
+      /* ---- prompt memos ---- */
+      .ias-memo-tools { display: flex; gap: 8px; margin-bottom: 12px; }
+      .ias-memo-tools .ias-btn { flex: 1; padding: 10px 8px; font-size: 12.5px; }
+      .ias-memo-fields { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+      .ias-memo-field {
+        padding: 11px; border-radius: 14px; background: rgba(255,255,255,0.58);
+        border: 1px solid rgba(0,0,0,0.07);
+      }
+      .ias-memo-field-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+      .ias-memo-field-head input { width: 17px; height: 17px; accent-color: #007aff; }
+      .ias-memo-field-head label { padding: 0; color: #1c1c1e; font-size: 13px; cursor: pointer; }
+      .ias-memo-field textarea:disabled { opacity: 0.45; background: rgba(255,255,255,0.55); }
+      .ias-memo-save-row { display: flex; gap: 8px; margin: 2px 0 18px; }
+      .ias-memo-save-row .ias-btn { flex: 1; }
+      .ias-memo-list { display: flex; flex-direction: column; gap: 8px; }
+      .ias-memo-card {
+        flex: 0 0 auto; width: 100%; min-width: 0;
+        display: flex; flex-direction: column; gap: 8px;
+        padding: 11px; border-radius: 14px; background: #fff;
+        border: 1px solid rgba(0,0,0,0.08);
+        transition: border-color 0.14s ease, box-shadow 0.16s ease;
+      }
+      .ias-memo-card:hover { border-color: rgba(0,122,255,0.4); }
+      .ias-memo-card-top { display: flex; align-items: center; gap: 7px; min-width: 0; }
+      .ias-memo-order {
+        flex: 0 0 auto; width: 20px; height: 20px; border-radius: 50%;
+        display: flex; align-items: center; justify-content: center;
+        background: #007aff; color: #fff; font-size: 11px; font-weight: 700;
+      }
+      .ias-memo-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: #1c1c1e; }
+      .ias-memo-count { flex: 0 0 auto; font-size: 11px; color: #007aff; font-weight: 700; }
+      .ias-memo-preview { font-size: 11px; line-height: 1.4; color: #8e8e93; height: 30px; overflow: hidden; overflow-wrap: anywhere; }
+      .ias-memo-chips { display: flex; flex-wrap: wrap; gap: 5px; min-height: 20px; }
+      .ias-memo-chips span { padding: 3px 7px; border-radius: 999px; background: rgba(0,122,255,0.10); color: #007aff; font-size: 10px; font-weight: 600; }
+      .ias-memo-card-actions { display: flex; gap: 6px; align-items: stretch; }
+      .ias-memo-queue {
+        flex: 1 1 auto; min-width: 0; height: 32px;
+        display: flex; align-items: center; justify-content: center; gap: 5px;
+        border: none; border-radius: 9px; padding: 0 10px; cursor: pointer;
+        background: rgba(52,199,89,0.12); color: #248a3d;
+        font-family: inherit; font-size: 11.5px; font-weight: 700;
+        transition: background 0.14s ease;
+      }
+      .ias-memo-queue:hover { background: rgba(52,199,89,0.20); }
+      .ias-memo-action-select {
+        flex: 0 0 132px; min-width: 0; height: 32px;
+        border: none; border-radius: 9px; padding: 0 28px 0 10px;
+        background: rgba(0,0,0,0.04); color: #6e6e73;
+        font-family: inherit; font-size: 11px; font-weight: 600; cursor: pointer;
+        outline: none;
+      }
+      .ias-memo-action-select:hover, .ias-memo-action-select:focus { background: rgba(0,122,255,0.10); color: #007aff; }
+
       .ias-qcard[data-dragging="true"] { opacity: 0.45; }
       .ias-qcard[data-dropbefore="true"] { box-shadow: 0 -3px 0 0 #007aff, 0 0 0 1px rgba(0,122,255,0.4); }
 
@@ -4015,6 +4661,7 @@
           <div class="ias-side" title="여기 빈 공간이나 상단 제목을 잡고 드래그하면 창을 옮길 수 있어요">
             <div class="ias-tabs">
               <button class="ias-tab" type="button" data-tab="auto" data-active="true">${icon("bolt", 22)}<span>자동생성</span></button>
+              <button class="ias-tab" type="button" data-tab="memo">${icon("label", 22)}<span>메모</span></button>
               <button class="ias-tab" type="button" data-tab="queue">${icon("lists", 22)}<span>대기열</span></button>
               <button class="ias-tab" type="button" data-tab="gen">${icon("content_copy", 22)}<span>조합생성</span></button>
               <button class="ias-tab" type="button" data-tab="settings">${icon("settings", 22)}<span>설정</span></button>
@@ -4068,6 +4715,45 @@
                   <button type="button" data-count="100">100</button>
                 </div>
                 <button class="ias-btn ias-auto" type="button">${icon("play_arrow", 20)}<span>자동 생성 시작</span></button>
+              </div>
+            </div>
+            <!-- PROMPT MEMOS -->
+            <div class="ias-pane" data-pane="memo">
+              <div class="ias-main-head">프롬프트 메모</div>
+              <div class="ias-scroll">
+                <div class="ias-field">
+                  <label>메모 이름</label>
+                  <input class="ias-input ias-memo-name" type="text" maxlength="80" placeholder="예: 실내 기본 세트 / 캐릭터 A 네거티브">
+                  <p class="ias-hint">4개 중 필요한 항목만 체크해 저장합니다. 4개를 모두 체크하면 한 세트로 저장됩니다.</p>
+                </div>
+                <div class="ias-memo-tools">
+                  <button class="ias-btn secondary ias-memo-capture" type="button">${icon("download", 17)}<span>NAI 현재값 읽기</span></button>
+                  <button class="ias-btn secondary ias-memo-copy-auto" type="button">${icon("content_copy", 17)}<span>자동생성 값 가져오기</span></button>
+                </div>
+                <div class="ias-memo-fields">
+                  <div class="ias-memo-field">
+                    <div class="ias-memo-field-head"><input class="ias-memo-base-check" id="ias-memo-base-check" type="checkbox" checked><label for="ias-memo-base-check">베이스 프롬프트</label></div>
+                    <textarea class="ias-input ias-memo-base" rows="3" placeholder="베이스 프롬프트"></textarea>
+                  </div>
+                  <div class="ias-memo-field">
+                    <div class="ias-memo-field-head"><input class="ias-memo-base-neg-check" id="ias-memo-base-neg-check" type="checkbox" checked><label for="ias-memo-base-neg-check">베이스 네거티브</label></div>
+                    <textarea class="ias-input ias-memo-base-neg" rows="3" placeholder="베이스 Undesired Content"></textarea>
+                  </div>
+                  <div class="ias-memo-field">
+                    <div class="ias-memo-field-head"><input class="ias-memo-char-check" id="ias-memo-char-check" type="checkbox" checked><label for="ias-memo-char-check">캐릭터 태그</label></div>
+                    <textarea class="ias-input ias-memo-char" rows="3" placeholder="여러 캐릭터는 ;; 로 구분"></textarea>
+                  </div>
+                  <div class="ias-memo-field">
+                    <div class="ias-memo-field-head"><input class="ias-memo-char-neg-check" id="ias-memo-char-neg-check" type="checkbox" checked><label for="ias-memo-char-neg-check">캐릭터 네거티브</label></div>
+                    <textarea class="ias-input ias-memo-char-neg" rows="3" placeholder="여러 캐릭터는 ;; 로 구분"></textarea>
+                  </div>
+                </div>
+                <div class="ias-memo-save-row">
+                  <button class="ias-btn ias-memo-save" type="button">${icon("playlist_add", 18)}<span>새 메모 저장</span></button>
+                  <button class="ias-btn secondary ias-memo-cancel-edit" type="button" hidden>${icon("close", 18)}<span>수정 취소</span></button>
+                </div>
+                <div class="ias-block-title">저장된 메모</div>
+                <div class="ias-memo-list"></div>
               </div>
             </div>
             <!-- QUEUE -->
@@ -4204,6 +4890,26 @@
 
     for (const tab of ui.tabs) {
       tab.addEventListener("click", () => setActiveTab(tab.dataset.tab));
+    }
+
+    if (ui.memoSaveButton) {
+      ui.memoSaveButton.addEventListener("click", () => void savePromptMemo());
+    }
+    if (ui.memoCancelEditButton) {
+      ui.memoCancelEditButton.addEventListener("click", () => resetMemoDraft());
+    }
+    if (ui.memoCaptureButton) {
+      ui.memoCaptureButton.addEventListener("click", () => void captureNovelAiValuesToMemo());
+    }
+    if (ui.memoCopyAutoButton) {
+      ui.memoCopyAutoButton.addEventListener("click", copyAutoValuesToMemo);
+    }
+    if (ui.memoList) {
+      ui.memoList.addEventListener("click", handleMemoListClick);
+      ui.memoList.addEventListener("change", handleMemoListChange);
+    }
+    for (const field of MEMO_FIELDS) {
+      ui[field.check]?.addEventListener("change", renderMemoEditorState);
     }
 
     ui.autoButton.addEventListener("click", () => {
@@ -4386,6 +5092,20 @@
       autoBaseNegInput: panelShadow.querySelector(".ias-auto-base-neg"),
       autoCharInput: panelShadow.querySelector(".ias-auto-char"),
       autoCharNegInput: panelShadow.querySelector(".ias-auto-char-neg"),
+      memoNameInput: panelShadow.querySelector(".ias-memo-name"),
+      memoBaseCheck: panelShadow.querySelector(".ias-memo-base-check"),
+      memoBaseInput: panelShadow.querySelector(".ias-memo-base"),
+      memoBaseNegCheck: panelShadow.querySelector(".ias-memo-base-neg-check"),
+      memoBaseNegInput: panelShadow.querySelector(".ias-memo-base-neg"),
+      memoCharCheck: panelShadow.querySelector(".ias-memo-char-check"),
+      memoCharInput: panelShadow.querySelector(".ias-memo-char"),
+      memoCharNegCheck: panelShadow.querySelector(".ias-memo-char-neg-check"),
+      memoCharNegInput: panelShadow.querySelector(".ias-memo-char-neg"),
+      memoCaptureButton: panelShadow.querySelector(".ias-memo-capture"),
+      memoCopyAutoButton: panelShadow.querySelector(".ias-memo-copy-auto"),
+      memoSaveButton: panelShadow.querySelector(".ias-memo-save"),
+      memoCancelEditButton: panelShadow.querySelector(".ias-memo-cancel-edit"),
+      memoList: panelShadow.querySelector(".ias-memo-list"),
       folderInput: panelShadow.querySelector(".ias-folder"),
       countInput: panelShadow.querySelector(".ias-count"),
       intervalInput: panelShadow.querySelector(".ias-interval"),
@@ -4445,6 +5165,8 @@
     await loadEtaSeed();
     await loadQueueState();
     await loadGeneratorState();
+    await loadMemoState();
+    renderMemoEditorState();
     renderQueue();
     renderControls();
   }
