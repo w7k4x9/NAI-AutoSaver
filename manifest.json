@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "NAI 자동저장",
-  "version": "1.0.27",
-  "description": "NovelAI 이미지 자동 생성 · 대기열 · 프롬프트 메모(Base/캐릭터 긍정·네거티브) · iOS 스타일 UI.",
+  "version": "1.0.32",
+  "description": "NovelAI 이미지 자동 생성 · 캐릭터 수 변경 시 전체 삭제 후 정확한 수만큼 재생성 · 메모 첫 클릭 저장 수정 · 프롬프트 메모 JSON 백업/복원.",
   "permissions": [
     "activeTab",
     "downloads",

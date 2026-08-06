@@ -203,6 +203,22 @@
     return rect.width > 16 && rect.height > 16;
   }
 
+  // Small icon controls in NovelAI can be only 14–16px internally.  The general
+  // isVisible() threshold is intentionally stricter for editors, but it must not
+  // reject a real Character-header trash button.  This helper only checks whether
+  // the element is actually rendered and clickable.
+  function isRenderedControl(element) {
+    if (!(element instanceof Element) || !element.isConnected) {
+      return false;
+    }
+    const style = window.getComputedStyle(element);
+    if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) {
+      return false;
+    }
+    const rect = element.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
+
   // ---------------------------------------------------------------------------
   // NovelAI DOM interaction
   // ---------------------------------------------------------------------------
@@ -667,10 +683,17 @@
     return null;
   }
 
-  async function waitForCharacterBoxIncrease(before, attempts = 12) {
+  function characterCountForSurface(surface) {
+    if (surface instanceof Element && surface.isConnected) {
+      return getCharacterContainersInSurface(surface).length;
+    }
+    return getCharacterContainers().length;
+  }
+
+  async function waitForCharacterBoxIncrease(before, attempts = 12, surface = null) {
     for (let i = 0; i < attempts; i += 1) {
       await delay(120);
-      if (getCharacterContainers().length > before) {
+      if (characterCountForSurface(surface) > before) {
         return true;
       }
     }
@@ -706,30 +729,32 @@
     }
   }
 
-  async function clickAddCharacterBox(characterPrompt = "") {
-    const before = getCharacterContainers().length;
+  async function clickAddCharacterBox(characterPrompt = "", surface = null) {
+    void characterPrompt;
+    const before = characterCountForSurface(surface);
     const button = findAddCharacterButton();
     if (!button || button.disabled || button.getAttribute?.("aria-disabled") === "true") {
       return false;
     }
     clickControlLikeUser(button);
 
-    // Current NovelAI opens a glyph-prefixed Female/Male/Other menu. Look for
-    // that menu BEFORE accepting a count change, otherwise a transient/default
-    // Female card can be mistaken for the requested Male card.
-    const preferredGender = inferCharacterGender(characterPrompt);
+    // Female / Male / Other only seeds the new Character card.  The queue writes
+    // the full prompt immediately afterwards, so any visible option is valid and
+    // there is no reason to reset every card merely to match an inferred gender.
     for (let attempt = 0; attempt < 10; attempt += 1) {
       await delay(80);
-      const genderOption = findCharacterGenderOption(preferredGender);
+      const genderOption = findCharacterGenderOption("female")
+        || findCharacterGenderOption("male")
+        || findCharacterGenderOption("other");
       if (genderOption) {
         clickControlLikeUser(genderOption);
-        return waitForCharacterBoxIncrease(before, 16);
+        return waitForCharacterBoxIncrease(before, 16, surface);
       }
-      if (getCharacterContainers().length > before) {
+      if (characterCountForSurface(surface) > before) {
         return true;
       }
     }
-    return getCharacterContainers().length > before;
+    return characterCountForSurface(surface) > before;
   }
 
   async function readCurrentNaiCharacterPrompt() {
@@ -879,14 +904,73 @@
   }
 
   function getCharacterContainers() {
-    // The Character Prompts section currently sits OUTSIDE .image-gen-prompt-main.
-    // Restricting this search to that wrapper made visible Character N cards look
-    // nonexistent, which in turn repeatedly added Female cards and raised the
-    // misleading "Character N 영역" error. Header matching is already strict and
-    // excludes our extension panel, so a document-wide search is the safe scope.
+    // Current NovelAI exposes a stable, ordinal class on every real Character
+    // card: .character-prompt-input-N.  Prefer those roots directly instead of
+    // inferring card boundaries from text.  The page can keep both desktop and
+    // mobile copies in the DOM, so group roots by their UI surface and use one
+    // coherent visible surface only.
+    const directRoots = Array.from(document.querySelectorAll('.character-prompt-input,[class*="character-prompt-input-"]'))
+      .filter((element) => !element.closest(`#${HOST_ID}`))
+      .filter(isRenderedControl)
+      .map((element) => {
+        const className = Array.from(element.classList || []).find((name) => /^character-prompt-input-\d+$/.test(name));
+        const match = className && /-(\d+)$/.exec(className);
+        return { element, index: match ? Number.parseInt(match[1], 10) : Number.NaN };
+      })
+      .filter(({ index }) => Number.isFinite(index));
+
+    if (directRoots.length) {
+      const groups = new Map();
+      for (const entry of directRoots) {
+        const surface = entry.element.closest('.settings-panel,.mobile-tray-contents') || entry.element.parentElement;
+        if (!groups.has(surface)) groups.set(surface, []);
+        groups.get(surface).push(entry);
+      }
+      const viewportArea = (element) => {
+        if (!(element instanceof Element)) {
+          return 0;
+        }
+        const rect = element.getBoundingClientRect();
+        const width = Math.max(0, Math.min(rect.right, window.innerWidth) - Math.max(rect.left, 0));
+        const height = Math.max(0, Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0));
+        return width * height;
+      };
+      const best = Array.from(groups.entries())
+        .map(([surface, entries]) => {
+          const unique = new Map();
+          for (const entry of entries) {
+            if (!unique.has(entry.index)) unique.set(entry.index, entry.element);
+          }
+          const cards = Array.from(unique.values());
+          const cardAreas = cards.map(viewportArea);
+          const visibleCardCount = cardAreas.filter((area) => area > 0).length;
+          const visibleArea = cardAreas.reduce((sum, area) => sum + area, 0);
+          const surfaceArea = surface && isRenderedControl(surface) ? viewportArea(surface) : 0;
+          const surfaceIsOnscreen = surfaceArea > 0 || visibleCardCount > 0;
+
+          // NovelAI can retain an off-screen mobile tray with the old Character
+          // count while the visible desktop panel has already rerendered.  The
+          // old scoring preferred whichever surface had MORE cards, so after a
+          // successful 4 → 3 deletion it could keep reporting the stale hidden
+          // four-card copy.  Always prefer an on-screen coherent surface first.
+          const score = (surfaceIsOnscreen ? 1e15 : 0)
+            + visibleCardCount * 1e12
+            + visibleArea * 1e3
+            + surfaceArea
+            + unique.size;
+          return { unique, score };
+        })
+        .sort((a, b) => b.score - a.score)[0];
+      if (best?.unique?.size) {
+        return Array.from(best.unique.entries())
+          .sort((a, b) => a[0] - b[0])
+          .map((entry) => entry[1]);
+      }
+    }
+
+    // Fallback for older NovelAI builds without ordinal card classes.
     const root = document;
     const indexed = new Map();
-
     for (const header of getCharacterHeaderElements(root)) {
       const index = getCharacterHeaderIndex(header);
       const card = findCharacterCardFromHeader(header);
@@ -894,8 +978,6 @@
         indexed.set(index, card);
       }
     }
-
-    // Fallback for older NovelAI builds without a visible `Character N` title.
     if (!indexed.size) {
       const promptBoxes = Array.from(root.querySelectorAll(CHAR_WRAPPER_SELECTOR));
       let fallbackIndex = 1;
@@ -919,7 +1001,6 @@
         }
       }
     }
-
     return Array.from(indexed.entries())
       .sort((a, b) => a[0] - b[0])
       .map((entry) => entry[1]);
@@ -1020,41 +1101,90 @@
     return resolved;
   }
 
-  function findDeleteCharacterButton(container) {
-    if (!container) {
+  function getCharacterSurface(container) {
+    if (!(container instanceof Element)) {
       return null;
     }
-    const characterRoot = container.matches?.('.character-prompt-input,[class*="character-prompt-input-"]')
+    return container.closest('.settings-panel,.mobile-tray-contents') || container.parentElement || null;
+  }
+
+  function getCharacterContainersInSurface(surface) {
+    if (!(surface instanceof Element) || !surface.isConnected) {
+      return [];
+    }
+    const indexed = new Map();
+    for (const element of surface.querySelectorAll('.character-prompt-input,[class*="character-prompt-input-"]')) {
+      if (element.closest(`#${HOST_ID}`)) {
+        continue;
+      }
+      const className = Array.from(element.classList || [])
+        .find((name) => /^character-prompt-input-\d+$/.test(name));
+      const match = className && /-(\d+)$/.exec(className);
+      const index = match ? Number.parseInt(match[1], 10) : Number.NaN;
+      if (Number.isFinite(index) && !indexed.has(index)) {
+        indexed.set(index, element);
+      }
+    }
+    return Array.from(indexed.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map((entry) => entry[1]);
+  }
+
+  function exactCharacterTrashButton(container) {
+    if (!(container instanceof Element)) {
+      return null;
+    }
+    const characterRoot = container.matches('.character-prompt-input,[class*="character-prompt-input-"]')
       ? container
-      : container.closest?.('.character-prompt-input,[class*="character-prompt-input-"]')
-        || Array.from(container.querySelectorAll?.('.character-prompt-input,[class*="character-prompt-input-"]') || [])
-          .find(isVisible)
-        || null;
-    if (!characterRoot) {
+      : container.closest('.character-prompt-input,[class*="character-prompt-input-"]')
+        || container.querySelector('.character-prompt-input,[class*="character-prompt-input-"]');
+    if (!(characterRoot instanceof Element)) {
       return null;
     }
 
-    const usable = (element) => !element.closest(`#${HOST_ID}`)
-      && isVisible(element)
-      && element.getAttribute?.("aria-disabled") !== "true"
-      && !element.disabled;
-
-    // Current NovelAI renders three controls in each Character header:
-    // move up (...-9), move down (...-8), and trash (...-17). The previously
-    // supplied ...-33 icon belongs to prompt/position actions and must never be
-    // used for deletion. Restricting this lookup to the requested Character card
-    // also guarantees that Base Image/reference upload buttons are untouched.
-    const exactTrash = Array.from(characterRoot.querySelectorAll("button,[role='button']"))
-      .filter(usable)
-      .find((button) => Boolean(button.querySelector('.sc-7d0727b8-17')));
-    if (exactTrash) {
-      return exactTrash;
+    // User-confirmed NovelAI trash control:
+    // <button><div class="... sc-7d0727b8-33 ..." style="height:16px;width:16px"></div></button>
+    // Position buttons use a 14px icon nested inside a <span>, so requiring the
+    // icon to be the DIRECT child of the button keeps those controls excluded.
+    const buttons = Array.from(characterRoot.querySelectorAll('button'));
+    for (const button of buttons) {
+      if (button.closest(`#${HOST_ID}`) || button.disabled || button.getAttribute('aria-disabled') === 'true') {
+        continue;
+      }
+      const icon = Array.from(button.children).find((child) => child.matches?.('.sc-7d0727b8-33'));
+      if (!icon) {
+        continue;
+      }
+      const style = getComputedStyle(icon);
+      const rect = icon.getBoundingClientRect();
+      const width = Number.parseFloat(style.width) || rect.width;
+      const height = Number.parseFloat(style.height) || rect.height;
+      if (width >= 15 && width <= 17.5 && height >= 15 && height <= 17.5 && isRenderedControl(button)) {
+        return button;
+      }
     }
+    return null;
+  }
 
-    // Accessibility-labelled fallback for future NovelAI builds.
-    return Array.from(characterRoot.querySelectorAll("button,[role='button']"))
-      .filter(usable)
-      .find((element) => /delete|remove|trash|삭제/i.test(accessibleControlText(element))) || null;
+  async function activateCharacterForDeletion(index, surface) {
+    for (let attempt = 0; attempt < 9; attempt += 1) {
+      const containers = getCharacterContainersInSurface(surface);
+      const container = containers[index];
+      if (!container) {
+        return { container: null, button: null };
+      }
+      const existing = exactCharacterTrashButton(container);
+      if (existing) {
+        return { container, button: existing };
+      }
+      const target = getCharacterActivationTarget(container, attempt)
+        || getCharacterHeaderInContainer(container)
+        || container;
+      clickControlLikeUser(target);
+      await delay(140);
+    }
+    const container = getCharacterContainersInSurface(surface)[index] || null;
+    return { container, button: exactCharacterTrashButton(container) };
   }
 
   function findCharacterDeleteConfirmationButton() {
@@ -1062,7 +1192,7 @@
       .filter(isVisible);
     for (const scope of scopes) {
       const button = Array.from(scope.querySelectorAll("button,[role='button']"))
-        .filter(isVisible)
+        .filter(isRenderedControl)
         .filter((element) => !element.closest(`#${HOST_ID}`))
         .find((element) => {
           const label = accessibleControlText(element);
@@ -1076,131 +1206,84 @@
     return null;
   }
 
-  async function waitForCharacterCountBelow(before, attempts = 20) {
+  async function waitForCharacterCountBelow(before, surface, attempts = 36) {
     for (let attempt = 0; attempt < attempts; attempt += 1) {
-      await delay(100);
-      if (getCharacterContainers().length < before) {
+      await delay(120);
+      const sameSurfaceCount = getCharacterContainersInSurface(surface).length;
+      if (sameSurfaceCount < before) {
+        return true;
+      }
+      if ((!surface || !surface.isConnected) && getCharacterContainers().length < before) {
         return true;
       }
     }
     return false;
   }
 
-  async function removeLastCharacterBox() {
-    const beforeContainers = getCharacterContainers();
+  async function removeLastCharacterBox(surface) {
+    const beforeContainers = getCharacterContainersInSurface(surface);
     const before = beforeContainers.length;
     if (!before) {
       return true;
     }
 
-    // The trash button is permanently present in each Character header, so no
-    // card-selection/expansion step is needed. Delete the final card directly.
     const lastIndex = before - 1;
-    const container = beforeContainers[lastIndex];
-    const button = findDeleteCharacterButton(container);
-    if (!button || !container?.contains(button)) {
+    const initialContainer = beforeContainers[lastIndex];
+    try {
+      initialContainer.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    } catch (error) {
+      void error;
+    }
+    await delay(100);
+
+    const activated = await activateCharacterForDeletion(lastIndex, surface);
+    const button = activated.button;
+    if (!button || !activated.container?.contains(button)) {
+      setStatus(`Character ${before}에서 16×16 휴지통 버튼(sc-7d0727b8-33)을 찾지 못했습니다.`, 'warn');
       return false;
     }
 
     clickControlLikeUser(button);
-    if (await waitForCharacterCountBelow(before, 10)) {
+    if (await waitForCharacterCountBelow(before, surface, 28)) {
       return true;
     }
 
     const confirmation = findCharacterDeleteConfirmationButton();
     if (confirmation) {
       clickControlLikeUser(confirmation);
-      if (await waitForCharacterCountBelow(before, 14)) {
+      if (await waitForCharacterCountBelow(before, surface, 28)) {
         return true;
       }
     }
 
-    // One plain click retry is safe because the button was resolved inside the
-    // exact last Character card and contains the confirmed trash icon.
-    const currentContainer = getCharacterContainers()[lastIndex] || container;
-    const retryButton = findDeleteCharacterButton(currentContainer);
-    if (!retryButton || !currentContainer?.contains(retryButton)) {
-      return false;
-    }
-    retryButton.click();
-    return waitForCharacterCountBelow(before, 14);
+    setStatus(`Character ${before} 휴지통을 눌렀지만 삭제가 반영되지 않았습니다.`, 'warn');
+    return false;
   }
 
-  async function trimExtraCharacterBoxes(targetCount) {
+  async function resetCharacterBoxes(surface) {
     let guard = 0;
-    while (getCharacterContainers().length > targetCount && guard < 16) {
-      const removed = await removeLastCharacterBox();
+    while (getCharacterContainersInSurface(surface).length > 0 && guard < 16) {
+      const before = getCharacterContainersInSurface(surface).length;
+      setStatus(`캐릭터 전체 삭제 중: ${before}개 남음`, 'ok');
+      const removed = await removeLastCharacterBox(surface);
       if (!removed) {
-        break;
+        return false;
       }
       guard += 1;
+      await delay(180);
     }
-    return getCharacterContainers().length <= targetCount;
+    return getCharacterContainersInSurface(surface).length === 0;
   }
 
-  async function resetCharacterBoxes() {
-    // Queue items are authoritative. Rebuilding the cards prevents stale Character
-    // 3 from surviving when the next item contains only two `;;` blocks, and also
-    // guarantees that gender/card order cannot leak in from the previous item.
-    const before = getCharacterContainers().length;
-    if (!before) {
-      return true;
-    }
-    setStatus(`캐릭터 카드 초기화 중: ${before}개 → 0개`, "ok");
-    const removed = await trimExtraCharacterBoxes(0);
-    const remaining = getCharacterContainers().length;
-    if (!removed || remaining !== 0) {
-      setStatus(`캐릭터 카드 삭제 실패: ${remaining}개가 남았습니다. 생성하지 않습니다.`, "warn");
-      return false;
-    }
-    await delay(250);
-    return true;
-  }
-
-
-  function getCharacterContainerGender(container) {
-    if (!container) {
-      return null;
-    }
-    const header = getCharacterHeaderInContainer(container);
-    const text = normalizeCharacterHeaderText([
-      header?.textContent,
-      accessibleControlText(header),
-    ].filter(Boolean).join(" "));
-    if (/♀/u.test(text)) {
-      return "female";
-    }
-    if (/♂/u.test(text)) {
-      return "male";
-    }
-    if (/[⚧⚥⚲]/u.test(text)) {
-      return "other";
-    }
-    return null;
-  }
-
-  function firstCharacterGenderMismatch(segments, containers) {
-    const count = Math.min(segments.length, containers.length);
-    for (let index = 0; index < count; index += 1) {
-      const expected = inferCharacterGender(segments[index]);
-      const actual = getCharacterContainerGender(containers[index]);
-      if (actual && expected !== actual) {
-        return index;
-      }
-    }
-    return -1;
-  }
-
-  async function addMissingCharacterBoxes(segments) {
-    let containers = getCharacterContainers();
+  async function addMissingCharacterBoxes(segments, surface) {
+    let containers = getCharacterContainersInSurface(surface);
     let guard = 0;
     while (containers.length < segments.length && guard < 16) {
-      const nextSegment = segments[containers.length] || "";
-      const added = await clickAddCharacterBox(nextSegment);
+      const added = await clickAddCharacterBox(segments[containers.length] || '', surface);
       if (!added) {
         return false;
       }
-      containers = getCharacterContainers();
+      containers = getCharacterContainersInSurface(surface);
       guard += 1;
     }
     return containers.length === segments.length;
@@ -1208,42 +1291,30 @@
 
   async function ensureCharacterCardLayout(segments) {
     const targetCount = segments.length;
-    let containers = getCharacterContainers();
+    const currentContainers = getCharacterContainers();
+    const currentCount = currentContainers.length;
+    const surface = getCharacterSurface(currentContainers[0])
+      || Array.from(document.querySelectorAll('.settings-panel,.mobile-tray-contents')).find(isVisible)
+      || null;
 
-    // Do not wipe every Character on every queue item. Reconcile only the count
-    // difference: 4 → 2 deletes Character 4 and 3, while 2 → 4 adds two cards.
-    // This avoids stopping the first item merely because existing cards already
-    // match its requested count.
-    if (containers.length > targetCount) {
-      setStatus(`캐릭터 카드 수 조정 중: ${containers.length}개 → ${targetCount}개`, "ok");
-      const trimmed = await trimExtraCharacterBoxes(targetCount);
-      if (!trimmed) {
+    // Keep matching layouts intact. Whenever the count changes (4→2, 2→4, etc.),
+    // use the simple deterministic path requested by the user: delete ALL cards,
+    // then add exactly the target number again using any visible gender seed.
+    if (currentCount !== targetCount) {
+      setStatus(`캐릭터 카드 재구성 중: ${currentCount}개 전체 삭제 → ${targetCount}개 추가`, 'ok');
+      const cleared = await resetCharacterBoxes(surface);
+      if (!cleared) {
         return false;
       }
-      containers = getCharacterContainers();
-    }
-
-    if (containers.length < targetCount) {
-      const added = await addMissingCharacterBoxes(segments);
-      if (!added) {
-        return false;
+      if (targetCount > 0) {
+        const added = await addMissingCharacterBoxes(segments, surface);
+        if (!added) {
+          return false;
+        }
       }
-      containers = getCharacterContainers();
     }
 
-    // Card gender/type cannot be edited in place. Only in that uncommon case do
-    // a full reset and rebuild; ordinary prompt changes reuse the existing cards.
-    if (containers.length === targetCount
-      && firstCharacterGenderMismatch(segments, containers) >= 0) {
-      const reset = await resetCharacterBoxes();
-      if (!reset || !(await addMissingCharacterBoxes(segments))) {
-        return false;
-      }
-      containers = getCharacterContainers();
-    }
-
-    return containers.length === targetCount
-      && firstCharacterGenderMismatch(segments, containers) < 0;
+    return characterCountForSurface(surface) === targetCount;
   }
 
 
@@ -2340,6 +2411,7 @@
     await playSound("start.mp3");
 
     let interrupted = false;
+    let interruptionError = "";
     do {
       for (let i = 0; i < queueRun.items.length; i += 1) {
         if (!queueRun.active || runToken !== queueRun.token) {
@@ -2362,18 +2434,19 @@
         }
         if (!result?.ok) {
           interrupted = true;
-          setStatus(`대기열 중단: ${result?.error || "오류"}`, "warn");
+          interruptionError = result?.error || "알 수 없는 오류";
+          setStatus(`대기열 중단: ${interruptionError}`, "warn");
           break;
         }
         queueRun.totalGenerated += item.count;
       }
     } while (!interrupted && queueRun.active && runToken === queueRun.token && queueRun.loop);
 
-    await finishQueueRun({ completedNormally: !interrupted });
+    await finishQueueRun({ completedNormally: !interrupted, error: interruptionError });
     return { ok: true };
   }
 
-  async function finishQueueRun({ completedNormally = false } = {}) {
+  async function finishQueueRun({ completedNormally = false, error = "" } = {}) {
     const total = queueRun.totalGenerated;
     queueRun.active = false;
     queueRun.resolveItem = null;
@@ -2389,6 +2462,8 @@
         void chrome.runtime.lastError;
       });
       setStatus(`대기열 작업을 모두 완료했습니다. (총 ${total}장)`, "ok");
+    } else if (error) {
+      setStatus(`대기열 중단: ${error}`, "warn");
     } else {
       setStatus("대기열 실행을 중지했습니다.", "warn");
     }
@@ -2833,6 +2908,85 @@
     renderMemoList();
   }
 
+  function createMemoExportEnvelope() {
+    return {
+      app: "NAI-Auto-Saver",
+      memoSchemaVersion: 1,
+      exportedAt: new Date().toISOString(),
+      memos: normalizeMemoState(memoState),
+    };
+  }
+
+  function parseMemoImportText(text) {
+    let parsed;
+    try {
+      parsed = JSON.parse(String(text == null ? "" : text));
+    } catch (error) {
+      return { ok: false, error: "메모 JSON 형식이 올바르지 않습니다." };
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { ok: false, error: "메모 파일 구조를 확인할 수 없습니다." };
+    }
+    if (parsed.app && parsed.app !== "NAI-Auto-Saver") {
+      return { ok: false, error: "NAI AutoSaver 메모 파일이 아닙니다." };
+    }
+    const rawState = parsed.memos && typeof parsed.memos === "object"
+      ? parsed.memos
+      : parsed.memoState && typeof parsed.memoState === "object"
+        ? parsed.memoState
+        : parsed;
+    if (!Array.isArray(rawState.items)) {
+      return { ok: false, error: "파일에 메모 목록이 없습니다." };
+    }
+    const state = normalizeMemoState(rawState);
+    if (rawState.items.length > 0 && state.items.length === 0) {
+      return { ok: false, error: "가져올 수 있는 메모가 없습니다." };
+    }
+    return { ok: true, state };
+  }
+
+  function exportMemos() {
+    if (!memoState.items.length) {
+      setStatus("내보낼 메모가 없습니다.", "warn");
+      return;
+    }
+    downloadJson(createMemoExportEnvelope(), `nai-auto-saver-memos-${Date.now()}.json`);
+    setStatus(`메모 ${memoState.items.length}개를 파일로 내보냈습니다.`, "ok");
+  }
+
+  async function importMemosFromFile(file) {
+    if (!file) {
+      return;
+    }
+    try {
+      const parsed = parseMemoImportText(await file.text());
+      if (!parsed.ok) {
+        setStatus(parsed.error, "warn");
+        return;
+      }
+      const previousIds = new Set(memoState.items.map((item) => item.id));
+      const importedIds = new Set(parsed.state.items.map((item) => item.id));
+      const addedCount = parsed.state.items.filter((item) => !previousIds.has(item.id)).length;
+      const updatedCount = parsed.state.items.length - addedCount;
+      memoState = normalizeMemoState({
+        schemaVersion: 1,
+        items: [
+          ...parsed.state.items,
+          ...memoState.items.filter((item) => !importedIds.has(item.id)),
+        ],
+      });
+      resetMemoDraft();
+      await persistMemoState();
+      const detail = [
+        addedCount ? `추가 ${addedCount}개` : "",
+        updatedCount ? `갱신 ${updatedCount}개` : "",
+      ].filter(Boolean).join(", ");
+      setStatus(`메모를 가져왔습니다. (${detail || "변경 없음"}, 전체 ${memoState.items.length}개)`, "ok");
+    } catch (error) {
+      setStatus("메모 파일을 가져오지 못했습니다.", "warn");
+    }
+  }
+
   function memoFieldNames(item) {
     return MEMO_FIELDS
       .filter((field) => Object.prototype.hasOwnProperty.call(item.values || {}, field.key))
@@ -2908,6 +3062,42 @@
       emptySelected,
       selectedCount: MEMO_FIELDS.filter((field) => ui[field.check]?.checked).length,
     };
+  }
+
+  let memoSaveInFlight = false;
+
+  async function handleMemoSavePress(event) {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    if (memoSaveInFlight) {
+      return;
+    }
+    memoSaveInFlight = true;
+    const button = ui.memoSaveButton;
+    const scroll = button?.closest('.ias-scroll') || null;
+    const previousScrollTop = scroll?.scrollTop || 0;
+    const active = panelShadow?.activeElement;
+    if (active instanceof HTMLElement && active !== button) {
+      active.blur();
+    }
+    // Let IME composition / textarea input settle before reading the draft.
+    await new Promise((resolve) => requestAnimationFrame(() => resolve()));
+    if (button) {
+      button.disabled = true;
+    }
+    try {
+      await savePromptMemo();
+    } finally {
+      if (button) {
+        button.disabled = false;
+      }
+      requestAnimationFrame(() => {
+        if (scroll) {
+          scroll.scrollTop = Math.min(previousScrollTop, Math.max(0, scroll.scrollHeight - scroll.clientHeight));
+        }
+      });
+      memoSaveInFlight = false;
+    }
   }
 
   async function savePromptMemo() {
@@ -3159,39 +3349,52 @@
       queueButton.type = "button";
       queueButton.className = "ias-memo-queue";
       queueButton.dataset.action = "queue";
-      queueButton.innerHTML = `${icon("playlist_add", 16)}<span>대기열에 추가</span>`;
+      queueButton.innerHTML = `${icon("playlist_add", 17)}<span>대기열에 추가</span>`;
 
-      const actionSelect = document.createElement("select");
-      actionSelect.className = "ias-memo-action-select";
-      actionSelect.dataset.role = "memo-actions";
-      actionSelect.setAttribute("aria-label", `${item.name} 메모 작업`);
-      const placeholder = document.createElement("option");
-      placeholder.value = "";
-      placeholder.textContent = "불러오기 · 관리";
-      actionSelect.append(placeholder);
+      const moreButton = document.createElement("button");
+      moreButton.type = "button";
+      moreButton.className = "ias-memo-more";
+      moreButton.dataset.action = "menu";
+      moreButton.setAttribute("aria-label", `${item.name} 메모 메뉴`);
+      moreButton.setAttribute("aria-haspopup", "menu");
+      moreButton.setAttribute("aria-expanded", "false");
+      moreButton.innerHTML = '<span class="ias-more-dots" aria-hidden="true"></span>';
 
-      const loadGroup = document.createElement("optgroup");
-      loadGroup.label = "불러오기";
-      const loadOption = document.createElement("option");
-      loadOption.value = "load";
-      loadOption.textContent = "자동생성 입력칸에 불러오기";
-      const applyOption = document.createElement("option");
-      applyOption.value = "apply";
-      applyOption.textContent = "NovelAI에 직접 적용";
-      loadGroup.append(loadOption, applyOption);
+      const menu = document.createElement("div");
+      menu.className = "ias-memo-menu";
+      menu.setAttribute("role", "menu");
+      menu.hidden = true;
+      const menuItems = [
+        { action: "export", label: "내보내기", iconName: "download" },
+        { action: "import", label: "가져오기", iconName: "upload" },
+        { separator: true },
+        { action: "load", label: "자동생성에 불러오기", iconName: "content_copy" },
+        { action: "apply", label: "NovelAI에 바로 적용", iconName: "bolt" },
+        { separator: true },
+        { action: "edit", label: "메모 수정", iconName: "tune" },
+        { action: "delete", label: "메모 삭제", iconName: "delete", danger: true },
+      ];
+      for (const config of menuItems) {
+        if (config.separator) {
+          const separator = document.createElement("div");
+          separator.className = "ias-memo-menu-separator";
+          separator.setAttribute("role", "separator");
+          menu.append(separator);
+          continue;
+        }
+        const menuButton = document.createElement("button");
+        menuButton.type = "button";
+        menuButton.className = "ias-memo-menu-item";
+        menuButton.dataset.action = config.action;
+        menuButton.setAttribute("role", "menuitem");
+        if (config.danger) {
+          menuButton.dataset.danger = "true";
+        }
+        menuButton.innerHTML = `${icon(config.iconName, 17)}<span>${config.label}</span>`;
+        menu.append(menuButton);
+      }
 
-      const manageGroup = document.createElement("optgroup");
-      manageGroup.label = "관리";
-      const editOption = document.createElement("option");
-      editOption.value = "edit";
-      editOption.textContent = "메모 수정";
-      const deleteOption = document.createElement("option");
-      deleteOption.value = "delete";
-      deleteOption.textContent = "메모 삭제";
-      manageGroup.append(editOption, deleteOption);
-
-      actionSelect.append(loadGroup, manageGroup);
-      actions.append(queueButton, actionSelect);
+      actions.append(queueButton, moreButton, menu);
       card.append(top, preview, chips, actions);
       ui.memoList.append(card);
     });
@@ -3200,6 +3403,10 @@
   function runMemoAction(id, action) {
     if (action === "queue") {
       void addMemoToQueue(id);
+    } else if (action === "export") {
+      exportMemos();
+    } else if (action === "import") {
+      ui.memoImportFile?.click();
     } else if (action === "load") {
       applyMemoToAuto(id);
     } else if (action === "apply") {
@@ -3211,23 +3418,64 @@
     }
   }
 
+  function closeMemoMenus(exceptCard = null) {
+    if (!ui.memoList) {
+      return;
+    }
+    ui.memoList.querySelectorAll(".ias-memo-card").forEach((card) => {
+      if (exceptCard && card === exceptCard) {
+        return;
+      }
+      const menu = card.querySelector(".ias-memo-menu");
+      const toggle = card.querySelector(".ias-memo-more");
+      if (menu) {
+        menu.hidden = true;
+        delete menu.dataset.placement;
+      }
+      toggle?.setAttribute("aria-expanded", "false");
+      delete card.dataset.menuOpen;
+    });
+  }
+
+  function openMemoMenu(card, toggle, menu) {
+    closeMemoMenus(card);
+    menu.hidden = false;
+    card.dataset.menuOpen = "true";
+    toggle.setAttribute("aria-expanded", "true");
+
+    const scroll = card.closest(".ias-scroll");
+    const viewport = scroll?.getBoundingClientRect() || {
+      top: 0,
+      bottom: window.innerHeight,
+    };
+    const triggerRect = toggle.getBoundingClientRect();
+    const menuHeight = menu.offsetHeight || 190;
+    const above = triggerRect.top - viewport.top;
+    const below = viewport.bottom - triggerRect.bottom;
+    menu.dataset.placement = below >= menuHeight + 12 || below >= above ? "below" : "above";
+  }
+
   function handleMemoListClick(event) {
-    const button = event.target.closest('button[data-action="queue"]');
+    const button = event.target.closest("button[data-action]");
     const card = event.target.closest(".ias-memo-card");
     if (!button || !card?.dataset.id) {
       return;
     }
-    runMemoAction(card.dataset.id, "queue");
-  }
-
-  function handleMemoListChange(event) {
-    const select = event.target.closest('select[data-role="memo-actions"]');
-    const card = event.target.closest(".ias-memo-card");
-    if (!select || !card?.dataset.id || !select.value) {
+    const action = button.dataset.action;
+    if (action === "menu") {
+      const menu = card.querySelector(".ias-memo-menu");
+      if (!menu) {
+        return;
+      }
+      const isOpen = !menu.hidden;
+      if (isOpen) {
+        closeMemoMenus();
+      } else {
+        openMemoMenu(card, button, menu);
+      }
       return;
     }
-    const action = select.value;
-    select.value = "";
+    closeMemoMenus();
     runMemoAction(card.dataset.id, action);
   }
 
@@ -4537,44 +4785,118 @@
       .ias-memo-field textarea:disabled { opacity: 0.45; background: rgba(255,255,255,0.55); }
       .ias-memo-save-row { display: flex; gap: 8px; margin: 2px 0 18px; }
       .ias-memo-save-row .ias-btn { flex: 1; }
-      .ias-memo-list { display: flex; flex-direction: column; gap: 8px; }
-      .ias-memo-card {
-        flex: 0 0 auto; width: 100%; min-width: 0;
-        display: flex; flex-direction: column; gap: 8px;
-        padding: 11px; border-radius: 14px; background: #fff;
-        border: 1px solid rgba(0,0,0,0.08);
-        transition: border-color 0.14s ease, box-shadow 0.16s ease;
+      .ias-memo-list-head {
+        min-height: 34px; margin: 0 0 9px;
+        display: flex; align-items: center; justify-content: space-between; gap: 10px;
       }
-      .ias-memo-card:hover { border-color: rgba(0,122,255,0.4); }
-      .ias-memo-card-top { display: flex; align-items: center; gap: 7px; min-width: 0; }
+      .ias-memo-list { display: flex; flex-direction: column; gap: 10px; padding: 1px 0 10px; }
+      .ias-memo-card {
+        position: relative; isolation: isolate;
+        flex: 0 0 auto; width: 100%; min-width: 0;
+        display: flex; flex-direction: column; gap: 10px;
+        padding: 14px; border-radius: 17px;
+        background: rgba(255,255,255,0.66);
+        -webkit-backdrop-filter: blur(18px) saturate(165%);
+        backdrop-filter: blur(18px) saturate(165%);
+        border: 1px solid rgba(255,255,255,0.78);
+        box-shadow: inset 0 0 0 1px rgba(0,0,0,0.045), 0 7px 22px rgba(25,28,38,0.055);
+        transition: border-color 0.16s ease, box-shadow 0.18s ease, transform 0.16s ease;
+      }
+      .ias-memo-card:hover {
+        border-color: rgba(255,255,255,0.96);
+        box-shadow: inset 0 0 0 1px rgba(0,122,255,0.13), 0 10px 28px rgba(25,28,38,0.075);
+      }
+      .ias-memo-card[data-menu-open="true"] { z-index: 20; }
+      .ias-memo-card-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
       .ias-memo-order {
-        flex: 0 0 auto; width: 20px; height: 20px; border-radius: 50%;
+        flex: 0 0 auto; width: 22px; height: 22px; border-radius: 50%;
         display: flex; align-items: center; justify-content: center;
         background: #007aff; color: #fff; font-size: 11px; font-weight: 700;
+        box-shadow: 0 2px 7px rgba(0,122,255,0.24);
       }
-      .ias-memo-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: #1c1c1e; }
-      .ias-memo-count { flex: 0 0 auto; font-size: 11px; color: #007aff; font-weight: 700; }
-      .ias-memo-preview { font-size: 11px; line-height: 1.4; color: #8e8e93; height: 30px; overflow: hidden; overflow-wrap: anywhere; }
-      .ias-memo-chips { display: flex; flex-wrap: wrap; gap: 5px; min-height: 20px; }
-      .ias-memo-chips span { padding: 3px 7px; border-radius: 999px; background: rgba(0,122,255,0.10); color: #007aff; font-size: 10px; font-weight: 600; }
-      .ias-memo-card-actions { display: flex; gap: 6px; align-items: stretch; }
+      .ias-memo-title {
+        flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+        white-space: nowrap; font-size: 13.5px; font-weight: 650; letter-spacing: -0.15px; color: #1c1c1e;
+      }
+      .ias-memo-count {
+        flex: 0 0 auto; min-width: 31px; height: 22px; padding: 0 8px;
+        display: inline-flex; align-items: center; justify-content: center;
+        border-radius: 999px; background: rgba(0,122,255,0.10);
+        color: #007aff; font-size: 10.5px; font-weight: 700;
+      }
+      .ias-memo-preview {
+        margin: -1px 1px 0; font-size: 11.5px; line-height: 1.45; color: #7d7d84;
+        height: 33px; overflow: hidden; overflow-wrap: anywhere;
+      }
+      .ias-memo-chips { display: flex; flex-wrap: wrap; gap: 6px; min-height: 21px; }
+      .ias-memo-chips span {
+        padding: 4px 8px; border-radius: 999px;
+        background: rgba(118,118,128,0.09); color: #63636a;
+        border: 1px solid rgba(255,255,255,0.64);
+        font-size: 10px; line-height: 1; font-weight: 600;
+      }
+      .ias-memo-card-actions {
+        position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 38px;
+        gap: 8px; align-items: center; margin-top: 1px;
+      }
       .ias-memo-queue {
-        flex: 1 1 auto; min-width: 0; height: 32px;
-        display: flex; align-items: center; justify-content: center; gap: 5px;
-        border: none; border-radius: 9px; padding: 0 10px; cursor: pointer;
-        background: rgba(52,199,89,0.12); color: #248a3d;
-        font-family: inherit; font-size: 11.5px; font-weight: 700;
-        transition: background 0.14s ease;
+        min-width: 0; height: 38px;
+        display: flex; align-items: center; justify-content: center; gap: 6px;
+        border: none; border-radius: 12px; padding: 0 13px; cursor: pointer;
+        background: rgba(0,122,255,0.12); color: #007aff;
+        box-shadow: inset 0 0 0 1px rgba(0,122,255,0.055);
+        font-family: inherit; font-size: 12px; font-weight: 700; letter-spacing: -0.1px;
+        transition: background 0.15s ease, transform 0.1s ease;
       }
-      .ias-memo-queue:hover { background: rgba(52,199,89,0.20); }
-      .ias-memo-action-select {
-        flex: 0 0 132px; min-width: 0; height: 32px;
-        border: none; border-radius: 9px; padding: 0 28px 0 10px;
-        background: rgba(0,0,0,0.04); color: #6e6e73;
-        font-family: inherit; font-size: 11px; font-weight: 600; cursor: pointer;
-        outline: none;
+      .ias-memo-queue:hover { background: rgba(0,122,255,0.19); }
+      .ias-memo-queue:active { transform: scale(0.985); }
+      .ias-memo-more {
+        width: 38px; height: 38px; padding: 0;
+        display: flex; align-items: center; justify-content: center;
+        border: 1px solid rgba(255,255,255,0.76); border-radius: 12px;
+        background: rgba(118,118,128,0.09); color: #626269; cursor: pointer;
+        box-shadow: inset 0 0 0 1px rgba(0,0,0,0.025);
+        transition: background 0.15s ease, color 0.15s ease, transform 0.1s ease;
       }
-      .ias-memo-action-select:hover, .ias-memo-action-select:focus { background: rgba(0,122,255,0.10); color: #007aff; }
+      .ias-memo-more:hover, .ias-memo-more[aria-expanded="true"] { background: rgba(0,122,255,0.13); color: #007aff; }
+      .ias-memo-more:active { transform: scale(0.94); }
+      .ias-more-dots {
+        position: relative; width: 3px; height: 3px; border-radius: 50%;
+        background: currentColor; box-shadow: -6px 0 0 currentColor, 6px 0 0 currentColor;
+      }
+      .ias-memo-menu {
+        position: absolute; right: 0; z-index: 30; width: min(224px, calc(100vw - 56px));
+        padding: 6px; border-radius: 16px;
+        background: rgba(246,246,249,0.80);
+        -webkit-backdrop-filter: blur(26px) saturate(185%);
+        backdrop-filter: blur(26px) saturate(185%);
+        border: 1px solid rgba(255,255,255,0.82);
+        box-shadow: inset 0 0 0 1px rgba(0,0,0,0.045), 0 20px 54px rgba(23,25,34,0.22), 0 3px 10px rgba(23,25,34,0.10);
+        transform-origin: top right;
+        animation: ias-memo-menu-in 0.16s cubic-bezier(0.22,0.8,0.24,1);
+      }
+      .ias-memo-menu[hidden] { display: none; }
+      .ias-memo-menu[data-placement="above"] { bottom: calc(100% + 9px); transform-origin: bottom right; }
+      .ias-memo-menu[data-placement="below"] { top: calc(100% + 9px); transform-origin: top right; }
+      @keyframes ias-memo-menu-in {
+        from { opacity: 0; transform: translateY(-3px) scale(0.97); }
+        to { opacity: 1; transform: translateY(0) scale(1); }
+      }
+      .ias-memo-menu-item {
+        width: 100%; height: 40px; padding: 0 11px;
+        display: flex; align-items: center; justify-content: flex-start; gap: 10px;
+        border: none; border-radius: 11px; background: transparent;
+        color: #1c1c1e; cursor: pointer; font-family: inherit;
+        font-size: 12.5px; font-weight: 600; text-align: left;
+        transition: background 0.12s ease, transform 0.08s ease;
+      }
+      .ias-memo-menu-item .ias-ic { flex: 0 0 auto; color: #74747b; }
+      .ias-memo-menu-item:hover { background: rgba(0,122,255,0.11); }
+      .ias-memo-menu-item:active { transform: scale(0.985); }
+      .ias-memo-menu-item[data-danger="true"] { color: #ff3b30; }
+      .ias-memo-menu-item[data-danger="true"] .ias-ic { color: #ff3b30; }
+      .ias-memo-menu-item[data-danger="true"]:hover { background: rgba(255,59,48,0.10); }
+      .ias-memo-menu-separator { height: 1px; margin: 5px 8px; background: rgba(60,60,67,0.14); }
 
       .ias-qcard[data-dragging="true"] { opacity: 0.45; }
       .ias-qcard[data-dropbefore="true"] { box-shadow: 0 -3px 0 0 #007aff, 0 0 0 1px rgba(0,122,255,0.4); }
@@ -4752,7 +5074,10 @@
                   <button class="ias-btn ias-memo-save" type="button">${icon("playlist_add", 18)}<span>새 메모 저장</span></button>
                   <button class="ias-btn secondary ias-memo-cancel-edit" type="button" hidden>${icon("close", 18)}<span>수정 취소</span></button>
                 </div>
-                <div class="ias-block-title">저장된 메모</div>
+                <div class="ias-memo-list-head">
+                  <div class="ias-block-title" style="margin:0;">저장된 메모</div>
+                </div>
+                <input class="ias-memo-import-file" type="file" accept="application/json,.json" hidden>
                 <div class="ias-memo-list"></div>
               </div>
             </div>
@@ -4893,7 +5218,22 @@
     }
 
     if (ui.memoSaveButton) {
-      ui.memoSaveButton.addEventListener("click", () => void savePromptMemo());
+      // Save on the first physical press instead of relying only on `click`.
+      // This avoids the first tap merely committing Korean IME text / moving the
+      // memo scroller. Keyboard activation still arrives through click(detail=0).
+      ui.memoSaveButton.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) {
+          return;
+        }
+        void handleMemoSavePress(event);
+      });
+      ui.memoSaveButton.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.detail === 0) {
+          void handleMemoSavePress(event);
+        }
+      });
     }
     if (ui.memoCancelEditButton) {
       ui.memoCancelEditButton.addEventListener("click", () => resetMemoDraft());
@@ -4906,8 +5246,22 @@
     }
     if (ui.memoList) {
       ui.memoList.addEventListener("click", handleMemoListClick);
-      ui.memoList.addEventListener("change", handleMemoListChange);
     }
+    ui.memoImportFile?.addEventListener("change", () => {
+      const file = ui.memoImportFile.files?.[0] || null;
+      ui.memoImportFile.value = "";
+      void importMemosFromFile(file);
+    });
+    panelShadow.addEventListener("click", (event) => {
+      if (!event.target.closest(".ias-memo-card-actions")) {
+        closeMemoMenus();
+      }
+    });
+    panelShadow.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        closeMemoMenus();
+      }
+    });
     for (const field of MEMO_FIELDS) {
       ui[field.check]?.addEventListener("change", renderMemoEditorState);
     }
@@ -5105,6 +5459,7 @@
       memoCopyAutoButton: panelShadow.querySelector(".ias-memo-copy-auto"),
       memoSaveButton: panelShadow.querySelector(".ias-memo-save"),
       memoCancelEditButton: panelShadow.querySelector(".ias-memo-cancel-edit"),
+      memoImportFile: panelShadow.querySelector(".ias-memo-import-file"),
       memoList: panelShadow.querySelector(".ias-memo-list"),
       folderInput: panelShadow.querySelector(".ias-folder"),
       countInput: panelShadow.querySelector(".ias-count"),

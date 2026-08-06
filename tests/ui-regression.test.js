@@ -52,9 +52,22 @@ context.handleEditorInput({ target: { dataset: { field: "negativePrompt" }, valu
 assert.equal(item.negativePrompt, "saved character negative");
 assert.equal(saveScheduled, 2, "both negative edits should schedule persistence");
 
-assert.match(source, /actionSelect\.dataset\.role = "memo-actions"/);
-assert.match(source, /loadGroup\.label = "불러오기"/);
-assert.match(source, /manageGroup\.label = "관리"/);
-assert.doesNotMatch(source, /actions\.className = "ias-memo-actions"/);
+assert.match(source, /moreButton\.className = "ias-memo-more"/);
+assert.match(source, /menu\.className = "ias-memo-menu"/);
+assert.match(source, /-webkit-backdrop-filter: blur\(26px\) saturate\(185%\)/);
+assert.match(source, /menuButton\.dataset\.action = config\.action/);
+assert.doesNotMatch(source, /actionSelect\.dataset\.role = "memo-actions"/);
+assert.ok(source.includes(`querySelectorAll('.character-prompt-input,[class*="character-prompt-input-"]')`));
+assert.ok(source.includes("child.matches?.('.sc-7d0727b8-33')"), 'trash must use the user-confirmed direct-child -33 icon');
+assert.ok(source.includes('width >= 15 && width <= 17.5'), 'trash selector must reject nested 14px Position icons');
+assert.ok(source.includes('clickControlLikeUser(button);'));
+assert.ok(source.includes('currentCount !== targetCount'), 'count changes must rebuild all Character cards');
+assert.ok(source.includes('await resetCharacterBoxes(surface);'), 'rebuild must clear all Character cards first');
+assert.ok(source.includes('handleMemoSavePress'), 'memo save must handle the first physical press');
+assert.ok(source.includes('대기열 중단: ${error}'));
+
+assert.ok(source.includes('surfaceIsOnscreen ? 1e15 : 0'), "visible Character surface must outrank stale off-screen copies");
+assert.ok(source.includes('findCharacterGenderOption("female")'), "new Character may use any visible gender seed option");
+assert.doesNotMatch(source, /firstCharacterGenderMismatch\(segments, containers\)\s*>=\s*0/, "gender seed mismatch must not force a destructive reset");
 
 console.log("ui regression tests passed");
