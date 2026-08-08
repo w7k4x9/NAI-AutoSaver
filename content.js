@@ -100,6 +100,7 @@
     "autoCharNeg",
     "autoSaveEnabled",
     "autoCompletionNotificationEnabled",
+    "backgroundKeepAliveEnabled",
     "volume",
   ];
 
@@ -162,6 +163,77 @@
   // ---------------------------------------------------------------------------
   function delay(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  // ---------------------------------------------------------------------------
+  // background tab keep-alive
+  // ---------------------------------------------------------------------------
+  // Chrome throttles setTimeout/setInterval in a hidden tab to once per second,
+  // and after the tab has been hidden for five minutes to once per MINUTE
+  // ("intensive throttling"). That is why switching to another tab stalled the
+  // run and stopped downloads. A page that is producing audio output is exempt
+  // from both, so an inaudible tone is kept running for the duration of a run.
+  // Amplitude is ~-56 dBFS: above Chrome's -72 dBFS audibility threshold, far
+  // below anything a person can hear, and at 20 Hz which normal speakers cannot
+  // reproduce anyway.
+  let backgroundKeepAliveEnabled = true;
+  const keepAlive = { context: null, oscillator: null, gain: null };
+
+  function startBackgroundKeepAlive() {
+    if (!backgroundKeepAliveEnabled || keepAlive.context) {
+      return;
+    }
+    try {
+      const AudioCtor = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtor) {
+        return;
+      }
+      const context = new AudioCtor();
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.type = "sine";
+      oscillator.frequency.value = 20;
+      gain.gain.value = 0.0016;
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.start();
+      keepAlive.context = context;
+      keepAlive.oscillator = oscillator;
+      keepAlive.gain = gain;
+      void context.resume?.();
+    } catch (error) {
+      void error;
+    }
+  }
+
+  function stopBackgroundKeepAlive() {
+    try {
+      keepAlive.oscillator?.stop?.();
+    } catch (error) {
+      void error;
+    }
+    try {
+      keepAlive.oscillator?.disconnect?.();
+      keepAlive.gain?.disconnect?.();
+      void keepAlive.context?.close?.();
+    } catch (error) {
+      void error;
+    }
+    keepAlive.oscillator = null;
+    keepAlive.gain = null;
+    keepAlive.context = null;
+  }
+
+  // Single source of truth: the tone runs exactly while something is running.
+  // Ref counting was fragile because a queue run nests many single runs inside
+  // itself, so the counter never returned to zero and the tone never stopped.
+  function syncBackgroundKeepAlive() {
+    const shouldRun = backgroundKeepAliveEnabled && (autoRun.active || queueRun.active);
+    if (shouldRun) {
+      startBackgroundKeepAlive();
+    } else if (keepAlive.context) {
+      stopBackgroundKeepAlive();
+    }
   }
 
   function storageGet(area, keys) {
@@ -398,9 +470,10 @@
       } catch (error) {
         deleted = false;
       }
-      if (!deleted && readEditableText(editor)) {
+      if (!deleted || readEditableText(editor)) {
         // Only a last-resort DOM clear. The native delete above is preferred
-        // because ProseMirror/React observes it as a real editing operation.
+        // because ProseMirror/React observes it as a real editing operation,
+        // but it sometimes reports success while leaving text behind.
         editor.innerHTML = "";
         editor.dispatchEvent(new Event("input", { bubbles: true }));
       }
@@ -414,11 +487,48 @@
       return true;
     }
 
-    // NovelAI's character editor tokenizes at commas. Inserting one large HTML
-    // string lets the UI keep only its auto-added gender tag (e.g. 1boy). Enter
-    // each tag and delimiter through the browser editing pipeline instead, with a
-    // short pause after commas so the next token is not lost during rerendering.
     const tags = promptTagParts(text);
+    const expectedTags = tags.map(canonicalPromptTag);
+
+    // Fast path: insert the whole prompt in ONE editing operation, exactly like
+    // a paste. This is what makes the run feel instant instead of "typed".
+    // NovelAI's editor sometimes drops the tail when it rerenders mid-insert, so
+    // the result is verified and we only fall back to the slow per-tag path when
+    // the single-shot write did not survive.
+    editor.focus();
+    moveCaretToEditableEnd(editor);
+    if (clear && execInsertText(tags.join(", "))) {
+      editor.dispatchEvent(new Event("change", { bubbles: true }));
+      await delay(60);
+      if (normalizedPromptTags(readEditableText(editor)).join("|") === expectedTags.join("|")) {
+        return true;
+      }
+      // Single-shot write did not stick — the editor must be genuinely EMPTY
+      // before retrying tag by tag, otherwise the slow loop appends onto the
+      // survivors and produces duplicated or concatenated tags.
+      selectEditableContents(editor);
+      let cleared = false;
+      try {
+        cleared = document.execCommand("delete", false, null);
+      } catch (error) {
+        cleared = false;
+      }
+      if (!cleared || readEditableText(editor)) {
+        editor.innerHTML = "";
+        editor.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+      await delay(45);
+      if (readEditableText(editor)) {
+        // ProseMirror restored its old document during the settle delay.
+        editor.innerHTML = "";
+        editor.dispatchEvent(new Event("input", { bubbles: true }));
+        await delay(45);
+      }
+    }
+
+    // Slow path: NovelAI's character editor tokenizes at commas. Enter each tag
+    // and delimiter through the browser editing pipeline, with a short pause
+    // after commas so the next token is not lost during rerendering.
     for (let i = 0; i < tags.length; i += 1) {
       editor.focus();
       if (i > 0) {
@@ -440,20 +550,47 @@
     if (!editor || !parts.length) {
       return;
     }
-    for (let i = 0; i < parts.length; i += 1) {
+    // Fast path: append every missing tag in one editing operation.
+    editor.focus();
+    moveCaretToEditableEnd(editor);
+    {
+      const current = readEditableText(editor);
+      const lead = /,\s*$/u.test(current) ? " " : (current ? ", " : "");
+      const expected = normalizedPromptTags(`${current}, ${parts.join(", ")}`).join("|");
+      if (execInsertText(`${lead}${parts.join(", ")}`)) {
+        editor.dispatchEvent(new Event("change", { bubbles: true }));
+        await delay(70);
+        if (normalizedPromptTags(readEditableText(editor)).join("|") === expected) {
+          return;
+        }
+      }
+    }
+
+    // Slow fallback. The single-shot insert above may have landed partially, so
+    // skip whatever already made it into the editor instead of duplicating it.
+    const alreadyThere = normalizedPromptTags(readEditableText(editor));
+    const remaining = parts.filter((part) => {
+      const index = alreadyThere.indexOf(canonicalPromptTag(part));
+      if (index < 0) {
+        return true;
+      }
+      alreadyThere.splice(index, 1);
+      return false;
+    });
+    for (let i = 0; i < remaining.length; i += 1) {
       editor.focus();
       moveCaretToEditableEnd(editor);
       const current = readEditableText(editor);
       // The gender option creates `girl,` / `boy,` with a trailing comma. Do not
       // add a second comma before the first custom tag.
-      const separator = i === 0 && /,\s*$/u.test(current)
+      const separator = /,\s*$/u.test(current)
         ? " "
         : (current ? ", " : "");
       if (separator) {
         execInsertText(separator);
         await delay(80);
       }
-      execInsertText(parts[i]);
+      execInsertText(remaining[i]);
       await delay(55);
     }
     editor.dispatchEvent(new Event("change", { bubbles: true }));
@@ -766,10 +903,12 @@
     for (const container of containers) {
       await revealTabInScope(container, "prompt");
       const editor = getCharacterBoxEditor(container);
-      const text = editor ? htmlToPlainText(editor.innerHTML).trim() : "";
-      if (text) {
-        parts.push(text);
-      }
+      // Keep an empty card as an empty block so the character negatives read
+      // from the same cards stay lined up with their characters.
+      parts.push(editor ? htmlToPlainText(editor.innerHTML).trim() : "");
+    }
+    while (parts.length && !parts[parts.length - 1]) {
+      parts.pop();
     }
     return parts.join(" ;; ");
   }
@@ -926,13 +1065,24 @@
         if (!groups.has(surface)) groups.set(surface, []);
         groups.get(surface).push(entry);
       }
+      // Area clipped to the DOCUMENT, not to the viewport. Clipping to the
+      // viewport made surface choice depend on scroll position and on the tab
+      // being on screen, so a scrolled or backgrounded tab scored every real
+      // card as "invisible" and could pick a stale hidden copy — or report the
+      // wrong count and abort the run. Document-space clipping still rejects
+      // the parked off-screen mobile tray (left:-9999px / translateX(-100%))
+      // while being completely independent of scrolling and tab visibility.
       const viewportArea = (element) => {
         if (!(element instanceof Element)) {
           return 0;
         }
         const rect = element.getBoundingClientRect();
-        const width = Math.max(0, Math.min(rect.right, window.innerWidth) - Math.max(rect.left, 0));
-        const height = Math.max(0, Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0));
+        const docWidth = Math.max(document.documentElement.scrollWidth, window.innerWidth || 0);
+        const docHeight = Math.max(document.documentElement.scrollHeight, window.innerHeight || 0);
+        const left = rect.left + (window.scrollX || 0);
+        const top = rect.top + (window.scrollY || 0);
+        const width = Math.max(0, Math.min(left + rect.width, docWidth) - Math.max(left, 0));
+        const height = Math.max(0, Math.min(top + rect.height, docHeight) - Math.max(top, 0));
         return width * height;
       };
       const best = Array.from(groups.entries())
@@ -1033,10 +1183,29 @@
     // In the current UI, only the selected character owns the large ProseMirror
     // editor. Other cards are compact previews. Clicking the visible prompt
     // preview (not the reorder/check/trash buttons) selects that card.
+    // Hit-testing with document.elementFromPoint only works for coordinates
+    // inside the current viewport, so it returned null whenever the card was
+    // scrolled out of view or the tab was in the background. Resolve the same
+    // target structurally instead.
     if (attempt === 1 || attempt === 2) {
-      const x = Math.min(cardRect.right - 28, cardRect.left + Math.max(42, Math.min(92, cardRect.width * 0.24)));
-      const y = Math.min(cardRect.bottom - 26, headerRect.bottom + (attempt === 1 ? 34 : 58));
-      const atPoint = document.elementFromPoint(x, y);
+      const wanted = headerRect.bottom + (attempt === 1 ? 34 : 58);
+      // Keep the old horizontal clamp: only the LEFT part of the card body is
+      // eligible, and never a button. The right-hand column holds the trash and
+      // reorder controls, and clicking those mid-run would delete a character.
+      const maxLeft = Math.min(
+        cardRect.right - 28,
+        cardRect.left + Math.max(42, Math.min(92, cardRect.width * 0.24)),
+      );
+      const atPoint = Array.from(container.querySelectorAll("*"))
+        .filter((element) => !element.closest(`#${HOST_ID}`))
+        .filter((element) => !element.matches("button,[role='button'],input,select,svg,path"))
+        .filter((element) => !element.closest("button,[role='button']"))
+        .filter(isRenderedControl)
+        .map((element) => ({ element, rect: element.getBoundingClientRect() }))
+        .filter(({ rect }) => rect.top >= headerRect.bottom - 4
+          && rect.left <= maxLeft
+          && rect.right >= cardRect.left)
+        .sort((a, b) => Math.abs(a.rect.top - wanted) - Math.abs(b.rect.top - wanted))[0]?.element;
       if (atPoint && container.contains(atPoint)) {
         return atPoint;
       }
@@ -1275,42 +1444,68 @@
     return getCharacterContainersInSurface(surface).length === 0;
   }
 
+  // NOTE: always measure with characterCountForSurface(). Measuring with
+  // getCharacterContainersInSurface() returns [] when `surface` is null, so the
+  // add loop never saw its own additions and kept clicking "add character".
   async function addMissingCharacterBoxes(segments, surface) {
-    let containers = getCharacterContainersInSurface(surface);
+    let count = characterCountForSurface(surface);
     let guard = 0;
-    while (containers.length < segments.length && guard < 16) {
-      const added = await clickAddCharacterBox(segments[containers.length] || '', surface);
-      if (!added) {
+    while (count < segments.length && guard < 16) {
+      const added = await clickAddCharacterBox(segments[count] || '', surface);
+      const next = characterCountForSurface(surface);
+      if (!added || next <= count) {
         return false;
       }
-      containers = getCharacterContainersInSurface(surface);
+      count = next;
       guard += 1;
     }
-    return containers.length === segments.length;
+    return count === segments.length;
+  }
+
+  async function trimCharacterBoxesTo(targetCount, surface) {
+    let guard = 0;
+    while (characterCountForSurface(surface) > targetCount && guard < 16) {
+      const before = characterCountForSurface(surface);
+      setStatus(`캐릭터 카드 정리 중: ${before}개 → ${targetCount}개`, 'ok');
+      const removed = await removeLastCharacterBox(surface);
+      if (!removed || characterCountForSurface(surface) >= before) {
+        return false;
+      }
+      guard += 1;
+    }
+    return characterCountForSurface(surface) <= targetCount;
   }
 
   async function ensureCharacterCardLayout(segments) {
     const targetCount = segments.length;
     const currentContainers = getCharacterContainers();
-    const currentCount = currentContainers.length;
     const surface = getCharacterSurface(currentContainers[0])
       || Array.from(document.querySelectorAll('.settings-panel,.mobile-tray-contents')).find(isVisible)
       || null;
 
-    // Keep matching layouts intact. Whenever the count changes (4→2, 2→4, etc.),
-    // use the simple deterministic path requested by the user: delete ALL cards,
-    // then add exactly the target number again using any visible gender seed.
-    if (currentCount !== targetCount) {
-      setStatus(`캐릭터 카드 재구성 중: ${currentCount}개 전체 삭제 → ${targetCount}개 추가`, 'ok');
-      const cleared = await resetCharacterBoxes(surface);
-      if (!cleared) {
-        return false;
+    // Keep every card that can be reused. Deleting all cards and recreating them
+    // on every queue item forced a full retype of every character prompt (and a
+    // long delete/create animation per card), which is what made runs crawl.
+    // Only the surplus is trimmed and only the shortfall is added; surviving
+    // cards let setCharacterPromptText take its "already correct" fast path.
+    for (let cycle = 0; cycle < 3; cycle += 1) {
+      let count = characterCountForSurface(surface);
+      if (count > targetCount) {
+        const trimmed = await trimCharacterBoxesTo(targetCount, surface);
+        if (!trimmed) {
+          return false;
+        }
+        count = characterCountForSurface(surface);
       }
-      if (targetCount > 0) {
+      if (count < targetCount) {
         const added = await addMissingCharacterBoxes(segments, surface);
         if (!added) {
           return false;
         }
+        count = characterCountForSurface(surface);
+      }
+      if (count === targetCount) {
+        return true;
       }
     }
 
@@ -1484,29 +1679,348 @@
   }
 
   function splitCharacterBlocks(value) {
-    // ASCII/full-width double semicolons are accepted. Empty blocks are removed.
-    return String(value == null ? "" : value)
+    // ASCII/full-width double semicolons are accepted. Blocks keep their
+    // POSITION: an empty block in the middle is preserved so that character
+    // negatives stay lined up with the character prompts. (Previously empty
+    // blocks were dropped, so "prompt A ;; prompt B" with a negative for the
+    // second character only silently applied that negative to character 1.)
+    // Only trailing empties are trimmed.
+    const parts = String(value == null ? "" : value)
       .split(/\s*(?:;;|；；)\s*/u)
-      .map((part) => part.trim())
-      .filter(Boolean);
+      .map((part) => part.trim());
+    while (parts.length && !parts[parts.length - 1]) {
+      parts.pop();
+    }
+    return parts;
+  }
+
+  // ---------------------------------------------------------------------------
+  // character blocks  <->  ";;" storage
+  // ---------------------------------------------------------------------------
+  // Everything is still STORED in the original ";;" form, so queues, memos and
+  // exported JSON from older versions keep working unchanged. The UI just shows
+  // that string as a list of [prompt, negative] blocks.
+  function charBlocksFromStrings(promptText, negativeText) {
+    const prompts = splitCharacterBlocks(promptText);
+    const negatives = splitCharacterBlocks(negativeText);
+    const count = Math.max(prompts.length, negatives.length);
+    const blocks = [];
+    for (let i = 0; i < count; i += 1) {
+      blocks.push({ prompt: prompts[i] || "", negative: negatives[i] || "" });
+    }
+    return blocks;
+  }
+
+  function charBlocksToStrings(blocks) {
+    const list = Array.isArray(blocks) ? blocks : [];
+    const trimmed = list.map((block) => ({
+      prompt: String(block?.prompt || "").trim(),
+      negative: String(block?.negative || "").trim(),
+    }));
+    while (trimmed.length && !trimmed[trimmed.length - 1].prompt && !trimmed[trimmed.length - 1].negative) {
+      trimmed.pop();
+    }
+    // A character with no prompt is never created in NovelAI, so a trailing
+    // block that only has a negative would show in the panel but do nothing.
+    // Drop it, so what the editor shows is what actually runs. (Kept when NO
+    // block has a prompt at all — that is the "negatives only, use the current
+    // NovelAI characters" case.)
+    if (trimmed.some((block) => block.prompt)) {
+      while (trimmed.length && !trimmed[trimmed.length - 1].prompt) {
+        trimmed.pop();
+      }
+    }
+    // Each column drops its own trailing empties, so a character with no
+    // negative never leaves a dangling " ;; " in the stored string. Interior
+    // gaps are kept because they carry position.
+    const joinOrEmpty = (input) => {
+      const values = input.slice();
+      while (values.length && !values[values.length - 1]) {
+        values.pop();
+      }
+      return values.length ? values.join(" ;; ") : "";
+    };
+    return {
+      prompt: joinOrEmpty(trimmed.map((block) => block.prompt)),
+      negative: joinOrEmpty(trimmed.map((block) => block.negative)),
+    };
+  }
+
+  // Turn a pair of ";;" textareas into a block editor. The textareas stay in the
+  // DOM as the single source of truth (hidden), so every existing read/write of
+  // `.value` — settings, memos, queue items, JSON import/export — keeps working
+  // exactly as before. Assignments to `.value` are intercepted so the blocks
+  // redraw automatically whenever the app loads new data into the fields.
+  function attachCharacterBlocks(promptField, negativeField, options = {}) {
+    if (!promptField || !negativeField || promptField.dataset.iasBlocks === "on") {
+      return null;
+    }
+    const {
+      title = "캐릭터",
+      hint = "",
+      promptPlaceholder = "예: girl, black hair, long hair",
+      negativePlaceholder = "이 캐릭터에만 적용할 Undesired Content",
+      rows = 3,
+    } = options;
+
+    promptField.dataset.iasBlocks = "on";
+    negativeField.dataset.iasBlocks = "on";
+    promptField.hidden = true;
+    negativeField.hidden = true;
+    promptField.style.display = "none";
+    negativeField.style.display = "none";
+
+    const root = document.createElement("div");
+    root.className = "ias-charblocks";
+    const bar = document.createElement("div");
+    bar.className = "ias-cb-topbar";
+    const titleWrap = document.createElement("div");
+    titleWrap.style.cssText = "display:flex;align-items:baseline;gap:8px;";
+    const titleEl = document.createElement("span");
+    titleEl.className = "ias-cb-title";
+    titleEl.textContent = title;
+    const countEl = document.createElement("span");
+    countEl.className = "ias-cb-count";
+    titleWrap.append(titleEl, countEl);
+    const addButton = document.createElement("button");
+    addButton.type = "button";
+    addButton.className = "ias-cb-add";
+    addButton.title = "캐릭터 블록 추가";
+    addButton.innerHTML = `${icon("add", 15)}<span>캐릭터 추가</span>`;
+    bar.append(titleWrap, addButton);
+    const list = document.createElement("div");
+    list.className = "ias-cb-list";
+    root.append(bar, list);
+    if (hint) {
+      const hintEl = document.createElement("p");
+      hintEl.className = "ias-hint";
+      hintEl.textContent = hint;
+      root.append(hintEl);
+    }
+
+    promptField.parentNode.insertBefore(root, promptField);
+
+    let blocks = [];
+    let disabled = false;
+    let syncing = false;
+
+    const nativeValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")
+      || Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+
+    function readField(field) {
+      try {
+        return nativeValue?.get ? String(nativeValue.get.call(field) ?? "") : String(field.value ?? "");
+      } catch (error) {
+        void error;
+        return String(field.value ?? "");
+      }
+    }
+
+    function writeField(field, value) {
+      try {
+        if (nativeValue?.set) {
+          nativeValue.set.call(field, value);
+          return;
+        }
+      } catch (error) {
+        void error;
+      }
+      field.value = value;
+    }
+
+    function pushToFields() {
+      const next = charBlocksToStrings(blocks);
+      syncing = true;
+      try {
+        if (readField(promptField) !== next.prompt) {
+          writeField(promptField, next.prompt);
+          promptField.dispatchEvent(new Event("input", { bubbles: true }));
+          promptField.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+        if (readField(negativeField) !== next.negative) {
+          writeField(negativeField, next.negative);
+          negativeField.dispatchEvent(new Event("input", { bubbles: true }));
+          negativeField.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      } finally {
+        syncing = false;
+      }
+    }
+
+    function render() {
+      list.textContent = "";
+      countEl.textContent = blocks.length ? `${blocks.length}명` : "";
+      addButton.disabled = disabled;
+      if (!blocks.length) {
+        const empty = document.createElement("div");
+        empty.className = "ias-cb-empty";
+        empty.textContent = "캐릭터 없음 — 현재 NovelAI 캐릭터를 그대로 사용합니다. 캐릭터를 지정하려면 “캐릭터 추가”를 누르세요.";
+        list.append(empty);
+        return;
+      }
+      blocks.forEach((block, index) => {
+        const card = document.createElement("div");
+        card.className = "ias-cb";
+
+        const head = document.createElement("div");
+        head.className = "ias-cb-head";
+        const name = document.createElement("span");
+        name.className = "ias-cb-name";
+        name.textContent = `캐릭터 ${index + 1}`;
+        const tools = document.createElement("div");
+        tools.className = "ias-cb-tools";
+        const makeTool = (act, label, text) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.dataset.act = act;
+          button.title = label;
+          button.textContent = text;
+          button.disabled = disabled
+            || (act === "up" && index === 0)
+            || (act === "down" && index === blocks.length - 1);
+          return button;
+        };
+        tools.append(
+          makeTool("up", "위로", "↑"),
+          makeTool("down", "아래로", "↓"),
+          makeTool("remove", "이 캐릭터 삭제", "✕"),
+        );
+        head.append(name, tools);
+
+        const promptLabel = document.createElement("div");
+        promptLabel.className = "ias-cb-sub";
+        promptLabel.textContent = "캐릭터 프롬프트";
+        const promptArea = document.createElement("textarea");
+        promptArea.className = "ias-input";
+        promptArea.rows = rows;
+        promptArea.placeholder = promptPlaceholder;
+        promptArea.value = block.prompt;
+        promptArea.disabled = disabled;
+
+        const negLabel = document.createElement("div");
+        negLabel.className = "ias-cb-sub";
+        negLabel.textContent = "캐릭터 네거티브";
+        const negArea = document.createElement("textarea");
+        negArea.className = "ias-input";
+        negArea.rows = Math.max(2, rows - 1);
+        negArea.placeholder = negativePlaceholder;
+        negArea.value = block.negative;
+        negArea.disabled = disabled;
+
+        promptArea.addEventListener("input", () => {
+          blocks[index].prompt = promptArea.value;
+          pushToFields();
+        });
+        negArea.addEventListener("input", () => {
+          blocks[index].negative = negArea.value;
+          pushToFields();
+        });
+        tools.addEventListener("click", (event) => {
+          const button = event.target instanceof Element ? event.target.closest("button") : null;
+          if (!button || button.disabled) {
+            return;
+          }
+          event.preventDefault();
+          event.stopPropagation();
+          const act = button.dataset.act;
+          if (act === "remove") {
+            blocks.splice(index, 1);
+          } else if (act === "up" && index > 0) {
+            [blocks[index - 1], blocks[index]] = [blocks[index], blocks[index - 1]];
+          } else if (act === "down" && index < blocks.length - 1) {
+            [blocks[index + 1], blocks[index]] = [blocks[index], blocks[index + 1]];
+          } else {
+            return;
+          }
+          pushToFields();
+          render();
+        });
+
+        card.append(head, promptLabel, promptArea, negLabel, negArea);
+        list.append(card);
+      });
+    }
+
+    function refresh() {
+      blocks = charBlocksFromStrings(readField(promptField), readField(negativeField));
+      render();
+    }
+
+    addButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (disabled) {
+        return;
+      }
+      blocks.push({ prompt: "", negative: "" });
+      pushToFields();
+      render();
+      const areas = list.querySelectorAll("textarea");
+      areas[areas.length - 2]?.focus?.();
+    });
+
+    // Redraw when anything else assigns to the underlying fields.
+    for (const field of [promptField, negativeField]) {
+      try {
+        Object.defineProperty(field, "value", {
+          configurable: true,
+          enumerable: true,
+          get() {
+            return nativeValue.get.call(this);
+          },
+          set(next) {
+            nativeValue.set.call(this, next);
+            if (!syncing) {
+              refresh();
+            }
+          },
+        });
+      } catch (error) {
+        void error;
+      }
+    }
+
+    const api = {
+      root,
+      refresh,
+      setDisabled(next) {
+        disabled = Boolean(next);
+        render();
+      },
+    };
+    refresh();
+    return api;
   }
 
   // Apply per-character negatives to each character's own Undesired Content box.
   // ";;" separates negatives per character; a single block applies to character 1.
-  async function applyCharacterNegativesToNovelAi(text) {
-    if (text == null || String(text).trim() === "") {
+  // `slots` is how many character cards this item OWNS. Character cards are now
+  // reused between queue items instead of being deleted and recreated, so an
+  // owned card whose block has no negative must be CLEARED — otherwise the
+  // previous item's negative silently keeps applying.
+  async function applyCharacterNegativesToNovelAi(text, { slots = 0 } = {}) {
+    const hasText = text != null && String(text).trim() !== "";
+    if (!hasText && slots <= 0) {
       return { ok: true, skipped: true };
     }
     const segments = splitCharacterBlocks(text);
     const containers = getCharacterContainers();
     if (!containers.length) {
-      setStatus("캐릭터 박스를 찾지 못해 캐릭터 네거티브를 건너뛰었습니다.", "warn");
-      return { ok: false };
+      if (hasText) {
+        setStatus("캐릭터 박스를 찾지 못해 캐릭터 네거티브를 건너뛰었습니다.", "warn");
+        return { ok: false };
+      }
+      return { ok: true, skipped: true };
+    }
+    const wanted = Math.max(segments.length, slots);
+    const count = Math.min(wanted, containers.length);
+    if (wanted > containers.length) {
+      setStatus(`캐릭터 네거티브 ${wanted}개 중 ${containers.length}개만 적용합니다. (캐릭터 카드가 부족)`, "warn");
     }
     let applied = 0;
-    for (let i = 0; i < segments.length && i < containers.length; i += 1) {
-      const seg = segments[i];
-      if (!seg) {
+    for (let i = 0; i < count; i += 1) {
+      const seg = segments[i] || "";
+      if (!seg && i >= slots) {
         continue;
       }
       const expanded = await ensureCharacterExpandedAt(i);
@@ -1524,7 +2038,7 @@
       }
       await revealTabInScope(container, "prompt");
     }
-    if (!applied) {
+    if (!applied && hasText) {
       setStatus("캐릭터 네거티브를 적용하지 못했습니다. (캐릭터 박스의 Undesired Content 칸을 못 찾음)", "warn");
       return { ok: false };
     }
@@ -1541,12 +2055,23 @@
 
     // Keep the card count/order/gender aligned with the ;; blocks. A stale
     // Female card for a 1boy block is deleted and recreated as Male.
-    const layoutReady = await ensureCharacterCardLayout(segments);
+    let layoutReady = await ensureCharacterCardLayout(segments);
     let containers = getCharacterContainers();
-    if (!layoutReady) {
+    if (!layoutReady || containers.length !== segments.length) {
+      // Most failures here are a transient NovelAI rerender rather than a real
+      // problem, and they were common enough to kill whole queue runs. Let the
+      // UI settle and try once more before giving up.
+      setStatus("캐릭터 카드를 다시 맞추는 중입니다…", "warn");
+      await delay(700);
+      layoutReady = await ensureCharacterCardLayout(segments);
+      containers = getCharacterContainers();
+    }
+    if (containers.length !== segments.length) {
+      // Generating with the wrong number of characters produces images the user
+      // did not ask for, so this still stops rather than guessing.
       return {
         ok: false,
-        error: `캐릭터 카드 재구성에 실패했습니다. 현재 ${containers.length}개 / 필요한 ${segments.length}개입니다. 잘못된 캐릭터 구성으로는 생성하지 않습니다.`,
+        error: `캐릭터 카드 수를 맞추지 못했습니다. 현재 ${containers.length}개 / 필요한 ${segments.length}개입니다. 잘못된 캐릭터 구성으로는 생성하지 않습니다.`,
       };
     }
 
@@ -1904,6 +2429,7 @@
     clearAutoTimers();
     autoRun.token += 1;
     autoRun.active = false;
+    syncBackgroundKeepAlive();
     autoRun.waitingForCompletion = false;
     autoRun.waitingForExistingGeneration = false;
     autoRun.stopAfterCurrent = false;
@@ -1946,6 +2472,7 @@
     const count = autoRun.completedCount || autoRun.count;
     clearAutoTimers();
     autoRun.active = false;
+    syncBackgroundKeepAlive();
     autoRun.waitingForCompletion = false;
     autoRun.waitingForExistingGeneration = false;
     await storageSet("sync", { autoClickEnabled: false });
@@ -2046,8 +2573,13 @@
     // Negatives are independent of the positive flow. The common/global negative
     // goes to the base Undesired Content; per-character negatives go to each
     // character's own Undesired Content. Failures are non-fatal (warn, continue).
-    if (applyCharacterNegative != null && String(applyCharacterNegative).trim() !== "") {
-      await applyCharacterNegativesToNovelAi(applyCharacterNegative);
+    // When this run defines its own characters, every one of those cards is
+    // rewritten — including clearing a card whose block has no negative.
+    const ownedCharacterSlots = applyCharacterPrompt != null
+      ? splitCharacterBlocks(applyCharacterPrompt).length
+      : 0;
+    if ((applyCharacterNegative != null && String(applyCharacterNegative).trim() !== "") || ownedCharacterSlots > 0) {
+      await applyCharacterNegativesToNovelAi(applyCharacterNegative, { slots: ownedCharacterSlots });
     }
     if (applyBaseNegative != null && String(applyBaseNegative).trim() !== "") {
       await applyBaseNegativeToNovelAi(applyBaseNegative);
@@ -2067,6 +2599,7 @@
       resetEtaTracker();
     }
     autoRun.active = true;
+    syncBackgroundKeepAlive();
     autoRun.count = 0;
     autoRun.completedCount = 0;
     autoRun.target = Math.max(0, Number.parseInt(target, 10) || 0);
@@ -2305,6 +2838,7 @@
       return;
     }
     queueRun.active = false;
+    syncBackgroundKeepAlive();
     queueRun.token += 1;
     autoRun.onComplete = null;
     const resolve = queueRun.resolveItem;
@@ -2339,15 +2873,12 @@
         }
         queueRun.advancing = true;
         // The Generate button becomes enabled slightly before NovelAI finishes
-        // committing the previous character-card UI. Give that React update one
-        // turn to settle before deleting/recreating cards for the next item.
+        // committing the previous character-card UI. One short settle turn is
+        // enough now that cards are reused instead of deleted and recreated.
+        // Do NOT blur here: in a background tab the blur dropped focus from the
+        // editor the next write targets.
         if (index > 0) {
-          try {
-            document.activeElement?.blur?.();
-          } catch (error) {
-            void error;
-          }
-          await delay(550);
+          await delay(120);
         }
         const itemBase = Store.effectiveBase(item, queueState.options);
         const itemBaseNeg = (item.baseNegativePrompt && item.baseNegativePrompt.trim())
@@ -2396,6 +2927,7 @@
     }
 
     queueRun.active = true;
+    syncBackgroundKeepAlive();
     queueRun.token += 1;
     const runToken = queueRun.token;
     queueRun.items = queueState.items.map((item) => Store.cloneJson(item));
@@ -2449,6 +2981,7 @@
   async function finishQueueRun({ completedNormally = false, error = "" } = {}) {
     const total = queueRun.totalGenerated;
     queueRun.active = false;
+    syncBackgroundKeepAlive();
     queueRun.resolveItem = null;
     autoRun.onComplete = null;
     queueRun.index = 0;
@@ -3038,6 +3571,11 @@
         input.disabled = !checkbox.checked;
       }
     }
+    // The two character fields share one block editor, so it stays editable as
+    // long as either of the character checkboxes is ticked.
+    ui.memoCharBlocks?.setDisabled(
+      !(ui.memoCharCheck?.checked || ui.memoCharNegCheck?.checked),
+    );
   }
 
   function collectMemoDraft() {
@@ -3051,7 +3589,17 @@
       }
       const value = input?.value || "";
       if (!value.trim()) {
-        emptySelected.push(field.label);
+        // The two character fields are edited as one block list, so "prompt
+        // filled, negative empty" is a completely normal thing to save. Only
+        // complain when the whole character section is empty.
+        const pairKey = field.key === "characterPrompt"
+          ? "characterNegativePrompt"
+          : (field.key === "characterNegativePrompt" ? "characterPrompt" : null);
+        const pair = pairKey ? MEMO_FIELDS.find((entry) => entry.key === pairKey) : null;
+        const pairHasValue = Boolean(pair && (ui[pair.input]?.value || "").trim());
+        if (!pairHasValue) {
+          emptySelected.push(field.label);
+        }
       } else {
         values[field.key] = value;
       }
@@ -3081,7 +3629,12 @@
       active.blur();
     }
     // Let IME composition / textarea input settle before reading the draft.
-    await new Promise((resolve) => requestAnimationFrame(() => resolve()));
+    // requestAnimationFrame never fires in a hidden tab, so race it with a
+    // timer to make sure this can never deadlock.
+    await Promise.race([
+      new Promise((resolve) => requestAnimationFrame(() => resolve())),
+      delay(50),
+    ]);
     if (button) {
       button.disabled = true;
     }
@@ -3291,8 +3844,17 @@
         return;
       }
     }
-    if (Object.prototype.hasOwnProperty.call(values, "characterNegativePrompt")) {
-      const result = await applyCharacterNegativesToNovelAi(values.characterNegativePrompt);
+    // Same rule as a queue item: any character this memo defines owns its card,
+    // so a character with no negative has its Undesired Content cleared instead
+    // of inheriting whatever the previous memo left there.
+    const memoCharacterSlots = values.characterPrompt != null
+      ? splitCharacterBlocks(values.characterPrompt).length
+      : 0;
+    if (Object.prototype.hasOwnProperty.call(values, "characterNegativePrompt") || memoCharacterSlots > 0) {
+      const result = await applyCharacterNegativesToNovelAi(
+        values.characterNegativePrompt,
+        { slots: memoCharacterSlots },
+      );
       if (!result.ok) {
         return;
       }
@@ -3495,7 +4057,9 @@
       autoCharNeg = "",
       autoSaveEnabled = true,
       autoCompletionNotificationEnabled = true,
+      backgroundKeepAliveEnabled: keepAliveSetting = true,
     } = settings;
+    backgroundKeepAliveEnabled = keepAliveSetting !== false;
     if (ui.intervalInput) {
       ui.intervalInput.value = String(intervalTime);
     }
@@ -3526,6 +4090,9 @@
     if (ui.notifyToggle) {
       ui.notifyToggle.checked = autoCompletionNotificationEnabled !== false;
     }
+    if (ui.bgKeepAliveToggle) {
+      ui.bgKeepAliveToggle.checked = backgroundKeepAliveEnabled;
+    }
     // ensure default ON is persisted the first time
     if (settings.autoSaveEnabled === undefined) {
       await storageSet("sync", { autoSaveEnabled: true });
@@ -3548,10 +4115,25 @@
     });
   }
 
+  // The character block editor writes back into the ";;" carriers on every
+  // keystroke, so this must be debounced: chrome.storage.sync allows only ~120
+  // writes per minute and silently starts failing past that.
+  let singleSettingsSaveTimer = null;
+  function scheduleSingleSettingsSave() {
+    if (singleSettingsSaveTimer) {
+      clearTimeout(singleSettingsSaveTimer);
+    }
+    singleSettingsSaveTimer = setTimeout(() => {
+      singleSettingsSaveTimer = null;
+      saveSingleSettings();
+    }, 400);
+  }
+
   function savePreferences() {
     void storageSet("sync", {
       autoSaveEnabled: Boolean(ui.autoSaveToggle?.checked),
       autoCompletionNotificationEnabled: Boolean(ui.notifyToggle?.checked),
+      backgroundKeepAliveEnabled: Boolean(ui.bgKeepAliveToggle?.checked),
     });
   }
 
@@ -4015,33 +4597,31 @@
     baseNegField.append(baseNegLabel, baseNegInput);
     ui.queueEditor.append(baseNegField);
 
+    // Character prompt + character negative are edited as one block per
+    // character. The two textareas below stay as the ";;" value carriers that
+    // the rest of the queue code already reads and writes.
     const charField = document.createElement("div");
     charField.className = "ias-field ias-qeditor-field";
-    const charLabel = document.createElement("label");
-    charLabel.textContent = "캐릭터 프롬프트";
     const charInput = document.createElement("textarea");
     charInput.className = "ias-input ias-qbig";
     charInput.value = item.characterPrompt || "";
-    charInput.placeholder = "예: girl, black hair, long hair  (여러 명은 ;; 로 구분)";
     charInput.rows = editorExpanded ? 8 : 4;
     charInput.dataset.field = "characterPrompt";
     charInput.disabled = disabled;
-    charField.append(charLabel, charInput);
-    ui.queueEditor.append(charField);
-
-    const negField = document.createElement("div");
-    negField.className = "ias-field ias-qeditor-field";
-    const negLabel = document.createElement("label");
-    negLabel.textContent = "캐릭터 네거티브 (캐릭터 Undesired Content)";
     const negInput = document.createElement("textarea");
     negInput.className = "ias-input ias-qbig";
     negInput.value = item.negativePrompt || "";
-    negInput.placeholder = "이 항목의 캐릭터 Undesired Content에 적용 · 여러 캐릭터는 ;; 로 구분";
     negInput.rows = editorExpanded ? 6 : 3;
     negInput.dataset.field = "negativePrompt";
     negInput.disabled = disabled;
-    negField.append(negLabel, negInput);
-    ui.queueEditor.append(negField);
+    charField.append(charInput, negInput);
+    ui.queueEditor.append(charField);
+    const blocks = attachCharacterBlocks(charInput, negInput, {
+      title: "캐릭터",
+      hint: "블록을 비워 두면 이 항목은 현재 NovelAI 캐릭터 카드를 그대로 사용합니다.",
+      rows: editorExpanded ? 4 : 3,
+    });
+    blocks?.setDisabled(disabled);
   }
 
   function updateRowDisplay(item) {
@@ -4658,6 +5238,48 @@
       .ias-input::placeholder { color: #b0b0b5; }
       textarea.ias-input { resize: vertical; line-height: 1.55; }
 
+      /* ---- character blocks ---- */
+      .ias-charblocks { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
+      .ias-cb-topbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+      .ias-cb-topbar .ias-cb-title { font-size: 12px; font-weight: 600; color: #6e6e73; padding-left: 2px; }
+      .ias-cb-topbar .ias-cb-count { font-size: 11.5px; color: #8e8e93; font-weight: 500; }
+      .ias-cb-add {
+        display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+        border: none; border-radius: 10px; cursor: pointer; font-family: inherit;
+        padding: 7px 12px; font-size: 12.5px; font-weight: 600;
+        background: rgba(0, 122, 255, 0.10); color: #007aff;
+        transition: background 0.14s ease, transform 0.1s ease;
+      }
+      .ias-cb-add:hover:not(:disabled) { background: rgba(0, 122, 255, 0.18); }
+      .ias-cb-add:active:not(:disabled) { transform: scale(0.94); }
+      .ias-cb-add:disabled { background: rgba(0,0,0,0.05); color: #b0b0b5; cursor: not-allowed; }
+      .ias-cb-list { display: flex; flex-direction: column; gap: 10px; }
+      .ias-cb-empty {
+        font-size: 12px; color: #8e8e93; line-height: 1.5;
+        background: rgba(0,0,0,0.03); border: 1px dashed rgba(0,0,0,0.12);
+        border-radius: 12px; padding: 14px; text-align: center;
+      }
+      .ias-cb {
+        border: 1px solid rgba(0,0,0,0.10); border-radius: 14px;
+        background: rgba(0, 122, 255, 0.035);
+        padding: 10px 11px 11px;
+        display: flex; flex-direction: column; gap: 8px;
+      }
+      .ias-cb-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+      .ias-cb-name { font-size: 12.5px; font-weight: 700; color: #007aff; letter-spacing: -0.1px; }
+      .ias-cb-tools { display: flex; gap: 3px; }
+      .ias-cb-tools button {
+        width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center;
+        border: none; border-radius: 8px; cursor: pointer; background: transparent;
+        color: #6e6e73; font-family: inherit; font-size: 13px; line-height: 1; padding: 0;
+        transition: background 0.14s ease, color 0.14s ease;
+      }
+      .ias-cb-tools button:hover:not(:disabled) { background: rgba(0,0,0,0.06); color: #1c1c1e; }
+      .ias-cb-tools button[data-act="remove"]:hover:not(:disabled) { background: rgba(255,59,48,0.12); color: #ff3b30; }
+      .ias-cb-tools button:disabled { opacity: 0.3; cursor: not-allowed; }
+      .ias-cb-sub { font-size: 11px; font-weight: 600; color: #8e8e93; padding-left: 2px; }
+      .ias-cb textarea.ias-input { padding: 9px 11px; font-size: 13.5px; border-radius: 10px; }
+
       .ias-presets { display: flex; gap: 7px; margin: 4px 0 14px; }
       .ias-presets button {
         flex: 1; padding: 9px 0; font-size: 13px; font-weight: 600;
@@ -5011,13 +5633,9 @@
                   <label>베이스 네거티브 (베이스 Undesired Content)</label>
                   <textarea class="ias-input ias-auto-base-neg" rows="3" placeholder="베이스 Undesired Content에 적용 · 비우면 현재 NovelAI 값 그대로"></textarea>
                 </div>
-                <div class="ias-field">
-                  <label>캐릭터 프롬프트</label>
-                  <textarea class="ias-input ias-auto-char" rows="3" placeholder="예: girl, black hair  ·  여러 명은 ;; 로 구분 · 비우면 현재 NovelAI 캐릭터 그대로"></textarea>
-                </div>
-                <div class="ias-field">
-                  <label>캐릭터 네거티브 (캐릭터 Undesired Content)</label>
-                  <textarea class="ias-input ias-auto-char-neg" rows="3" placeholder="각 캐릭터 Undesired Content에 적용 · 여러 캐릭터는 ;; 로 구분 · 비우면 그대로"></textarea>
+                <div class="ias-field ias-auto-char-host">
+                  <textarea class="ias-input ias-auto-char" rows="3"></textarea>
+                  <textarea class="ias-input ias-auto-char-neg" rows="3"></textarea>
                 </div>
                 <div class="ias-row">
                   <div class="ias-field">
@@ -5061,13 +5679,14 @@
                     <div class="ias-memo-field-head"><input class="ias-memo-base-neg-check" id="ias-memo-base-neg-check" type="checkbox" checked><label for="ias-memo-base-neg-check">베이스 네거티브</label></div>
                     <textarea class="ias-input ias-memo-base-neg" rows="3" placeholder="베이스 Undesired Content"></textarea>
                   </div>
-                  <div class="ias-memo-field">
-                    <div class="ias-memo-field-head"><input class="ias-memo-char-check" id="ias-memo-char-check" type="checkbox" checked><label for="ias-memo-char-check">캐릭터 태그</label></div>
-                    <textarea class="ias-input ias-memo-char" rows="3" placeholder="여러 캐릭터는 ;; 로 구분"></textarea>
-                  </div>
-                  <div class="ias-memo-field">
-                    <div class="ias-memo-field-head"><input class="ias-memo-char-neg-check" id="ias-memo-char-neg-check" type="checkbox" checked><label for="ias-memo-char-neg-check">캐릭터 네거티브</label></div>
-                    <textarea class="ias-input ias-memo-char-neg" rows="3" placeholder="여러 캐릭터는 ;; 로 구분"></textarea>
+                  <div class="ias-memo-field ias-memo-char-host">
+                    <div class="ias-memo-field-head">
+                      <input class="ias-memo-char-check" id="ias-memo-char-check" type="checkbox" checked><label for="ias-memo-char-check">캐릭터 프롬프트</label>
+                      <span style="width:10px;"></span>
+                      <input class="ias-memo-char-neg-check" id="ias-memo-char-neg-check" type="checkbox" checked><label for="ias-memo-char-neg-check">캐릭터 네거티브</label>
+                    </div>
+                    <textarea class="ias-input ias-memo-char" rows="3"></textarea>
+                    <textarea class="ias-input ias-memo-char-neg" rows="3"></textarea>
                   </div>
                 </div>
                 <div class="ias-memo-save-row">
@@ -5186,6 +5805,10 @@
                   <div class="ias-toggle-row">
                     <div class="ias-tr-text"><strong>대기열 반복</strong><small>마지막 항목 후 처음부터 다시 실행</small></div>
                     <label class="ias-switch"><input class="ias-loop" type="checkbox"><span class="ias-slider"></span></label>
+                  </div>
+                  <div class="ias-toggle-row">
+                    <div class="ias-tr-text"><strong>다른 탭에서도 계속 실행</strong><small>실행 중 들리지 않는 소리를 재생해 크롬의 백그라운드 탭 속도 제한을 피합니다. 탭에 스피커 아이콘이 표시됩니다.</small></div>
+                    <label class="ias-switch"><input class="ias-bg-keepalive" type="checkbox"><span class="ias-slider"></span></label>
                   </div>
                 </div>
                 <div class="ias-block">
@@ -5363,13 +5986,18 @@
 
     ui.autoSaveToggle.addEventListener("change", savePreferences);
     ui.notifyToggle.addEventListener("change", savePreferences);
+    ui.bgKeepAliveToggle?.addEventListener("change", () => {
+      backgroundKeepAliveEnabled = Boolean(ui.bgKeepAliveToggle.checked);
+      syncBackgroundKeepAlive();
+      savePreferences();
+    });
 
     ui.intervalInput.addEventListener("change", saveSingleSettings);
     ui.countInput.addEventListener("change", saveSingleSettings);
     ui.saveNameInput.addEventListener("change", saveSingleSettings);
     [ui.autoBaseInput, ui.autoBaseNegInput, ui.autoCharInput, ui.autoCharNegInput].forEach((el) => {
       if (el) {
-        el.addEventListener("change", saveSingleSettings);
+        el.addEventListener("change", scheduleSingleSettingsSave);
       }
     });
     if (ui.folderInput) {
@@ -5499,8 +6127,20 @@
       genExportButton: panelShadow.querySelector(".ias-gen-export"),
       autoSaveToggle: panelShadow.querySelector(".ias-auto-save"),
       notifyToggle: panelShadow.querySelector(".ias-notify"),
+      bgKeepAliveToggle: panelShadow.querySelector(".ias-bg-keepalive"),
       status: panelShadow.querySelector(".ias-status"),
     };
+
+    ui.autoCharBlocks = attachCharacterBlocks(ui.autoCharInput, ui.autoCharNegInput, {
+      title: "캐릭터",
+      hint: "블록을 하나도 추가하지 않으면 현재 NovelAI 캐릭터 카드를 그대로 사용합니다.",
+      rows: 3,
+    });
+    ui.memoCharBlocks = attachCharacterBlocks(ui.memoCharInput, ui.memoCharNegInput, {
+      title: "캐릭터",
+      hint: "",
+      rows: 3,
+    });
 
     bindEvents();
 

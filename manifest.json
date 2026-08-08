@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "NAI 자동저장",
-  "version": "1.0.32",
-  "description": "NovelAI 이미지 자동 생성 · 캐릭터 수 변경 시 전체 삭제 후 정확한 수만큼 재생성 · 메모 첫 클릭 저장 수정 · 프롬프트 메모 JSON 백업/복원.",
+  "version": "1.0.33",
+  "description": "NovelAI 이미지 자동 생성 · 캐릭터를 블록으로 편집(;; 불필요) · 프롬프트 한 번에 붙여넣기 · 다른 탭에서도 계속 실행.",
   "permissions": [
     "activeTab",
     "downloads",

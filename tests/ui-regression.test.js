@@ -61,13 +61,109 @@ assert.ok(source.includes(`querySelectorAll('.character-prompt-input,[class*="ch
 assert.ok(source.includes("child.matches?.('.sc-7d0727b8-33')"), 'trash must use the user-confirmed direct-child -33 icon');
 assert.ok(source.includes('width >= 15 && width <= 17.5'), 'trash selector must reject nested 14px Position icons');
 assert.ok(source.includes('clickControlLikeUser(button);'));
-assert.ok(source.includes('currentCount !== targetCount'), 'count changes must rebuild all Character cards');
-assert.ok(source.includes('await resetCharacterBoxes(surface);'), 'rebuild must clear all Character cards first');
+// Character cards are REUSED, not nuked and recreated. Deleting every card on
+// every queue item is what forced a full retype of every character prompt.
+assert.ok(source.includes('await trimCharacterBoxesTo(targetCount, surface)'), 'surplus Character cards must be trimmed, not all of them');
+assert.doesNotMatch(source, /const cleared = await resetCharacterBoxes\(surface\);/, 'a count change must not clear every Character card');
+assert.ok(source.includes('await addMissingCharacterBoxes(segments, surface)'), 'only the shortfall may be added');
 assert.ok(source.includes('handleMemoSavePress'), 'memo save must handle the first physical press');
 assert.ok(source.includes('대기열 중단: ${error}'));
 
-assert.ok(source.includes('surfaceIsOnscreen ? 1e15 : 0'), "visible Character surface must outrank stale off-screen copies");
+assert.ok(source.includes('surfaceIsOnscreen ? 1e15 : 0'), "rendered Character surface must outrank stale detached copies");
 assert.ok(source.includes('findCharacterGenderOption("female")'), "new Character may use any visible gender seed option");
 assert.doesNotMatch(source, /firstCharacterGenderMismatch\(segments, containers\)\s*>=\s*0/, "gender seed mismatch must not force a destructive reset");
+
+// --- background tab must keep working ---------------------------------------
+assert.doesNotMatch(
+  source,
+  /Math\.min\(rect\.right,\s*window\.innerWidth\)/,
+  "surface scoring must not depend on the viewport (breaks scrolled/background tabs)",
+);
+assert.doesNotMatch(source, /document\.elementFromPoint\(/, "elementFromPoint returns null outside the viewport");
+assert.ok(source.includes('startBackgroundKeepAlive()'), "runs must defeat Chrome background-tab timer throttling");
+assert.ok(
+  /await Promise\.race\(\[\s*new Promise\(\(resolve\) => requestAnimationFrame/.test(source),
+  "awaited requestAnimationFrame must be raced with a timer (rAF never fires in a hidden tab)",
+);
+// A transient mismatch must be retried once before the run is stopped.
+assert.ok(
+  /setStatus\("캐릭터 카드를 다시 맞추는 중입니다…", "warn"\);\s*await delay\(700\);\s*layoutReady = await ensureCharacterCardLayout\(segments\);/.test(source),
+  "a card-count mismatch must be retried before giving up",
+);
+assert.ok(
+  source.includes("잘못된 캐릭터 구성으로는 생성하지 않습니다"),
+  "after the retry, a real mismatch must still stop instead of generating wrong images",
+);
+// Character negatives must be cleared on cards this run owns, now that cards
+// are reused between queue items instead of being recreated.
+assert.ok(source.includes("const ownedCharacterSlots = applyCharacterPrompt != null"));
+assert.ok(source.includes("async function applyCharacterNegativesToNovelAi(text, { slots = 0 } = {})"));
+// Settings writes must be debounced: the block editor types into the carriers.
+assert.ok(source.includes('el.addEventListener("change", scheduleSingleSettingsSave);'));
+// The keep-alive tone must be derived from run state, not ref counted.
+assert.ok(source.includes("function syncBackgroundKeepAlive()"));
+assert.doesNotMatch(source, /keepAlive\.refs/, "ref counting never returned to zero across nested queue runs");
+
+// --- one-shot prompt write ---------------------------------------------------
+assert.ok(source.includes('execInsertText(tags.join(", "))'), "the prompt must be inserted in a single paste-like operation");
+
+// --- character blocks <-> ';;' storage ---------------------------------------
+const blocksContext = {
+  console,
+  String,
+  Array,
+  Math,
+  Number,
+};
+vm.createContext(blocksContext);
+vm.runInContext(
+  `${extractFunction("splitCharacterBlocks")}
+   ${extractFunction("charBlocksFromStrings")}
+   ${extractFunction("charBlocksToStrings")}
+   this.splitCharacterBlocks = splitCharacterBlocks;
+   this.charBlocksFromStrings = charBlocksFromStrings;
+   this.charBlocksToStrings = charBlocksToStrings;`,
+  blocksContext,
+);
+const { charBlocksFromStrings, charBlocksToStrings, splitCharacterBlocks } = blocksContext;
+// Values come back from the vm realm, so compare structurally.
+const same = (actual, expected, message) => assert.equal(JSON.stringify(actual), JSON.stringify(expected), message);
+
+// Legacy ";;" data must load into blocks unchanged and round-trip byte-identically.
+const legacyPrompt = "1girl, black hair ;; 1boy, blonde";
+const legacyNegative = "bad hands ;; blurry";
+const loaded = charBlocksFromStrings(legacyPrompt, legacyNegative);
+same(loaded, [
+  { prompt: "1girl, black hair", negative: "bad hands" },
+  { prompt: "1boy, blonde", negative: "blurry" },
+]);
+same(charBlocksToStrings(loaded), { prompt: legacyPrompt, negative: legacyNegative });
+
+// A single character still stores as a plain string with no separator.
+same(
+  charBlocksToStrings([{ prompt: "1girl", negative: "bad hands" }]),
+  { prompt: "1girl", negative: "bad hands" },
+);
+
+// Only the SECOND character has a negative: the empty leading slot must survive
+// so the negative still lands on character 2 (this used to silently shift up).
+const shifted = charBlocksToStrings([
+  { prompt: "1girl", negative: "" },
+  { prompt: "1boy", negative: "blurry" },
+]);
+same(shifted, { prompt: "1girl ;; 1boy", negative: " ;; blurry" });
+same(splitCharacterBlocks(shifted.negative), ["", "blurry"]);
+
+// No characters at all stores as empty strings, not as separators.
+same(charBlocksToStrings([]), { prompt: "", negative: "" });
+same(charBlocksToStrings([{ prompt: "", negative: "" }]), { prompt: "", negative: "" });
+
+// Full-width separators from older data still parse.
+same(splitCharacterBlocks("a ；； b"), ["a", "b"]);
+
+// The block UI is wired into all three editors.
+assert.ok(source.includes("ui.autoCharBlocks = attachCharacterBlocks(ui.autoCharInput, ui.autoCharNegInput"));
+assert.ok(source.includes("ui.memoCharBlocks = attachCharacterBlocks(ui.memoCharInput, ui.memoCharNegInput"));
+assert.ok(source.includes("attachCharacterBlocks(charInput, negInput"));
 
 console.log("ui regression tests passed");
