@@ -120,6 +120,20 @@
   let panelSize = null;
   let statusTimer = null;
 
+  // key-shield.js installs itself at document_start; it is absent only if the
+  // extension was reloaded without refreshing the NovelAI tab.
+  const keyShield = (typeof globalThis !== "undefined" ? globalThis : window).__NAI_AUTOSAVER_KEY_SHIELD__ || null;
+
+  // The panel lives in a shadow root, so `document.activeElement` is always the
+  // host element, never the field the user is typing in. Every "don't clobber
+  // the field being edited" check has to go through the shadow root instead.
+  function isPanelElementFocused(element) {
+    if (!element || !panelShadow) {
+      return false;
+    }
+    return panelShadow.activeElement === element;
+  }
+
   // ETA: rolling per-image wall-clock samples (generation + interval).
   const ETA_SEED_KEY = "naiAutoSaver.avgImageMs";
   const etaTracker = {
@@ -2881,9 +2895,8 @@
           await delay(120);
         }
         const itemBase = Store.effectiveBase(item, queueState.options);
-        const itemBaseNeg = (item.baseNegativePrompt && item.baseNegativePrompt.trim())
-          ? item.baseNegativePrompt
-          : null;
+        const resolvedBaseNeg = Store.effectiveBaseNegative(item, queueState.options);
+        const itemBaseNeg = resolvedBaseNeg && resolvedBaseNeg.trim() ? resolvedBaseNeg : null;
         setStatus(`대기열 ${index + 1}/${queueRun.items.length} · ${item.title} · 프롬프트 적용 중`, "ok");
         const startResult = await startAutoGenerate({
           target: item.count,
@@ -3239,15 +3252,21 @@
         });
       }
     }
-    return { items, base };
+    return { items, base, baseNeg };
   }
 
-  function genBaseOptions(base) {
-    return { loop: false, useGlobalBase: true, globalBase: base, namePattern: "" };
+  function genBaseOptions(base, baseNeg = "") {
+    return {
+      loop: false,
+      useGlobalBase: true,
+      globalBase: base,
+      globalBaseNegative: baseNeg,
+      namePattern: "",
+    };
   }
 
   async function genAppendToQueue() {
-    const { items, base } = buildGenItems();
+    const { items, base, baseNeg } = buildGenItems();
     if (!items.length) {
       setStatus("생성할 조합이 없습니다. 캐릭터/배경 코드와 표정을 확인하세요.", "warn");
       return;
@@ -3259,6 +3278,9 @@
     if (!String(queueState.options.globalBase || "").trim()) {
       queueState.options.globalBase = base;
     }
+    if (!String(queueState.options.globalBaseNegative || "").trim()) {
+      queueState.options.globalBaseNegative = baseNeg;
+    }
     selectedQueueId = items[0].id;
     await persistQueueState();
     setActiveTab("queue");
@@ -3266,7 +3288,7 @@
   }
 
   async function genReplaceQueue() {
-    const { items, base } = buildGenItems();
+    const { items, base, baseNeg } = buildGenItems();
     if (!items.length) {
       setStatus("생성할 조합이 없습니다. 캐릭터/배경 코드와 표정을 확인하세요.", "warn");
       return;
@@ -3275,7 +3297,7 @@
     if (queueState.items.length && !window.confirm(`현재 큐의 ${queueState.items.length}개 항목을 지우고 새 조합 ${items.length}개로 교체할까요?`)) {
       return;
     }
-    queueState = Store.normalizeState({ items, options: genBaseOptions(base) });
+    queueState = Store.normalizeState({ items, options: genBaseOptions(base, baseNeg) });
     selectedQueueId = items[0].id;
     await persistQueueState();
     setActiveTab("queue");
@@ -3283,14 +3305,14 @@
   }
 
   function genExportJson() {
-    const { items, base } = buildGenItems();
+    const { items, base, baseNeg } = buildGenItems();
     if (!items.length) {
       setStatus("생성할 조합이 없습니다. 캐릭터/배경 코드와 표정을 확인하세요.", "warn");
       return;
     }
     const splitValue = Number.parseInt(ui.genSplit?.value, 10);
     const perFile = Number.isFinite(splitValue) && splitValue > 0 ? splitValue : 0;
-    const options = genBaseOptions(base);
+    const options = genBaseOptions(base, baseNeg);
     const chunks = [];
     if (perFile > 0) {
       for (let i = 0; i < items.length; i += perFile) {
@@ -4414,13 +4436,16 @@
     if (ui.globalBaseToggle) {
       ui.globalBaseToggle.checked = Boolean(queueState.options.useGlobalBase);
     }
-    if (ui.globalBaseInput && document.activeElement !== ui.globalBaseInput) {
+    if (ui.globalBaseInput && !isPanelElementFocused(ui.globalBaseInput)) {
       ui.globalBaseInput.value = queueState.options.globalBase || "";
+    }
+    if (ui.globalBaseNegInput && !isPanelElementFocused(ui.globalBaseNegInput)) {
+      ui.globalBaseNegInput.value = queueState.options.globalBaseNegative || "";
     }
     if (ui.globalBaseField) {
       ui.globalBaseField.style.display = queueState.options.useGlobalBase ? "" : "none";
     }
-    if (ui.namePatternInput && document.activeElement !== ui.namePatternInput) {
+    if (ui.namePatternInput && !isPanelElementFocused(ui.namePatternInput)) {
       ui.namePatternInput.value = queueState.options.namePattern || "";
     }
     if (ui.queueCount) {
@@ -4586,14 +4611,18 @@
     const baseNegField = document.createElement("div");
     baseNegField.className = "ias-field ias-qeditor-field";
     const baseNegLabel = document.createElement("label");
-    baseNegLabel.textContent = "베이스 네거티브 (베이스 Undesired Content)";
+    const usingGlobalNeg = Boolean(queueState.options.useGlobalBase)
+      && String(queueState.options.globalBaseNegative || "").trim();
+    baseNegLabel.textContent = usingGlobalNeg
+      ? "베이스 네거티브 (공통 Base 네거티브 사용 중 — 비활성)"
+      : "베이스 네거티브 (베이스 Undesired Content)";
     const baseNegInput = document.createElement("textarea");
     baseNegInput.className = "ias-input ias-qbig";
     baseNegInput.value = item.baseNegativePrompt || "";
     baseNegInput.placeholder = "이 항목의 베이스 Undesired Content에 적용 · 비우면 현재 NovelAI 값 그대로";
     baseNegInput.rows = editorExpanded ? 6 : 3;
     baseNegInput.dataset.field = "baseNegativePrompt";
-    baseNegInput.disabled = disabled;
+    baseNegInput.disabled = disabled || usingGlobalNeg;
     baseNegField.append(baseNegLabel, baseNegInput);
     ui.queueEditor.append(baseNegField);
 
@@ -4857,6 +4886,9 @@
 
   function setPanelCollapsed(collapsed) {
     panelCollapsed = Boolean(collapsed);
+    // An open panel owns every key pressed inside it; a collapsed one only
+    // shields its own text fields.
+    keyShield?.setPanelOpen(!panelCollapsed);
     if (ui.shell) {
       ui.shell.dataset.collapsed = panelCollapsed ? "true" : "false";
     }
@@ -5722,7 +5754,10 @@
                   <label class="ias-switch"><input class="ias-global-base-toggle" type="checkbox"><span class="ias-slider"></span></label>
                 </div>
                 <div class="ias-field ias-global-base-field" style="display:none;margin-bottom:0;">
+                  <label>공통 Base Prompt</label>
                   <textarea class="ias-input ias-global-base" rows="3" placeholder="공통 Base Prompt (켜면 각 항목의 Base 대신 이게 쓰입니다)"></textarea>
+                  <label>공통 Base 네거티브 (베이스 Undesired Content)</label>
+                  <textarea class="ias-input ias-global-base-neg" rows="3" placeholder="공통 Base 네거티브 — 비우면 각 항목의 베이스 네거티브를 그대로 사용합니다"></textarea>
                 </div>
               </div>
               <div class="ias-queue-split">
@@ -5880,10 +5915,13 @@
         closeMemoMenus();
       }
     });
+    // Fallback path: only reached when the shield did not swallow the event.
     panelShadow.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") {
-        closeMemoMenus();
+      if (keyShield?.wasHandled(event)) {
+        return;
       }
+      keyShield?.markHandled(event);
+      handlePanelKeydown(event, event.target);
     });
     for (const field of MEMO_FIELDS) {
       ui[field.check]?.addEventListener("change", renderMemoEditorState);
@@ -5934,6 +5972,12 @@
         scheduleQueueSave();
       });
     }
+    if (ui.globalBaseNegInput) {
+      ui.globalBaseNegInput.addEventListener("input", () => {
+        queueState.options.globalBaseNegative = ui.globalBaseNegInput.value;
+        scheduleQueueSave();
+      });
+    }
     if (ui.namePatternInput) {
       ui.namePatternInput.addEventListener("input", () => {
         queueState.options.namePattern = ui.namePatternInput.value;
@@ -5948,14 +5992,6 @@
     }
     if (ui.bulkCountAddButton) {
       ui.bulkCountAddButton.addEventListener("click", () => void applyCountToAll("add"));
-    }
-    if (ui.bulkCountInput) {
-      ui.bulkCountInput.addEventListener("keydown", (event) => {
-        if (event.key === "Enter") {
-          event.preventDefault();
-          void applyCountToAll("set");
-        }
-      });
     }
 
     if (ui.genAddCharButton) {
@@ -6049,6 +6085,24 @@
     });
   }
 
+  // The shield swallows key events at window-capture, before they can reach the
+  // panel by bubbling, so every shortcut the panel owns is handled here. Called
+  // once per event: either by the shield, or by the fallback listener on the
+  // shadow root when the shield never installed.
+  function handlePanelKeydown(event, target) {
+    if (!event || event.type !== "keydown") {
+      return;
+    }
+    if (event.key === "Escape") {
+      closeMemoMenus();
+      return;
+    }
+    if (event.key === "Enter" && target && target === ui.bulkCountInput) {
+      event.preventDefault();
+      void applyCountToAll("set");
+    }
+  }
+
   async function createPanel() {
     if (panelHost) {
       return;
@@ -6058,6 +6112,18 @@
     panelShadow = panelHost.attachShadow({ mode: "open" });
     panelShadow.innerHTML = getTemplate();
     document.documentElement.append(panelHost);
+
+    if (keyShield) {
+      keyShield.registerHost(panelHost);
+      keyShield.setHook(handlePanelKeydown);
+    } else {
+      // No shield (stale content script). Stopping propagation as the event
+      // leaves the host still blocks NovelAI's bubble-phase shortcut handlers,
+      // which is the common case.
+      for (const type of ["keydown", "keypress", "keyup"]) {
+        panelHost.addEventListener(type, (event) => event.stopPropagation());
+      }
+    }
 
     ui = {
       shell: panelShadow.querySelector(".ias-shell"),
@@ -6102,6 +6168,7 @@
       globalBaseToggle: panelShadow.querySelector(".ias-global-base-toggle"),
       globalBaseField: panelShadow.querySelector(".ias-global-base-field"),
       globalBaseInput: panelShadow.querySelector(".ias-global-base"),
+      globalBaseNegInput: panelShadow.querySelector(".ias-global-base-neg"),
       namePatternInput: panelShadow.querySelector(".ias-name-pattern"),
       namePatternApply: panelShadow.querySelector(".ias-name-pattern-apply"),
       bulkCountInput: panelShadow.querySelector(".ias-bulk-count"),

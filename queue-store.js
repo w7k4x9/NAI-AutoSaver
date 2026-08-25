@@ -85,6 +85,18 @@
     return normalizePrompt(item.basePrompt);
   }
 
+  // The base Undesired Content actually sent for an item. Shares the
+  // `useGlobalBase` switch with the positive base: when the switch is on and a
+  // shared negative is filled in, every item uses it. An empty shared negative
+  // falls back to the item's own value, exactly like the positive base does, so
+  // turning the switch on never silently wipes per-item negatives.
+  function effectiveBaseNegative(item, options = {}) {
+    if (options.useGlobalBase && String(options.globalBaseNegative || "").trim()) {
+      return normalizePrompt(options.globalBaseNegative);
+    }
+    return normalizePrompt(item.baseNegativePrompt);
+  }
+
   function normalizeItem(value) {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       return null;
@@ -133,6 +145,7 @@
         loop: Boolean(options.loop),
         useGlobalBase: Boolean(options.useGlobalBase),
         globalBase: normalizePrompt(options.globalBase),
+        globalBaseNegative: normalizePrompt(options.globalBaseNegative),
         namePattern: typeof options.namePattern === "string" ? options.namePattern.slice(0, 80) : "",
       },
     };
@@ -183,6 +196,7 @@
     buildCombinedPrompt,
     applyNamePattern,
     effectiveBase,
+    effectiveBaseNegative,
     cloneJson,
     createExportEnvelope,
     createItem,
