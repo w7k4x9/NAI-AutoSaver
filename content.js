@@ -180,6 +180,235 @@
   }
 
   // ---------------------------------------------------------------------------
+  // diagnostic log
+  // ---------------------------------------------------------------------------
+  // Every status line, every prompt-write result and every caught exception is
+  // kept in a ring buffer and mirrored to chrome.storage.local, so a run that
+  // failed can be exported afterwards (설정 → 문제 진단 → 오류 로그 내보내기)
+  // even after the tab was reloaded.
+  const DIAG_LOG_MAX = 500;
+  const DIAG_LOG_KEY = "diagLog";
+  const diag = { entries: [], saveTimer: null, loaded: false, lastKey: "" };
+
+  function diagStamp(date = new Date()) {
+    const pad = (n, w = 2) => String(n).padStart(w, "0");
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} `
+      + `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(), 3)}`;
+  }
+
+  function diagSerialize(value) {
+    if (value == null) {
+      return "";
+    }
+    if (value instanceof Error || (typeof value === "object" && typeof value.message === "string" && "stack" in value)) {
+      return `${value.name || "Error"}: ${value.message}${value.stack ? `\n${value.stack}` : ""}`;
+    }
+    if (typeof value === "string") {
+      return value;
+    }
+    try {
+      return JSON.stringify(value);
+    } catch (error) {
+      return String(value);
+    }
+  }
+
+  function logEvent(level, message, extra) {
+    const entry = {
+      t: Date.now(),
+      level,
+      message: String(message == null ? "" : message),
+      extra: extra === undefined ? "" : diagSerialize(extra),
+      hidden: typeof document !== "undefined" && document.visibilityState === "hidden",
+    };
+    // Collapse exact repeats (the 500 ms progress poll can repeat a status).
+    const key = `${entry.level}|${entry.message}|${entry.extra}`;
+    if (key === diag.lastKey) {
+      const last = diag.entries[diag.entries.length - 1];
+      if (last) {
+        last.repeat = (last.repeat || 1) + 1;
+        last.t = entry.t;
+      }
+      scheduleDiagSave();
+      return;
+    }
+    diag.lastKey = key;
+    diag.entries.push(entry);
+    if (diag.entries.length > DIAG_LOG_MAX) {
+      diag.entries.splice(0, diag.entries.length - DIAG_LOG_MAX);
+    }
+    scheduleDiagSave();
+  }
+
+  function scheduleDiagSave() {
+    if (diag.saveTimer) {
+      return;
+    }
+    diag.saveTimer = setTimeout(() => {
+      diag.saveTimer = null;
+      try {
+        chrome.storage.local.set({ [DIAG_LOG_KEY]: diag.entries }, () => {
+          void chrome.runtime.lastError;
+        });
+      } catch (error) {
+        void error;
+      }
+    }, 800);
+  }
+
+  async function loadDiagLog() {
+    if (diag.loaded) {
+      return;
+    }
+    diag.loaded = true;
+    try {
+      const stored = await storageGet("local", [DIAG_LOG_KEY]);
+      const previous = Array.isArray(stored[DIAG_LOG_KEY]) ? stored[DIAG_LOG_KEY] : [];
+      // Entries written before this page load come first.
+      diag.entries = previous.concat(diag.entries).slice(-DIAG_LOG_MAX);
+    } catch (error) {
+      void error;
+    }
+    const manifest = (() => {
+      try {
+        return chrome.runtime.getManifest();
+      } catch (error) {
+        return {};
+      }
+    })();
+    logEvent("info", `--- 페이지 로드 · NAI 자동저장 v${manifest.version || "?"} ---`, { url: location.href });
+  }
+
+  function clearDiagLog() {
+    diag.entries = [];
+    diag.lastKey = "";
+    try {
+      chrome.storage.local.remove(DIAG_LOG_KEY, () => {
+        void chrome.runtime.lastError;
+      });
+    } catch (error) {
+      void error;
+    }
+  }
+
+  // Snapshot of what the extension can currently see on the NovelAI page.
+  // This is what makes a log actionable: it says whether the DOM the code
+  // expects (base editor, character cards, generate button) actually exists.
+  function diagSnapshot() {
+    const safe = (fn, fallback = null) => {
+      try {
+        return fn();
+      } catch (error) {
+        return `error: ${error?.message || error}`;
+      }
+    };
+    const manifest = safe(() => chrome.runtime.getManifest(), {}) || {};
+    const generateButton = safe(() => findGenerateButton());
+    const containers = safe(() => getCharacterContainers(), []) || [];
+    const base = safe(() => getBasePromptEditor());
+    return {
+      extensionVersion: manifest.version || "?",
+      url: safe(() => location.href),
+      userAgent: safe(() => navigator.userAgent),
+      language: safe(() => navigator.language),
+      viewport: safe(() => `${window.innerWidth}x${window.innerHeight}`),
+      visibilityState: safe(() => document.visibilityState),
+      documentHasFocus: safe(() => document.hasFocus()),
+      keyShieldPresent: Boolean(keyShield),
+      generateButton: generateButton ? {
+        text: normalizeButtonText(generateButton),
+        disabled: Boolean(generateButton.disabled),
+      } : null,
+      basePromptEditorFound: Boolean(base),
+      basePromptEditorClass: base ? safe(() => base.className) : null,
+      basePromptLength: base ? safe(() => readEditableText(base).length) : null,
+      characterCardCount: Array.isArray(containers) ? containers.length : containers,
+      characterCardClasses: Array.isArray(containers)
+        ? containers.map((c) => safe(() => Array.from(c.classList).join(" ")))
+        : null,
+      characterEditorsVisible: Array.isArray(containers)
+        ? containers.map((c) => Boolean(safe(() => getCharacterBoxEditor(c))))
+        : null,
+      contentEditableCount: safe(() => document.querySelectorAll("[contenteditable]").length),
+      autoRun: safe(() => ({
+        active: autoRun.active,
+        count: autoRun.count,
+        target: autoRun.target,
+        waitingForCompletion: autoRun.waitingForCompletion,
+        waitingForExistingGeneration: autoRun.waitingForExistingGeneration,
+      })),
+      queueRun: safe(() => ({
+        active: queueRun.active,
+        index: queueRun.index,
+        items: queueRun.items.length,
+        loop: queueRun.loop,
+      })),
+      queueItemsSaved: safe(() => queueState.items.length),
+      settings: safe(() => ({
+        interval: ui.intervalInput?.value,
+        count: ui.countInput?.value,
+        folder: ui.folderInput?.value,
+        autoSave: ui.autoSaveToggle?.checked,
+        backgroundKeepAlive: backgroundKeepAliveEnabled,
+        keepAliveToneRunning: Boolean(keepAlive.context),
+      })),
+      panel: safe(() => ({ collapsed: panelCollapsed, tab: activeTab, fullscreen: panelFullscreen })),
+    };
+  }
+
+  function buildDiagReport() {
+    const lines = [];
+    lines.push("NAI 자동저장 진단 로그");
+    lines.push(`내보낸 시각: ${diagStamp()}`);
+    lines.push("");
+    lines.push("== 현재 상태 스냅샷 ==");
+    lines.push(JSON.stringify(diagSnapshot(), null, 2));
+    lines.push("");
+    lines.push(`== 이벤트 로그 (최근 ${diag.entries.length}건, 오래된 순) ==`);
+    for (const entry of diag.entries) {
+      const level = String(entry.level || "info").toUpperCase().padEnd(5, " ");
+      const bg = entry.hidden ? " [백그라운드 탭]" : "";
+      const repeat = entry.repeat > 1 ? ` (x${entry.repeat})` : "";
+      lines.push(`${diagStamp(new Date(entry.t))} ${level} ${entry.message}${repeat}${bg}`);
+      if (entry.extra) {
+        for (const extraLine of String(entry.extra).split("\n")) {
+          lines.push(`    ${extraLine}`);
+        }
+      }
+    }
+    lines.push("");
+    return `${lines.join("\n")}\n`;
+  }
+
+  function exportDiagLog() {
+    const text = buildDiagReport();
+    const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const stamp = diagStamp().replace(/[: ]/g, "-").replace(/\..*$/, "");
+    link.href = url;
+    link.download = `nai-autosaver-log-${stamp}.txt`;
+    document.documentElement.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setStatus(`진단 로그를 내보냈습니다. (${diag.entries.length}건)`, "ok");
+  }
+
+  // Exceptions thrown by this content script (its own isolated world) surface
+  // on this window, not on NovelAI's. Record them; never swallow.
+  try {
+    window.addEventListener("error", (event) => {
+      logEvent("error", `잡히지 않은 예외: ${event?.message || "?"}`, event?.error || `${event?.filename || ""}:${event?.lineno || ""}`);
+    });
+    window.addEventListener("unhandledrejection", (event) => {
+      logEvent("error", "처리되지 않은 Promise 거부", event?.reason);
+    });
+  } catch (error) {
+    void error;
+  }
+
+  // ---------------------------------------------------------------------------
   // background tab keep-alive
   // ---------------------------------------------------------------------------
   // Chrome throttles setTimeout/setInterval in a hidden tab to once per second,
@@ -469,80 +698,201 @@
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // ProseMirror-native writing
+  // ---------------------------------------------------------------------------
+  // NovelAI's prompt boxes are ProseMirror editors. Rewriting their DOM
+  // (innerHTML = "", innerHTML = "<p>…</p>") is exactly what ProseMirror is
+  // built to undo: it keeps its own document and restores it after a foreign
+  // mutation, which is why writes "took" for a moment and then vanished, and
+  // why the read-back verification kept failing and falling into the slow
+  // tag-by-tag retry loops.
+  //
+  // A synthetic `paste` event is different: ProseMirror handles paste itself,
+  // replacing the current selection in ONE transaction, and calls
+  // preventDefault() when it has consumed the event. That flag is the signal
+  // that the editor really accepted the text.
+  function dispatchPaste(editor, text) {
+    try {
+      const data = new DataTransfer();
+      data.setData("text/plain", String(text));
+      const event = new ClipboardEvent("paste", {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        clipboardData: data,
+      });
+      editor.dispatchEvent(event);
+      return event.defaultPrevented;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // Let ProseMirror pick up a DOM selection we just created. It syncs from the
+  // `selectionchange` event, which the browser fires asynchronously.
+  async function settleEditorSelection() {
+    try {
+      document.dispatchEvent(new Event("selectionchange"));
+    } catch (error) {
+      void error;
+    }
+    await delay(40);
+  }
+
+  // Clear through the editing pipeline (select-all + delete). Returns true when
+  // the editor is empty afterwards. Never touches innerHTML here.
+  async function clearEditableViaEditing(editor) {
+    selectEditableContents(editor);
+    await settleEditorSelection();
+    try {
+      document.execCommand("delete", false, null);
+    } catch (error) {
+      void error;
+    }
+    await delay(60);
+    return !readEditableText(editor);
+  }
+
+  // Replace (or append to) the editor's content with one paste. Returns true
+  // when ProseMirror consumed the paste; the caller still verifies the result.
+  async function pasteTextIntoEditor(editor, text, { replaceAll = true } = {}) {
+    if (!editor) {
+      return false;
+    }
+    const value = String(text == null ? "" : text);
+    editor.focus();
+    if (replaceAll) {
+      selectEditableContents(editor);
+    } else {
+      moveCaretToEditableEnd(editor);
+    }
+    await settleEditorSelection();
+    if (!value) {
+      return clearEditableViaEditing(editor);
+    }
+    const handled = dispatchPaste(editor, value);
+    await delay(90);
+    return handled;
+  }
+
+  function normalizePlainText(value) {
+    return String(value == null ? "" : value)
+      .replace(/\u00a0/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  // Full-text write for the base prompt and every Undesired Content box.
+  // Paste first; only if ProseMirror did not accept it fall back to the legacy
+  // DOM write. Returns { ok, expected, actual } so callers can report a real
+  // diff instead of "unknown error".
+  async function writeEditablePlainText(editor, value) {
+    const text = String(value == null ? "" : value);
+    const expected = normalizePlainText(text);
+    const matches = () => normalizePlainText(readEditableText(editor)) === expected;
+    if (!editor) {
+      return { ok: false, expected, actual: "" };
+    }
+    await pasteTextIntoEditor(editor, text, { replaceAll: true });
+    if (matches()) {
+      editor.dispatchEvent(new Event("change", { bubbles: true }));
+      return { ok: true, expected, actual: expected };
+    }
+    logEvent("warn", "전체 텍스트 붙여넣기 1차 불일치 → 지우고 재시도", describeMismatch(expected, readEditableText(editor), 120));
+    // Second try: clear via editing, then paste again (a leftover selection can
+    // make the first paste land as an insert instead of a replace).
+    await clearEditableViaEditing(editor);
+    await pasteTextIntoEditor(editor, text, { replaceAll: false });
+    if (matches()) {
+      editor.dispatchEvent(new Event("change", { bubbles: true }));
+      return { ok: true, expected, actual: expected };
+    }
+    // Last resort: legacy DOM write.
+    logEvent("warn", "붙여넣기 2차 불일치 → 레거시 DOM 쓰기로 폴백", describeMismatch(expected, readEditableText(editor), 120));
+    setEditablePlainText(editor, text);
+    await delay(120);
+    const actual = normalizePlainText(readEditableText(editor));
+    logEvent(actual === expected ? "info" : "error", `레거시 DOM 쓰기 ${actual === expected ? "성공" : "실패"}`, actual === expected ? undefined : describeMismatch(expected, actual, 120));
+    return { ok: actual === expected, expected, actual };
+  }
+
+  function describeMismatch(expected, actual, limit = 60) {
+    const clip = (value) => {
+      const s = String(value == null ? "" : value);
+      return s.length > limit ? `${s.slice(0, limit)}…` : s;
+    };
+    return `기대 "${clip(expected)}" / 실제 "${clip(actual) || "(비어 있음)"}"`;
+  }
+
   async function typePromptTags(editor, value, { clear = true } = {}) {
     const text = String(value == null ? "" : value).trim();
     if (!editor) {
       return false;
     }
 
-    editor.focus();
-    if (clear) {
-      selectEditableContents(editor);
-      let deleted = false;
-      try {
-        deleted = document.execCommand("delete", false, null);
-      } catch (error) {
-        deleted = false;
-      }
-      if (!deleted || readEditableText(editor)) {
-        // Only a last-resort DOM clear. The native delete above is preferred
-        // because ProseMirror/React observes it as a real editing operation,
-        // but it sometimes reports success while leaving text behind.
-        editor.innerHTML = "";
-        editor.dispatchEvent(new Event("input", { bubbles: true }));
-      }
-      await delay(45);
-    } else {
-      moveCaretToEditableEnd(editor);
-    }
-
-    if (!text) {
-      editor.dispatchEvent(new Event("change", { bubbles: true }));
-      return true;
-    }
-
     const tags = promptTagParts(text);
     const expectedTags = tags.map(canonicalPromptTag);
+    const matches = () => normalizedPromptTags(readEditableText(editor)).join("|") === expectedTags.join("|");
 
-    // Fast path: insert the whole prompt in ONE editing operation, exactly like
-    // a paste. This is what makes the run feel instant instead of "typed".
-    // NovelAI's editor sometimes drops the tail when it rerenders mid-insert, so
-    // the result is verified and we only fall back to the slow per-tag path when
-    // the single-shot write did not survive.
+    if (!text) {
+      const emptied = clear ? await clearEditableViaEditing(editor) : true;
+      editor.dispatchEvent(new Event("change", { bubbles: true }));
+      return emptied;
+    }
+
+    // Fast path: ONE paste over the whole selection (or at the end when
+    // appending). ProseMirror replaces its own selection in a single
+    // transaction, so there is no clear step for it to "restore" from.
+    if (clear) {
+      await pasteTextIntoEditor(editor, tags.join(", "), { replaceAll: true });
+      if (matches()) {
+        editor.dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+      }
+      // A stale selection can turn the replace into an insert. Clear through
+      // the editing pipeline and paste once more before giving up on paste.
+      logEvent("warn", "태그 붙여넣기 1차 불일치 → 지우고 재시도", describeMismatch(tags.join(", "), readEditableText(editor), 120));
+      await clearEditableViaEditing(editor);
+      await pasteTextIntoEditor(editor, tags.join(", "), { replaceAll: false });
+      if (matches()) {
+        editor.dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+      }
+    } else {
+      const handled = await pasteTextIntoEditor(editor, tags.join(", "), { replaceAll: false });
+      if (handled) {
+        editor.dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+      }
+    }
+
+    // Legacy fast path: execCommand insertText in one shot.
+    logEvent("warn", "붙여넣기가 받아들여지지 않음 → execCommand 폴백", describeMismatch(tags.join(", "), readEditableText(editor), 120));
+    if (clear) {
+      await clearEditableViaEditing(editor);
+    }
     editor.focus();
     moveCaretToEditableEnd(editor);
     if (clear && execInsertText(tags.join(", "))) {
       editor.dispatchEvent(new Event("change", { bubbles: true }));
       await delay(60);
-      if (normalizedPromptTags(readEditableText(editor)).join("|") === expectedTags.join("|")) {
+      if (matches()) {
         return true;
       }
-      // Single-shot write did not stick — the editor must be genuinely EMPTY
-      // before retrying tag by tag, otherwise the slow loop appends onto the
-      // survivors and produces duplicated or concatenated tags.
-      selectEditableContents(editor);
-      let cleared = false;
-      try {
-        cleared = document.execCommand("delete", false, null);
-      } catch (error) {
-        cleared = false;
-      }
-      if (!cleared || readEditableText(editor)) {
-        editor.innerHTML = "";
-        editor.dispatchEvent(new Event("input", { bubbles: true }));
-      }
-      await delay(45);
-      if (readEditableText(editor)) {
-        // ProseMirror restored its old document during the settle delay.
+      // The editor must be genuinely EMPTY before the tag-by-tag loop, otherwise
+      // it appends onto the survivors and produces duplicated tags.
+      if (!(await clearEditableViaEditing(editor))) {
         editor.innerHTML = "";
         editor.dispatchEvent(new Event("input", { bubbles: true }));
         await delay(45);
       }
     }
 
-    // Slow path: NovelAI's character editor tokenizes at commas. Enter each tag
-    // and delimiter through the browser editing pipeline, with a short pause
-    // after commas so the next token is not lost during rerendering.
+    logEvent("warn", `태그 하나씩 입력하는 느린 경로 진입 (${tags.length}개 태그)`);
+    // Slow path (last resort): NovelAI's character editor tokenizes at commas.
+    // Enter each tag and delimiter through the browser editing pipeline, with a
+    // short pause after commas so the next token is not lost during rerendering.
     for (let i = 0; i < tags.length; i += 1) {
       editor.focus();
       if (i > 0) {
@@ -564,7 +914,18 @@
     if (!editor || !parts.length) {
       return;
     }
-    // Fast path: append every missing tag in one editing operation.
+    // Fast path: append every missing tag in one paste at the end.
+    {
+      const current = readEditableText(editor);
+      const lead = /,\s*$/u.test(current) ? " " : (current ? ", " : "");
+      const expected = normalizedPromptTags(`${current}, ${parts.join(", ")}`).join("|");
+      await pasteTextIntoEditor(editor, `${lead}${parts.join(", ")}`, { replaceAll: false });
+      if (normalizedPromptTags(readEditableText(editor)).join("|") === expected) {
+        editor.dispatchEvent(new Event("change", { bubbles: true }));
+        return;
+      }
+    }
+    // Legacy fast path: execCommand insertText.
     editor.focus();
     moveCaretToEditableEnd(editor);
     {
@@ -937,8 +1298,16 @@
     if (!editor) {
       return { ok: false, error: "NovelAI 프롬프트 입력 영역을 찾지 못했습니다." };
     }
-    setEditablePlainText(editor, text);
-    await delay(180);
+    const written = await writeEditablePlainText(editor, text);
+    await delay(120);
+    if (!written.ok) {
+      // Generating with a half-applied base prompt produces images the user did
+      // not ask for. Stop with the actual diff so the cause is visible.
+      return {
+        ok: false,
+        error: `베이스 프롬프트가 NovelAI에 입력되지 않았습니다. ${describeMismatch(written.expected, written.actual)}`,
+      };
+    }
     return { ok: true };
   }
 
@@ -1266,7 +1635,11 @@
       return resolved;
     }
 
-    for (let attempt = 0; attempt < 7; attempt += 1) {
+    // Cap: 5 click targets x 6 polls x 100 ms = 3 s per card at most. The old
+    // 7 x 14 x 100 ms (~10 s per card, per prompt AND per negative) is what made
+    // "프롬프트 적용 중" hang for a minute when a card never exposed its editor.
+    logEvent("warn", `캐릭터 ${index + 1} 편집기가 바로 보이지 않음 → 카드 클릭으로 활성화 시도`);
+    for (let attempt = 0; attempt < 5; attempt += 1) {
       const container = getCharacterContainers()[index];
       if (!container) {
         break;
@@ -1276,7 +1649,7 @@
         continue;
       }
       clickControlLikeUser(target);
-      resolved = await waitForCharacterEditorAt(index, 14);
+      resolved = await waitForCharacterEditorAt(index, 6);
       if (resolved.editor) {
         return resolved;
       }
@@ -1638,8 +2011,8 @@
       }
       return { ok: false };
     }
-    setEditablePlainText(editor, text);
-    await delay(150);
+    const written = await writeEditablePlainText(editor, text);
+    await delay(100);
     if (switchedTab) {
       const promptTab = findTabButton(scope, PROMPT_TAB_RE, { excludeCharacterBoxes });
       if (promptTab) {
@@ -1647,7 +2020,10 @@
         await delay(110);
       }
     }
-    return { ok: true };
+    if (!written.ok) {
+      setStatus(`네거티브가 정확히 입력되지 않았습니다. ${describeMismatch(written.expected, written.actual)}`, "warn");
+    }
+    return { ok: written.ok };
   }
 
   // Base (image-level) UC editor: the non-prompt visible editor in the base area
@@ -1682,10 +2058,13 @@
       setStatus("베이스 네거티브(Undesired Content) 입력란을 찾지 못해 건너뛰었습니다.", "warn");
       return { ok: false };
     }
-    setEditablePlainText(editor, text);
-    await delay(150);
+    const written = await writeEditablePlainText(editor, text);
+    await delay(100);
     await revealTabInScope(scope, "prompt", { excludeCharacterBoxes: true });
-    return { ok: true };
+    if (!written.ok) {
+      setStatus(`베이스 네거티브가 정확히 입력되지 않았습니다. ${describeMismatch(written.expected, written.actual)}`, "warn");
+    }
+    return { ok: written.ok };
   }
 
   function getCharacterNegativeEditor(container) {
@@ -2046,9 +2425,13 @@
       container = getCharacterContainers()[i] || container;
       const editor = getCharacterBoxEditor(container);
       if (editor) {
-        setEditablePlainText(editor, seg);
-        await delay(140);
-        applied += 1;
+        const written = await writeEditablePlainText(editor, seg);
+        await delay(100);
+        if (written.ok) {
+          applied += 1;
+        } else {
+          setStatus(`캐릭터 ${i + 1} 네거티브가 정확히 입력되지 않았습니다. ${describeMismatch(written.expected, written.actual)}`, "warn");
+        }
       }
       await revealTabInScope(container, "prompt");
     }
@@ -2069,8 +2452,10 @@
 
     // Keep the card count/order/gender aligned with the ;; blocks. A stale
     // Female card for a 1boy block is deleted and recreated as Male.
+    const layoutStartedAt = Date.now();
     let layoutReady = await ensureCharacterCardLayout(segments);
     let containers = getCharacterContainers();
+    logEvent(layoutReady ? "info" : "warn", `캐릭터 카드 정렬 ${layoutReady ? "완료" : "실패"} · 현재 ${containers.length}개 / 필요 ${segments.length}개 · ${((Date.now() - layoutStartedAt) / 1000).toFixed(1)}초`);
     if (!layoutReady || containers.length !== segments.length) {
       // Most failures here are a transient NovelAI rerender rather than a real
       // problem, and they were common enough to kill whole queue runs. Let the
@@ -2101,11 +2486,12 @@
 
     const count = Math.min(segments.length, containers.length);
     let applied = 0;
+    const failures = [];
     for (let i = 0; i < count; i += 1) {
       const expanded = await ensureCharacterExpandedAt(i);
       let container = expanded.container;
       if (!container) {
-        setStatus(`캐릭터 ${i + 1} 카드를 찾지 못했습니다.`, "warn");
+        failures.push(`캐릭터 ${i + 1}: 카드를 찾지 못함`);
         continue;
       }
       await revealTabInScope(container, "prompt");
@@ -2113,18 +2499,34 @@
       const current = await waitForCharacterEditorAt(i, 10);
       const editor = current.editor;
       if (!editor) {
-        setStatus(`캐릭터 ${i + 1} 입력 칸을 펼치지 못했습니다.`, "warn");
+        failures.push(`캐릭터 ${i + 1}: 입력 칸(에디터)을 펼치지 못함`);
         continue;
       }
+      const writeStartedAt = Date.now();
       const written = await setCharacterPromptText(editor, segments[i]);
+      logEvent(written ? "info" : "error", `캐릭터 ${i + 1} 프롬프트 쓰기 ${written ? "성공" : "실패"} · ${((Date.now() - writeStartedAt) / 1000).toFixed(1)}초`,
+        written ? undefined : describeMismatch(segments[i], readEditableText(editor), 200));
       if (!written) {
-        setStatus(`캐릭터 ${i + 1} 프롬프트 일부가 입력되지 않았습니다.`, "warn");
+        failures.push(`캐릭터 ${i + 1}: ${describeMismatch(segments[i], readEditableText(editor))}`);
       } else {
         applied += 1;
       }
-      await delay(140);
+      await delay(100);
     }
-    return { ok: applied > 0, applied, requested: segments.length };
+    if (failures.length) {
+      setStatus(`캐릭터 프롬프트 ${applied}/${count}개 적용 · ${failures.join(" · ")}`, "warn");
+    }
+    if (!applied) {
+      // This used to return ok:false with no message, which the queue rendered
+      // as "알 수 없는 오류". Say what actually happened.
+      return {
+        ok: false,
+        applied,
+        requested: segments.length,
+        error: `캐릭터 프롬프트를 하나도 적용하지 못했습니다. ${failures.join(" · ") || "원인 불명"}`,
+      };
+    }
+    return { ok: true, applied, requested: segments.length };
   }
 
 
@@ -2377,13 +2779,21 @@
     saveContext.counter += 1;
     const base = Store.sanitizeFileName(saveContext.baseName || defaultSaveName());
     const folder = (ui.folderInput?.value || "").trim() || "NovelAI";
+    const fileName = `${base} (${saveContext.counter})`;
     chrome.runtime.sendMessage({
       action: "downloadImage",
       imageUrl: dataUrl,
-      fileName: `${base} (${saveContext.counter})`,
+      fileName,
       folder,
-    }, () => {
-      void chrome.runtime.lastError;
+    }, (response) => {
+      const lastError = chrome.runtime.lastError;
+      if (lastError) {
+        logEvent("error", `다운로드 요청 실패: ${fileName}`, lastError.message);
+      } else if (response && response.ok === false) {
+        logEvent("error", `다운로드 거부됨: ${folder}/${fileName}.png`, response.error);
+      } else {
+        logEvent("info", `다운로드 요청: ${folder}/${fileName}.png (${image.naturalWidth}x${image.naturalHeight})`);
+      }
     });
   }
 
@@ -2573,12 +2983,14 @@
     if (applyBasePrompt != null || applyCharacterPrompt != null) {
       const applied = await applyStructuredPrompt(applyBasePrompt, applyCharacterPrompt);
       if (!applied.ok) {
+        applied.error = applied.error || "프롬프트를 적용하지 못했습니다. (상세 원인 없음)";
         setStatus(applied.error, "warn");
         return applied;
       }
     } else if (applyPrompt != null) {
       const applied = await applyPromptToNovelAi(applyPrompt);
       if (!applied.ok) {
+        applied.error = applied.error || "프롬프트를 적용하지 못했습니다. (상세 원인 없음)";
         setStatus(applied.error, "warn");
         return applied;
       }
@@ -2898,6 +3310,7 @@
         const resolvedBaseNeg = Store.effectiveBaseNegative(item, queueState.options);
         const itemBaseNeg = resolvedBaseNeg && resolvedBaseNeg.trim() ? resolvedBaseNeg : null;
         setStatus(`대기열 ${index + 1}/${queueRun.items.length} · ${item.title} · 프롬프트 적용 중`, "ok");
+        const applyStartedAt = Date.now();
         const startResult = await startAutoGenerate({
           target: item.count,
           saveName: item.title,
@@ -2907,6 +3320,9 @@
           applyCharacterNegative: item.negativePrompt && item.negativePrompt.trim() ? item.negativePrompt : null,
         });
         queueRun.advancing = false;
+        logEvent(startResult.ok ? "info" : "error",
+          `대기열 항목 ${index + 1} 프롬프트 적용 ${startResult.ok ? "완료" : "실패"} · ${((Date.now() - applyStartedAt) / 1000).toFixed(1)}초`,
+          startResult.ok ? undefined : startResult.error);
         if (!startResult.ok && !startResult.delayed) {
           finish({ ok: false, error: startResult.error });
           return;
@@ -2921,6 +3337,7 @@
       })().catch((error) => {
         queueRun.advancing = false;
         autoRun.onComplete = null;
+        logEvent("error", `대기열 항목 ${index + 1} 처리 중 예외`, error);
         finish({ ok: false, error: String(error?.message || error) });
       });
     });
@@ -2945,6 +3362,8 @@
     const runToken = queueRun.token;
     queueRun.items = queueState.items.map((item) => Store.cloneJson(item));
     queueRun.loop = Boolean(queueState.options.loop);
+    logEvent("info", `대기열 실행 시작 · ${queueRun.items.length}개 항목 · 반복 ${queueRun.loop ? "켜짐" : "꺼짐"}`,
+      queueRun.items.map((item, i) => `${i + 1}. ${item.title} · ${item.count}장 · 캐릭터 ${splitCharacterBlocks(item.characterPrompt).length}명`).join("\n"));
     queueRun.index = 0;
     queueRun.totalGenerated = 0;
     resetEtaTracker();
@@ -2979,7 +3398,7 @@
         }
         if (!result?.ok) {
           interrupted = true;
-          interruptionError = result?.error || "알 수 없는 오류";
+          interruptionError = result?.error || "원인이 보고되지 않은 오류 (직전 경고 문구를 확인하세요)";
           setStatus(`대기열 중단: ${interruptionError}`, "warn");
           break;
         }
@@ -2993,6 +3412,7 @@
 
   async function finishQueueRun({ completedNormally = false, error = "" } = {}) {
     const total = queueRun.totalGenerated;
+    logEvent(error ? "error" : "info", `대기열 실행 종료 · ${completedNormally ? "정상 완료" : (error ? "오류로 중단" : "사용자 중지")} · 총 ${total}장`, error || undefined);
     queueRun.active = false;
     syncBackgroundKeepAlive();
     queueRun.resolveItem = null;
@@ -4350,6 +4770,9 @@
   }
 
   function setStatus(message, tone = "neutral") {
+    if (message) {
+      logEvent(tone === "warn" ? "warn" : "info", message);
+    }
     if (!ui.status) {
       return;
     }
@@ -5847,6 +6270,14 @@
                   </div>
                 </div>
                 <div class="ias-block">
+                  <div class="ias-block-title">문제 진단</div>
+                  <div class="ias-hint" style="margin-bottom:8px;">오류가 나면 이 로그를 내보내서 보내 주세요. 상태 문구, 프롬프트 입력 결과, 예외, 현재 NovelAI 화면 인식 상태가 담깁니다.</div>
+                  <div class="ias-row" style="gap:8px;">
+                    <button class="ias-btn secondary ias-diag-export" type="button" style="font-size:13px;padding:10px;">${icon("download", 18)}<span>오류 로그 내보내기</span></button>
+                    <button class="ias-btn secondary ias-diag-clear" type="button" style="font-size:13px;padding:10px;">${icon("delete", 18)}<span>로그 지우기</span></button>
+                  </div>
+                </div>
+                <div class="ias-block">
                   <div class="ias-block-title">대기열 관리</div>
                   <div class="ias-row" style="gap:8px;">
                     <button class="ias-btn secondary ias-queue-export" type="button" style="font-size:13px;padding:10px;">${icon("download", 18)}<span>내보내기</span></button>
@@ -6022,6 +6453,11 @@
 
     ui.autoSaveToggle.addEventListener("change", savePreferences);
     ui.notifyToggle.addEventListener("change", savePreferences);
+    ui.diagExportButton?.addEventListener("click", exportDiagLog);
+    ui.diagClearButton?.addEventListener("click", () => {
+      clearDiagLog();
+      setStatus("진단 로그를 지웠습니다.", "ok");
+    });
     ui.bgKeepAliveToggle?.addEventListener("change", () => {
       backgroundKeepAliveEnabled = Boolean(ui.bgKeepAliveToggle.checked);
       syncBackgroundKeepAlive();
@@ -6195,6 +6631,8 @@
       autoSaveToggle: panelShadow.querySelector(".ias-auto-save"),
       notifyToggle: panelShadow.querySelector(".ias-notify"),
       bgKeepAliveToggle: panelShadow.querySelector(".ias-bg-keepalive"),
+      diagExportButton: panelShadow.querySelector(".ias-diag-export"),
+      diagClearButton: panelShadow.querySelector(".ias-diag-clear"),
       status: panelShadow.querySelector(".ias-status"),
     };
 
@@ -6275,6 +6713,7 @@
     if (!location.href.startsWith("https://novelai.net/image")) {
       return;
     }
+    void loadDiagLog();
     void createPanel();
   }
 

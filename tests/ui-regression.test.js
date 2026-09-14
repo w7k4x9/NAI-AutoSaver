@@ -106,6 +106,22 @@ assert.doesNotMatch(source, /keepAlive\.refs/, "ref counting never returned to z
 
 // --- one-shot prompt write ---------------------------------------------------
 assert.ok(source.includes('execInsertText(tags.join(", "))'), "the prompt must be inserted in a single paste-like operation");
+// v1.0.35: ProseMirror-native paste is the primary write path; innerHTML
+// rewrites are a last resort only.
+assert.ok(source.includes("function dispatchPaste(editor, text)"), "prompt writes must go through a synthetic paste event");
+assert.ok(source.includes('await pasteTextIntoEditor(editor, tags.join(", "), { replaceAll: true });'), "the character prompt must be pasted over the whole selection first");
+assert.equal((source.match(/setEditablePlainText\(editor, text\);/g) || []).length, 1, "innerHTML writes may only remain as the last-resort fallback inside writeEditablePlainText");
+assert.doesNotMatch(source, /error: `캐릭터 카드는[\s\S]*?return \{ ok: applied > 0/, "applyCharacterPromptsToNovelAi must never fail without an error message");
+assert.ok(source.includes("캐릭터 프롬프트를 하나도 적용하지 못했습니다."), "a total character write failure must report what happened");
+assert.ok(source.includes("베이스 프롬프트가 NovelAI에 입력되지 않았습니다."), "a base prompt write failure must report the diff");
+
+// --- diagnostic log (v1.0.36) -------------------------------------------------
+assert.ok(source.includes("function logEvent(level, message, extra)"), "a diagnostic log must exist");
+assert.ok(/function setStatus\(message, tone = "neutral"\) \{\s*if \(message\) \{\s*logEvent\(/.test(source), "every status line must be mirrored into the diagnostic log");
+assert.ok(source.includes("function exportDiagLog()"), "the log must be exportable");
+assert.ok(source.includes('class="ias-btn secondary ias-diag-export"'), "settings must expose an export button");
+assert.ok(source.includes("void loadDiagLog();"), "the persisted log must be loaded on page load");
+assert.ok(source.includes("function diagSnapshot()"), "the export must include a DOM snapshot");
 
 // --- character blocks <-> ';;' storage ---------------------------------------
 const blocksContext = {
