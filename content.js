@@ -13,6 +13,32 @@
 
   const QUEUE_STORAGE_KEY = "naiAutoSaver.queue";
   const UI_STORAGE_KEY = "naiAutoSaver.ui";
+  const CHAR_EDITOR_MODE_KEY = "naiAutoSaver.charEditorMode";
+  // One shared preference for every character editor (auto / queue / memo).
+  let charEditorMode = "blocks";
+  const charEditorApis = new Set();
+  function charEditorOptions() {
+    return {
+      mode: charEditorMode,
+      onModeChange(next) {
+        charEditorMode = next;
+        for (const api of Array.from(charEditorApis)) {
+          if (!api.root.isConnected) {
+            charEditorApis.delete(api);
+            continue;
+          }
+          api.setMode(next, { notify: false });
+        }
+        void storageSet("local", { [CHAR_EDITOR_MODE_KEY]: next });
+      },
+    };
+  }
+  function trackCharEditor(api) {
+    if (api) {
+      charEditorApis.add(api);
+    }
+    return api;
+  }
   const GENERATOR_STORAGE_KEY = "naiAutoSaver.generator";
   const MEMO_STORAGE_KEY = "naiAutoSaver.promptMemos";
   const AUTO_REFRESH_MS = 500;
@@ -783,11 +809,94 @@
       .trim();
   }
 
+  // NovelAI copies a prompt editor's text into its generation settings when the
+  // editor loses focus. A write that leaves the editor focused (or that happens
+  // while the window itself is unfocused, where element.blur() fires nothing)
+  // is visible on screen but NOT used for generation until the user clicks the
+  // box and clicks away. Blur explicitly, and if no real blur event fired,
+  // deliver one ourselves.
+  async function commitEditorValue(editor) {
+    if (!(editor instanceof HTMLElement) || !editor.isConnected) {
+      return;
+    }
+    let fired = false;
+    const mark = () => {
+      fired = true;
+    };
+    editor.addEventListener("blur", mark, true);
+    try {
+      const active = document.activeElement;
+      if (active === editor || (active && editor.contains(active))) {
+        editor.blur();
+      }
+    } catch (error) {
+      void error;
+    }
+    editor.removeEventListener("blur", mark, true);
+    if (!fired) {
+      try {
+        editor.dispatchEvent(new FocusEvent("focusout", { bubbles: true, composed: true, relatedTarget: null }));
+        editor.dispatchEvent(new FocusEvent("blur", { bubbles: false, relatedTarget: null }));
+      } catch (error) {
+        void error;
+      }
+    }
+    await delay(40);
+  }
+
+  // Before pressing Generate: make sure no NovelAI editor still holds an
+  // uncommitted edit.
+  async function commitActivePageEditor() {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active.isContentEditable && !active.closest(`#${HOST_ID}`)) {
+      const root = active.closest(".ProseMirror") || active;
+      await commitEditorValue(root);
+    }
+  }
+
   // Full-text write for the base prompt and every Undesired Content box.
   // Paste first; only if ProseMirror did not accept it fall back to the legacy
   // DOM write. Returns { ok, expected, actual } so callers can report a real
   // diff instead of "unknown error".
+  // NovelAI stores what is typed into the character card that is currently
+  // SELECTED (the one the user last clicked/focused), not necessarily the card
+  // whose editor received the text. Clicking and focusing the editor first, the
+  // way a user does, selects its card so the text lands in the right character.
+  async function activateEditorForWrite(editor) {
+    if (!(editor instanceof HTMLElement) || !editor.isConnected) {
+      return;
+    }
+    let focused = false;
+    const mark = () => {
+      focused = true;
+    };
+    editor.addEventListener("focus", mark, true);
+    try {
+      clickControlLikeUser(editor);
+      editor.focus();
+    } catch (error) {
+      void error;
+    }
+    editor.removeEventListener("focus", mark, true);
+    if (!focused) {
+      try {
+        editor.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true }));
+        editor.dispatchEvent(new FocusEvent("focus", { bubbles: false }));
+      } catch (error) {
+        void error;
+      }
+    }
+    await delay(120);
+  }
+
   async function writeEditablePlainText(editor, value) {
+    await activateEditorForWrite(editor);
+    const result = await writeEditablePlainTextRaw(editor, value);
+    await commitEditorValue(editor);
+    return result;
+  }
+
+  async function writeEditablePlainTextRaw(editor, value) {
     const text = String(value == null ? "" : value);
     const expected = normalizePlainText(text);
     const matches = () => normalizePlainText(readEditableText(editor)) === expected;
@@ -973,6 +1082,13 @@
   }
 
   async function setCharacterPromptText(editor, value) {
+    await activateEditorForWrite(editor);
+    const ok = await setCharacterPromptTextRaw(editor, value);
+    await commitEditorValue(editor);
+    return ok;
+  }
+
+  async function setCharacterPromptTextRaw(editor, value) {
     const parts = promptTagParts(value);
     const expected = parts.map(canonicalPromptTag);
     let actual = normalizedPromptTags(readEditableText(editor));
@@ -1095,23 +1211,76 @@
       .replace(/\s+/g, " ");
   }
 
-  function findAddCharacterButton() {
-    const root = Array.from(document.querySelectorAll(".image-gen-prompt-main")).filter(isVisible)[0] || document;
-    const selector = 'button, [role="button"]';
-    const matchByLabel = (scope) => Array.from(scope.querySelectorAll(selector))
+  function characterSectionsOnPage() {
+    const onScreen = (element) => {
+      const rect = element.getBoundingClientRect();
+      const width = window.innerWidth || document.documentElement.clientWidth || 0;
+      return rect.right > 0 && rect.left < width && !element.closest(".image-gen-mobile-sheet");
+    };
+    return Array.from(document.querySelectorAll(".image-gen-character-prompts"))
       .filter((element) => !element.closest(`#${HOST_ID}`))
-      .filter(isVisible)
+      .filter(isRenderedControl)
+      .sort((a, b) => Number(onScreen(b)) - Number(onScreen(a)));
+  }
+
+  function findAddCharacterButton(surface = null) {
+    const selector = 'button, [role="button"]';
+    const usable = (element) => !element.closest(`#${HOST_ID}`)
+      && isRenderedControl(element)
+      && !element.disabled
+      && element.getAttribute?.("aria-disabled") !== "true";
+    const matchByLabel = (scope) => Array.from(scope.querySelectorAll(selector))
+      .filter(usable)
       .find((element) => /add\s*character|character\s*add|캐릭터\s*추가/i.test(accessibleControlText(element))) || null;
 
-    const direct = matchByLabel(root) || matchByLabel(document.body);
+    // Current NovelAI: the Character Prompts section sits OUTSIDE
+    // .image-gen-prompt-main and its "+" is an icon-only button in the header
+    // row, next to the "Character Prompts" title (the Position buttons live in
+    // a second row of the same header and all carry text).
+    const sections = [];
+    const own = surface instanceof Element
+      ? (surface.closest(".image-gen-character-prompts") || surface.querySelector?.(".image-gen-character-prompts"))
+      : null;
+    if (own) sections.push(own);
+    for (const section of characterSectionsOnPage()) {
+      if (!sections.includes(section)) sections.push(section);
+    }
+    for (const section of sections) {
+      const byLabel = matchByLabel(section);
+      if (byLabel) {
+        return byLabel;
+      }
+      const header = section.querySelector(".image-gen-character-prompts-header") || section;
+      const iconOnly = Array.from(header.querySelectorAll(selector))
+        .filter(usable)
+        .filter((element) => !element.closest(".character-prompt-input,[class*='character-prompt-input-']"))
+        .filter((element) => !accessibleControlText(element))
+        .filter((element) => element.querySelector("div,svg,span"));
+      if (iconOnly.length) {
+        const title = Array.from(header.querySelectorAll("div,span,p,h1,h2,h3,h4,h5,h6"))
+          .find((element) => /^character\s*prompts?$/i.test(ownControlText(element)));
+        if (!title) {
+          return iconOnly[0];
+        }
+        const titleRect = title.getBoundingClientRect();
+        const mid = titleRect.top + titleRect.height / 2;
+        return iconOnly
+          .map((button) => {
+            const rect = button.getBoundingClientRect();
+            return { button, gap: Math.abs(rect.top + rect.height / 2 - mid) };
+          })
+          .sort((a, b) => a.gap - b.gap)[0].button;
+      }
+    }
+
+    const direct = matchByLabel(document.body);
     if (direct) {
       return direct;
     }
 
-    // Current NovelAI uses an icon-only + button beside the "Character Prompts"
-    // heading. It may have no useful text/aria-label, so locate the heading first
-    // and choose the nearest visible button in the same compact header row.
-    const labels = Array.from(root.querySelectorAll("h1,h2,h3,h4,h5,h6,label,p,span,div"))
+    // Older layouts: locate the "Character Prompts" heading anywhere on the page
+    // and choose the nearest untitled button in the same compact header row.
+    const labels = Array.from(document.querySelectorAll("h1,h2,h3,h4,h5,h6,label,p,span,div"))
       .filter((element) => !element.closest(`#${HOST_ID}`))
       .filter(isVisible)
       .filter((element) => /^character\s*prompts?$/i.test(ownControlText(element)));
@@ -1121,9 +1290,8 @@
       let scope = label.parentElement;
       for (let depth = 0; scope && scope !== document.body && depth < 5; depth += 1, scope = scope.parentElement) {
         const buttons = Array.from(scope.querySelectorAll(selector))
-          .filter((element) => !element.closest(`#${HOST_ID}`))
-          .filter(isVisible)
-          .filter((element) => !/^(?:female|male|other|여성|남성|기타)$/i.test(accessibleControlText(element)));
+          .filter(usable)
+          .filter((element) => !/^(?:female|male|other|여성|남성|기타|ai.?s choice|custom)$/i.test(accessibleControlText(element)));
         if (!buttons.length) {
           continue;
         }
@@ -1244,8 +1412,9 @@
   async function clickAddCharacterBox(characterPrompt = "", surface = null) {
     void characterPrompt;
     const before = characterCountForSurface(surface);
-    const button = findAddCharacterButton();
+    const button = findAddCharacterButton(surface);
     if (!button || button.disabled || button.getAttribute?.("aria-disabled") === "true") {
+      logEvent("warn", "Character 추가(+) 버튼을 찾지 못함");
       return false;
     }
     clickControlLikeUser(button);
@@ -1444,7 +1613,7 @@
     if (directRoots.length) {
       const groups = new Map();
       for (const entry of directRoots) {
-        const surface = entry.element.closest('.settings-panel,.mobile-tray-contents') || entry.element.parentElement;
+        const surface = entry.element.closest('.image-gen-character-prompts,.settings-panel,.mobile-tray-contents') || entry.element.parentElement;
         if (!groups.has(surface)) groups.set(surface, []);
         groups.get(surface).push(entry);
       }
@@ -1625,6 +1794,26 @@
     return targets[attempt] || targets[targets.length - 1] || null;
   }
 
+  // Current NovelAI collapses every character card except the selected one:
+  // the editors are wrapped in a display:none div and the card instead shows a
+  // preview BUTTON (a direct child of the card) with the prompt text. Clicking
+  // that button expands the card. It is the only safe button to click: the
+  // header buttons are move/duplicate/delete/toggle.
+  function characterPreviewButton(container) {
+    if (!(container instanceof Element)) {
+      return null;
+    }
+    return Array.from(container.children)
+      .filter((child) => child.tagName === "BUTTON")
+      .filter((button) => !button.disabled)
+      .find(isRenderedControl) || null;
+  }
+
+  function readCharacterPreviewText(container) {
+    const button = characterPreviewButton(container);
+    return button ? String(button.textContent || "").replace(/\u00a0/g, " ").trim() : "";
+  }
+
   async function ensureCharacterExpandedAt(index) {
     // Prompt writing does not require locating the trash button. The previous
     // implementation used the selected card's icon-only control as proof of
@@ -1638,6 +1827,26 @@
     // Cap: 5 click targets x 6 polls x 100 ms = 3 s per card at most. The old
     // 7 x 14 x 100 ms (~10 s per card, per prompt AND per negative) is what made
     // "프롬프트 적용 중" hang for a minute when a card never exposed its editor.
+    // Collapsed card: click its preview button.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const container = getCharacterContainers()[index];
+      const preview = characterPreviewButton(container);
+      if (!preview) {
+        break;
+      }
+      try {
+        container.scrollIntoView({ block: "nearest", inline: "nearest" });
+      } catch (error) {
+        void error;
+      }
+      clickControlLikeUser(preview);
+      resolved = await waitForCharacterEditorAt(index, 10);
+      if (resolved.editor) {
+        logEvent("info", `캐릭터 ${index + 1} 접힌 카드를 펼침`);
+        return resolved;
+      }
+    }
+
     logEvent("warn", `캐릭터 ${index + 1} 편집기가 바로 보이지 않음 → 카드 클릭으로 활성화 시도`);
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const container = getCharacterContainers()[index];
@@ -1661,7 +1870,7 @@
     if (!(container instanceof Element)) {
       return null;
     }
-    return container.closest('.settings-panel,.mobile-tray-contents') || container.parentElement || null;
+    return container.closest('.image-gen-character-prompts,.settings-panel,.mobile-tray-contents') || container.parentElement || null;
   }
 
   function getCharacterContainersInSurface(surface) {
@@ -1698,16 +1907,24 @@
       return null;
     }
 
-    // User-confirmed NovelAI trash control:
-    // <button><div class="... sc-7d0727b8-33 ..." style="height:16px;width:16px"></div></button>
-    // Position buttons use a 14px icon nested inside a <span>, so requiring the
-    // icon to be the DIRECT child of the button keeps those controls excluded.
-    const buttons = Array.from(characterRoot.querySelectorAll('button'));
+    // NovelAI trash control: an icon-only header button whose icon is the
+    // styled-component "…-33" (the component prefix is a build hash that
+    // changes: sc-7d0727b8-33 before, sc-e95dc911-33 now, and the icon
+    // shrank from 16px to 14px). Match the stable suffix, not the hash.
+    const buttons = Array.from(characterRoot.querySelectorAll('button'))
+      .filter((button) => !button.closest(`#${HOST_ID}`))
+      .filter((button) => !button.disabled && button.getAttribute('aria-disabled') !== 'true')
+      .filter(isRenderedControl);
+    const labeled = buttons.find((button) => /delete|remove|trash|삭제/i.test(accessibleControlText(button)));
+    if (labeled) {
+      return labeled;
+    }
+    const TRASH_ICON_CLASS = /^sc-[0-9a-z]+-33$/i;
     for (const button of buttons) {
-      if (button.closest(`#${HOST_ID}`) || button.disabled || button.getAttribute('aria-disabled') === 'true') {
+      if (accessibleControlText(button)) {
         continue;
       }
-      const icon = Array.from(button.children).find((child) => child.matches?.('.sc-7d0727b8-33'));
+      const icon = Array.from(button.children).find((child) => Array.from(child.classList || []).some((name) => TRASH_ICON_CLASS.test(name)));
       if (!icon) {
         continue;
       }
@@ -1715,7 +1932,7 @@
       const rect = icon.getBoundingClientRect();
       const width = Number.parseFloat(style.width) || rect.width;
       const height = Number.parseFloat(style.height) || rect.height;
-      if (width >= 15 && width <= 17.5 && height >= 15 && height <= 17.5 && isRenderedControl(button)) {
+      if (width >= 10 && width <= 20 && height >= 10 && height <= 20) {
         return button;
       }
     }
@@ -1795,13 +2012,19 @@
     const activated = await activateCharacterForDeletion(lastIndex, surface);
     const button = activated.button;
     if (!button || !activated.container?.contains(button)) {
-      setStatus(`Character ${before}에서 16×16 휴지통 버튼(sc-7d0727b8-33)을 찾지 못했습니다.`, 'warn');
+      setStatus(`Character ${before}에서 휴지통 버튼을 찾지 못했습니다. (NovelAI UI 변경 가능성)`, 'warn');
       return false;
     }
 
     clickControlLikeUser(button);
     if (await waitForCharacterCountBelow(before, surface, 28)) {
       return true;
+    }
+    if (characterCountForSurface(surface) > before) {
+      // The guessed button was not the trash (e.g. a duplicate control).
+      setStatus(`Character ${before} 삭제 버튼 추정이 틀렸습니다. 카드가 늘어났으니 확인해 주세요.`, 'warn');
+      logEvent('error', '휴지통으로 추정한 버튼이 카드를 늘림');
+      return false;
     }
 
     const confirmation = findCharacterDeleteConfirmationButton();
@@ -1867,6 +2090,7 @@
     const targetCount = segments.length;
     const currentContainers = getCharacterContainers();
     const surface = getCharacterSurface(currentContainers[0])
+      || characterSectionsOnPage().find(isVisible)
       || Array.from(document.querySelectorAll('.settings-panel,.mobile-tray-contents')).find(isVisible)
       || null;
 
@@ -2154,6 +2378,8 @@
       promptPlaceholder = "예: girl, black hair, long hair",
       negativePlaceholder = "이 캐릭터에만 적용할 Undesired Content",
       rows = 3,
+      mode: initialMode = "blocks",
+      onModeChange = null,
     } = options;
 
     promptField.dataset.iasBlocks = "on";
@@ -2179,11 +2405,43 @@
     addButton.type = "button";
     addButton.className = "ias-cb-add";
     addButton.title = "캐릭터 블록 추가";
-    addButton.innerHTML = `${icon("add", 15)}<span>캐릭터 추가</span>`;
-    bar.append(titleWrap, addButton);
+    addButton.title = "이 캐릭터 블록(한 장의 그림)에 캐릭터를 한 명 더 넣습니다";
+    addButton.innerHTML = `${icon("add", 15)}<span>이 블록에 캐릭터 추가</span>`;
+    // Two ways to edit the same ";;" string: one block per character, or the
+    // original single textarea where characters are separated by ";;".
+    const modeButton = document.createElement("button");
+    modeButton.type = "button";
+    modeButton.className = "ias-cb-mode";
+    const barRight = document.createElement("div");
+    barRight.className = "ias-cb-barright";
+    // The ";;" text mode is superseded by the multi-character block below; the
+    // button is kept out of the UI (typing ";;" inside a field still splits).
+    bar.append(titleWrap, barRight);
+    // ONE character block = one picture. It holds every character that goes
+    // into that picture (NovelAI Character 1..n), and "+" adds another one
+    // INSIDE the block.
+    const group = document.createElement("div");
+    group.className = "ias-cb-group";
+    const groupHead = document.createElement("div");
+    groupHead.className = "ias-cb-group-head";
+    groupHead.textContent = "캐릭터 블록 · 한 장의 그림에 함께 들어갈 캐릭터";
     const list = document.createElement("div");
     list.className = "ias-cb-list";
-    root.append(bar, list);
+    group.append(groupHead, list, addButton);
+    const textWrap = document.createElement("div");
+    textWrap.className = "ias-cb-textmode";
+    textWrap.style.flexDirection = "column";
+    const textHint = document.createElement("p");
+    textHint.className = "ias-hint";
+    textHint.textContent = "캐릭터는 ;; 로 구분합니다. 예) 1girl, black hair ;; 1boy, white hair — 네거티브도 같은 순서로 ;; 구분";
+    const textPromptLabel = document.createElement("div");
+    textPromptLabel.className = "ias-cb-sub";
+    textPromptLabel.textContent = "캐릭터 프롬프트 (;; 구분)";
+    const textNegLabel = document.createElement("div");
+    textNegLabel.className = "ias-cb-sub";
+    textNegLabel.textContent = "캐릭터 네거티브 (;; 구분)";
+    textWrap.append(textHint);
+    root.append(bar, group, textWrap);
     if (hint) {
       const hintEl = document.createElement("p");
       hintEl.className = "ias-hint";
@@ -2192,10 +2450,22 @@
     }
 
     promptField.parentNode.insertBefore(root, promptField);
+    // The real textareas stay where they are (single source of truth); text
+    // mode simply shows them, with a label in front of each.
+    promptField.parentNode.insertBefore(textPromptLabel, promptField);
+    negativeField.parentNode.insertBefore(textNegLabel, negativeField);
+    if (!promptField.placeholder) {
+      promptField.placeholder = "1girl, black hair ;; 1boy, white hair";
+    }
+    if (!negativeField.placeholder) {
+      negativeField.placeholder = "bad hands ;; long hair";
+    }
 
     let blocks = [];
     let disabled = false;
     let syncing = false;
+    void initialMode;
+    let mode = "blocks";
 
     const nativeValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")
       || Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
@@ -2240,14 +2510,33 @@
       }
     }
 
+    function applyModeVisibility() {
+      const textMode = mode === "text";
+      group.style.display = textMode ? "none" : "";
+      addButton.style.display = textMode ? "none" : "";
+      textWrap.style.display = textMode ? "flex" : "none";
+      for (const node of [promptField, negativeField, textPromptLabel, textNegLabel]) {
+        node.hidden = !textMode;
+        node.style.display = textMode ? "" : "none";
+      }
+      modeButton.textContent = textMode ? "블록으로 보기" : ";; 텍스트로 입력";
+      modeButton.title = textMode
+        ? "캐릭터를 블록 단위로 편집합니다"
+        : "캐릭터를 한 칸에 ;; 로 구분해서 입력합니다 (기존 방식)";
+    }
+
     function render() {
       list.textContent = "";
-      countEl.textContent = blocks.length ? `${blocks.length}명` : "";
+      countEl.textContent = blocks.length ? `한 그림에 ${blocks.length}명` : "";
       addButton.disabled = disabled;
+      applyModeVisibility();
+      if (mode === "text") {
+        return;
+      }
       if (!blocks.length) {
         const empty = document.createElement("div");
         empty.className = "ias-cb-empty";
-        empty.textContent = "캐릭터 없음 — 현재 NovelAI 캐릭터를 그대로 사용합니다. 캐릭터를 지정하려면 “캐릭터 추가”를 누르세요.";
+        empty.textContent = "캐릭터 없음 — 현재 NovelAI 캐릭터를 그대로 사용합니다. 아래 “이 블록에 캐릭터 추가”를 누를 때마다 이 그림에 캐릭터가 한 명씩 늘어납니다.";
         list.append(empty);
         return;
       }
@@ -2274,6 +2563,7 @@
           return button;
         };
         tools.append(
+          makeTool("insert", "이 캐릭터 바로 아래에 한 명 더 추가 (같은 그림)", "＋"),
           makeTool("up", "위로", "↑"),
           makeTool("down", "아래로", "↓"),
           makeTool("remove", "이 캐릭터 삭제", "✕"),
@@ -2300,13 +2590,39 @@
         negArea.value = block.negative;
         negArea.disabled = disabled;
 
-        promptArea.addEventListener("input", () => {
-          blocks[index].prompt = promptArea.value;
+        // Typing or pasting ";;" inside a block splits it into several
+        // characters, exactly like the old single-field input did.
+        const splitInto = (which, area) => {
+          if (!/;;|；；/u.test(area.value)) {
+            return false;
+          }
+          const parts = area.value.split(/\s*(?:;;|；；)\s*/u);
+          const other = which === "prompt" ? "negative" : "prompt";
+          blocks[index][which] = parts[0].trim();
+          const extra = parts.slice(1).map((part) => ({ [which]: part.trim(), [other]: "" }));
+          blocks.splice(index + 1, 0, ...extra);
           pushToFields();
+          render();
+          const cards = list.querySelectorAll(".ias-cb");
+          const target = cards[index + extra.length]?.querySelectorAll("textarea")[which === "prompt" ? 0 : 1];
+          if (target) {
+            target.focus();
+            const end = target.value.length;
+            target.setSelectionRange?.(end, end);
+          }
+          return true;
+        };
+        promptArea.addEventListener("input", (event) => {
+          if (event.isComposing || !splitInto("prompt", promptArea)) {
+            blocks[index].prompt = promptArea.value;
+            pushToFields();
+          }
         });
-        negArea.addEventListener("input", () => {
-          blocks[index].negative = negArea.value;
-          pushToFields();
+        negArea.addEventListener("input", (event) => {
+          if (event.isComposing || !splitInto("negative", negArea)) {
+            blocks[index].negative = negArea.value;
+            pushToFields();
+          }
         });
         tools.addEventListener("click", (event) => {
           const button = event.target instanceof Element ? event.target.closest("button") : null;
@@ -2316,6 +2632,13 @@
           event.preventDefault();
           event.stopPropagation();
           const act = button.dataset.act;
+          if (act === "insert") {
+            blocks.splice(index + 1, 0, { prompt: "", negative: "" });
+            pushToFields();
+            render();
+            list.querySelectorAll(".ias-cb")[index + 1]?.querySelector("textarea")?.focus();
+            return;
+          }
           if (act === "remove") {
             blocks.splice(index, 1);
           } else if (act === "up" && index > 0) {
@@ -2352,6 +2675,28 @@
       areas[areas.length - 2]?.focus?.();
     });
 
+    function setMode(next, { notify = true } = {}) {
+      const wanted = next === "text" ? "text" : "blocks";
+      if (wanted === mode) {
+        return;
+      }
+      if (wanted === "blocks") {
+        // Text typed in ";;" mode never went through the value setter.
+        blocks = charBlocksFromStrings(readField(promptField), readField(negativeField));
+      }
+      mode = wanted;
+      render();
+      if (notify && typeof onModeChange === "function") {
+        onModeChange(mode);
+      }
+    }
+
+    modeButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setMode(mode === "text" ? "blocks" : "text");
+    });
+
     // Redraw when anything else assigns to the underlying fields.
     for (const field of [promptField, negativeField]) {
       try {
@@ -2376,6 +2721,8 @@
     const api = {
       root,
       refresh,
+      setMode,
+      getMode: () => mode,
       setDisabled(next) {
         disabled = Boolean(next);
         render();
@@ -2513,6 +2860,28 @@
       }
       await delay(100);
     }
+    // Second pass: if NovelAI re-rendered a card with different text (the
+    // write went to another character), write that card again.
+    if (!failures.length) {
+      await delay(250);
+      for (let i = 0; i < count; i += 1) {
+        const again = await waitForCharacterEditorAt(i, 1);
+        const shown = again.editor
+          ? readEditableText(again.editor)
+          : readCharacterPreviewText(getCharacterContainers()[i]);
+        const want = normalizedPromptTags(segments[i]).join("|");
+        if (normalizedPromptTags(shown).join("|") === want) continue;
+        if (!again.editor && !shown) continue; // nothing readable; don't guess
+        logEvent("warn", `캐릭터 ${i + 1} 내용이 기대와 다름 → 다시 입력`, describeMismatch(segments[i], shown, 120));
+        const reopened = await ensureCharacterExpandedAt(i);
+        if (reopened.container) await revealTabInScope(reopened.container, "prompt");
+        const retry = await waitForCharacterEditorAt(i, 5);
+        if (!retry.editor || !(await setCharacterPromptText(retry.editor, segments[i]))) {
+          failures.push(`캐릭터 ${i + 1}: 재입력 실패`);
+          applied -= 1;
+        }
+      }
+    }
     if (failures.length) {
       setStatus(`캐릭터 프롬프트 ${applied}/${count}개 적용 · ${failures.join(" · ")}`, "warn");
     }
@@ -2561,7 +2930,12 @@
         return charResult;
       }
       if (charResult.applied < charResult.requested) {
-        setStatus(`캐릭터 박스가 부족해 ${charResult.applied}/${charResult.requested}개만 적용했습니다.`, "warn");
+        // Some cards could not be written: generating would give the wrong
+      // picture, so stop instead of silently continuing.
+      return {
+        ok: false,
+        error: `캐릭터 ${charResult.requested}명 중 ${charResult.applied}명만 입력되어 생성하지 않았습니다. (진단 로그 확인)`,
+      };
       }
     }
     return { ok: true };
@@ -2820,6 +3194,7 @@
     if (button.disabled) {
       return { ok: false, error: "생성 버튼이 아직 비활성화 상태입니다." };
     }
+    await commitActivePageEditor();
     button.click();
     return { ok: true };
   }
@@ -2835,7 +3210,7 @@
     }
   }
 
-  async function stopAutoGenerate({ playAudio = false, force = false } = {}) {
+  async function stopAutoGenerate({ playAudio = false, force = false, keepQueue = false } = {}) {
     // If an image is currently being generated, let it finish and get saved
     // before we tear everything down — otherwise the last image is lost. A
     // second stop click (force) skips the wait and stops immediately.
@@ -2845,10 +3220,10 @@
       setStatus("정지 대기 중 — 마지막 이미지를 저장한 뒤 정지합니다. (다시 누르면 즉시 정지)", "warn");
       return { ok: true, pending: true };
     }
-    return finalizeStop({ playAudio });
+    return finalizeStop({ playAudio, keepQueue });
   }
 
-  async function finalizeStop({ playAudio = false } = {}) {
+  async function finalizeStop({ playAudio = false, keepQueue = false } = {}) {
     const wasActive = autoRun.active;
     clearAutoTimers();
     autoRun.token += 1;
@@ -2858,7 +3233,9 @@
     autoRun.waitingForExistingGeneration = false;
     autoRun.stopAfterCurrent = false;
     autoRun.onComplete = null;
-    if (queueRun.active && !queueRun.advancing) {
+    // A user stop always ends the queue, even while the next item's prompts
+    // are being typed. Only startAutoGenerate's own internal reset keeps it.
+    if (queueRun.active && !keepQueue) {
       cancelQueueRun();
     }
     await storageSet("sync", { autoClickEnabled: false });
@@ -2973,12 +3350,22 @@
     await scheduleNextAutoClick();
   }
 
-  async function startAutoGenerate({ target = 0, saveName = "", applyPrompt = null, applyBasePrompt = null, applyCharacterPrompt = null, applyBaseNegative = null, applyCharacterNegative = null } = {}) {
+  async function startAutoGenerate({ target = 0, saveName = "", applyPrompt = null, applyBasePrompt = null, applyCharacterPrompt = null, applyBaseNegative = null, applyCharacterNegative = null, shouldContinue = null } = {}) {
     if (!runSafetyChecks({ alertUser: true })) {
       return { ok: false, error: "안전 점검 실패" };
     }
-    await stopAutoGenerate({ playAudio: false });
+    await stopAutoGenerate({ playAudio: false, keepQueue: true });
     autoRun.token += 1;
+    // Typing prompts takes seconds. If the user presses stop meanwhile
+    // (finalizeStop bumps the token / the queue is cancelled), never go on to
+    // press Generate or play the start sound.
+    const startToken = autoRun.token;
+    const stillWanted = () => startToken === autoRun.token
+      && (typeof shouldContinue !== "function" || shouldContinue());
+    const cancelled = () => {
+      logEvent("info", "프롬프트 적용 중 정지됨 → 생성하지 않음");
+      return { ok: false, cancelled: true };
+    };
 
     if (applyBasePrompt != null || applyCharacterPrompt != null) {
       const applied = await applyStructuredPrompt(applyBasePrompt, applyCharacterPrompt);
@@ -2996,6 +3383,9 @@
       }
     }
 
+    if (!stillWanted()) {
+      return cancelled();
+    }
     // Negatives are independent of the positive flow. The common/global negative
     // goes to the base Undesired Content; per-character negatives go to each
     // character's own Undesired Content. Failures are non-fatal (warn, continue).
@@ -3009,6 +3399,9 @@
     }
     if (applyBaseNegative != null && String(applyBaseNegative).trim() !== "") {
       await applyBaseNegativeToNovelAi(applyBaseNegative);
+    }
+    if (!stillWanted()) {
+      return cancelled();
     }
 
     // Reset per-run name/counter, but carry the last saved image src forward so
@@ -3036,8 +3429,12 @@
     renderControls();
 
     await storageSet("sync", { autoClickEnabled: true });
-    if (!queueRun.active) {
+    if (typeof shouldContinue !== "function") {
       await playSound("start.mp3");
+    }
+    if (!stillWanted()) {
+      await finalizeStop({ playAudio: false });
+      return cancelled();
     }
 
     autoRun.timerId = setInterval(() => {
@@ -3312,6 +3709,7 @@
         setStatus(`대기열 ${index + 1}/${queueRun.items.length} · ${item.title} · 프롬프트 적용 중`, "ok");
         const applyStartedAt = Date.now();
         const startResult = await startAutoGenerate({
+          shouldContinue: () => queueRun.active && runToken === queueRun.token,
           target: item.count,
           saveName: item.title,
           applyBasePrompt: itemBase && itemBase.trim() ? itemBase : null,
@@ -3320,6 +3718,10 @@
           applyCharacterNegative: item.negativePrompt && item.negativePrompt.trim() ? item.negativePrompt : null,
         });
         queueRun.advancing = false;
+        if (startResult.cancelled) {
+          finish({ cancelled: true });
+          return;
+        }
         logEvent(startResult.ok ? "info" : "error",
           `대기열 항목 ${index + 1} 프롬프트 적용 ${startResult.ok ? "완료" : "실패"} · ${((Date.now() - applyStartedAt) / 1000).toFixed(1)}초`,
           startResult.ok ? undefined : startResult.error);
@@ -3510,24 +3912,93 @@
       .filter((line) => line.length > 0);
   }
 
+  function genMemberHtml(data = {}) {
+    return `
+      <div class="ias-gc-member">
+        <div class="ias-gen-row-head">
+          <span class="ias-gc-member-name">추가 인물</span>
+          <button class="ias-icon-btn ias-gc-member-del" type="button" title="이 인물 삭제">${icon("delete", 16)}</button>
+        </div>
+        <label class="ias-gc-label">외형 태그</label>
+        <textarea class="ias-input ias-gm-appear" rows="2" placeholder="예: boy, white hair">${escapeHtml(data.appearance || "")}</textarea>
+        <label class="ias-gc-label">표정 세트 (줄 번호가 위 인물과 맞춰짐 · 한 줄만 쓰면 모든 조합에 고정)</label>
+        <textarea class="ias-input ias-gm-expr" rows="3" placeholder="예:&#10;1 smirk&#10;2 surprised">${escapeHtml(data.expressions || "")}</textarea>
+        <label class="ias-gc-label">캐릭터 네거티브</label>
+        <textarea class="ias-input ias-gm-neg" rows="2" placeholder="이 인물의 Undesired Content · 비우면 없음">${escapeHtml(data.negative || "")}</textarea>
+      </div>`;
+  }
+
   function genCharRowHtml(data = {}) {
     const code = data.code != null ? String(data.code) : "";
     const appearance = data.appearance != null ? String(data.appearance) : "";
     const expressions = data.expressions != null ? String(data.expressions) : "";
     const negative = data.negative != null ? String(data.negative) : "";
+    const members = Array.isArray(data.members) ? data.members : [];
     return `
       <div class="ias-gen-char-row">
         <div class="ias-gen-row-head">
           <input class="ias-input ias-gc-code" type="text" maxlength="40" placeholder="코드 (예: w)" value="${escapeAttr(code)}">
           <button class="ias-icon-btn ias-gc-del" type="button" title="이 캐릭터 삭제">${icon("delete", 16)}</button>
         </div>
-        <label class="ias-gc-label">외형 태그</label>
+        <label class="ias-gc-label">외형 태그 (인물 1)</label>
         <textarea class="ias-input ias-gc-appear" rows="2" placeholder="예: girl, black hair, long hair">${escapeHtml(appearance)}</textarea>
         <label class="ias-gc-label">표정 세트 (한 줄에 감정 1개, 줄 순서 = 감정번호)</label>
         <textarea class="ias-input ias-gc-expr" rows="4" placeholder="예:&#10;1 hooded eyes&#10;2 smiling">${escapeHtml(expressions)}</textarea>
         <label class="ias-gc-label">캐릭터 네거티브 (이 캐릭터 Undesired Content)</label>
         <textarea class="ias-input ias-gc-neg" rows="2" placeholder="이 캐릭터의 Undesired Content에 적용 · 비우면 없음">${escapeHtml(negative)}</textarea>
+        <div class="ias-gc-members">${members.map((m) => genMemberHtml(m)).join("")}</div>
+        <button class="ias-gc-add-member" type="button">＋ 이 조합에 인물 추가 (같은 장면의 캐릭터 2, 3…)</button>
       </div>`;
+  }
+
+  // One combo "character" can hold several NovelAI characters: the main
+  // fields are person 1, each added member is the next person. The old ";;"
+  // habit also works inside the main fields.
+  function genCharacterMembers(ch) {
+    const splitSemi = (value) => String(value == null ? "" : value).split(/\s*(?:;;|；；)\s*/u);
+    const members = [];
+    const appearParts = splitSemi(ch.appearance);
+    const negParts = splitSemi(ch.negative);
+    const exprLines = parseExpressionSet(ch.expressions).map(splitSemi);
+    const width = Math.max(appearParts.length, negParts.length, ...exprLines.map((parts) => parts.length), 1);
+    for (let j = 0; j < width; j += 1) {
+      members.push({
+        appearance: (appearParts[j] || "").trim(),
+        negative: (negParts[j] || "").trim(),
+        expressions: exprLines.map((parts) => (parts[j] || "").trim()),
+      });
+    }
+    for (const extra of Array.isArray(ch.members) ? ch.members : []) {
+      const appearance = String(extra.appearance || "").trim();
+      const expressions = parseExpressionSet(extra.expressions);
+      const negative = String(extra.negative || "").trim();
+      if (!appearance && !expressions.length && !negative) {
+        continue;
+      }
+      members.push({ appearance, expressions, negative });
+    }
+    return members;
+  }
+
+  // Emotion numbers follow person 1's lines; if person 1 has none, the longest
+  // member list decides.
+  function genEmotionCount(members) {
+    if (!members.length) return 0;
+    if (members[0].expressions.length) return members[0].expressions.length;
+    return Math.max(0, ...members.map((m) => m.expressions.length));
+  }
+
+  function genMemberExpression(member, index) {
+    const list = member.expressions;
+    if (!list.length) return "";
+    if (list.length === 1) return list[0];
+    return list[index] || "";
+  }
+
+  function joinCharacterColumn(values) {
+    const list = values.map((value) => String(value || "").trim());
+    while (list.length && !list[list.length - 1]) list.pop();
+    return list.join(" ;; ");
   }
 
   function genBgRowHtml(data = {}) {
@@ -3582,6 +4053,11 @@
           appearance: row.querySelector(".ias-gc-appear")?.value || "",
           expressions: row.querySelector(".ias-gc-expr")?.value || "",
           negative: row.querySelector(".ias-gc-neg")?.value || "",
+          members: Array.from(row.querySelectorAll(".ias-gc-member")).map((member) => ({
+            appearance: member.querySelector(".ias-gm-appear")?.value || "",
+            expressions: member.querySelector(".ias-gm-expr")?.value || "",
+            negative: member.querySelector(".ias-gm-neg")?.value || "",
+          })),
         }))
       : [];
     const bgs = ui.genBgs
@@ -3609,7 +4085,7 @@
       if (!ch.code.trim()) {
         continue;
       }
-      total += parseExpressionSet(ch.expressions).length * bgCount;
+      total += genEmotionCount(genCharacterMembers(ch)) * bgCount;
     }
     return total;
   }
@@ -3644,9 +4120,8 @@
       if (!charCode) {
         continue;
       }
-      const expressions = parseExpressionSet(ch.expressions);
-      const appearance = String(ch.appearance || "").trim();
-      const negative = String(ch.negative || "").trim();
+      const members = genCharacterMembers(ch);
+      const emotionCount = genEmotionCount(members);
       for (const bg of raw.bgs) {
         const bgCode = bg.code.trim();
         if (!bgCode) {
@@ -3654,22 +4129,23 @@
         }
         const bgTags = String(bg.tags || "").trim();
         const bgNeg = String(bg.negative || "").trim();
-        expressions.forEach((expr, index) => {
+        for (let index = 0; index < emotionCount; index += 1) {
           const emotionNumber = index + 1;
-          const characterPrompt = [appearance, expr.trim(), bgTags]
+          // Background tags / negative go to person 1 only (it is one scene).
+          const prompts = members.map((member, m) => [member.appearance, genMemberExpression(member, index), m === 0 ? bgTags : ""]
             .map(ensureTrailingComma)
             .filter(Boolean)
-            .join("\n");
-          const combinedNegative = [negative, bgNeg].filter(Boolean).join(", ");
+            .join("\n"));
+          const negatives = members.map((member, m) => [member.negative, m === 0 ? bgNeg : ""].filter(Boolean).join(", "));
           items.push(Store.createItem({
             title: `${charCode}_${bgCode}_${emotionNumber}`,
             basePrompt: base,
             baseNegativePrompt: baseNeg,
-            characterPrompt,
-            negativePrompt: combinedNegative,
+            characterPrompt: joinCharacterColumn(prompts),
+            negativePrompt: joinCharacterColumn(negatives),
             count,
           }));
-        });
+        }
       }
     }
     return { items, base, baseNeg };
@@ -3784,6 +4260,7 @@
       ui.genChars.innerHTML = "";
       const chars = Array.isArray(stored.chars) && stored.chars.length ? stored.chars : [{}];
       chars.forEach((data) => ui.genChars.insertAdjacentHTML("beforeend", genCharRowHtml(data)));
+      ui.genChars.querySelectorAll(".ias-gc-members").forEach(renumberGenMembers);
     }
     if (ui.genBgs) {
       ui.genBgs.innerHTML = "";
@@ -3793,12 +4270,39 @@
     updateGenPreview();
   }
 
+  function renumberGenMembers(holder) {
+    holder.querySelectorAll(".ias-gc-member-name").forEach((el, i) => {
+      el.textContent = `인물 ${i + 2}`;
+    });
+  }
+
   function handleGenInput() {
     updateGenPreview();
     scheduleGenSave();
   }
 
   function handleGenClick(event) {
+    const addMember = event.target.closest(".ias-gc-add-member");
+    if (addMember) {
+      const holder = addMember.closest(".ias-gen-char-row")?.querySelector(".ias-gc-members");
+      if (holder) {
+        holder.insertAdjacentHTML("beforeend", genMemberHtml());
+        renumberGenMembers(holder);
+        holder.lastElementChild?.querySelector("textarea")?.focus();
+        updateGenPreview();
+        scheduleGenSave();
+      }
+      return;
+    }
+    const memberDel = event.target.closest(".ias-gc-member-del");
+    if (memberDel) {
+      const holder = memberDel.closest(".ias-gc-members");
+      memberDel.closest(".ias-gc-member")?.remove();
+      if (holder) renumberGenMembers(holder);
+      updateGenPreview();
+      scheduleGenSave();
+      return;
+    }
     const charDel = event.target.closest(".ias-gc-del");
     if (charDel) {
       const row = charDel.closest(".ias-gen-char-row");
@@ -5068,11 +5572,12 @@
     negInput.disabled = disabled;
     charField.append(charInput, negInput);
     ui.queueEditor.append(charField);
-    const blocks = attachCharacterBlocks(charInput, negInput, {
+    const blocks = trackCharEditor(attachCharacterBlocks(charInput, negInput, {
       title: "캐릭터",
-      hint: "블록을 비워 두면 이 항목은 현재 NovelAI 캐릭터 카드를 그대로 사용합니다.",
+      hint: "비워 두면 이 항목은 현재 NovelAI 캐릭터 카드를 그대로 사용합니다.",
       rows: editorExpanded ? 4 : 3,
-    });
+      ...charEditorOptions(),
+    }));
     blocks?.setDisabled(disabled);
   }
 
@@ -5709,6 +6214,23 @@
       .ias-cb-add:active:not(:disabled) { transform: scale(0.94); }
       .ias-cb-add:disabled { background: rgba(0,0,0,0.05); color: #b0b0b5; cursor: not-allowed; }
       .ias-cb-list { display: flex; flex-direction: column; gap: 10px; }
+      .ias-cb-group {
+        display: flex; flex-direction: column; gap: 10px;
+        border: 1.5px solid rgba(0, 122, 255, 0.28); border-radius: 16px;
+        background: rgba(0, 122, 255, 0.03); padding: 10px;
+      }
+      .ias-cb-group-head { font-size: 12px; font-weight: 700; color: #007aff; padding-left: 2px; }
+      .ias-cb-group .ias-cb { background: rgba(255, 255, 255, 0.7); }
+      .ias-cb-group .ias-cb-add { align-self: stretch; }
+      .ias-cb-barright { display: flex; align-items: center; gap: 6px; }
+      .ias-cb-mode {
+        border: none; border-radius: 10px; cursor: pointer; font-family: inherit;
+        padding: 7px 10px; font-size: 11.5px; font-weight: 600;
+        background: rgba(0,0,0,0.05); color: #6e6e73;
+      }
+      .ias-cb-mode:hover { background: rgba(0,0,0,0.09); color: #1c1c1e; }
+      .ias-cb-textmode { flex-direction: column; gap: 6px; }
+      .ias-cb-textmode .ias-hint { margin: 0 0 2px; }
       .ias-cb-empty {
         font-size: 12px; color: #8e8e93; line-height: 1.5;
         background: rgba(0,0,0,0.03); border: 1px dashed rgba(0,0,0,0.12);
@@ -5825,6 +6347,19 @@
       }
       .ias-gen-row-head { display: flex; align-items: center; gap: 8px; }
       .ias-gen-row-head .ias-input { flex: 1; }
+      .ias-gc-members { display: flex; flex-direction: column; gap: 8px; }
+      .ias-gc-member {
+        display: flex; flex-direction: column; gap: 8px;
+        padding: 10px; border-radius: 12px;
+        background: rgba(0, 122, 255, 0.04); border: 1px dashed rgba(0, 122, 255, 0.25);
+      }
+      .ias-gc-member-name { flex: 1; font-size: 12.5px; font-weight: 700; color: #007aff; }
+      .ias-gc-add-member {
+        border: none; border-radius: 10px; cursor: pointer; font-family: inherit;
+        padding: 8px 10px; font-size: 12px; font-weight: 600;
+        background: rgba(0, 122, 255, 0.10); color: #007aff;
+      }
+      .ias-gc-add-member:hover { background: rgba(0, 122, 255, 0.18); }
       .ias-gc-label { font-size: 11px; font-weight: 600; color: #8e8e93; margin: 2px 0 -3px 2px; }
       .ias-gen-empty { font-size: 12px; color: #b0b0b5; padding: 10px 2px; }
       .ias-icon-btn {
@@ -6636,16 +7171,24 @@
       status: panelShadow.querySelector(".ias-status"),
     };
 
-    ui.autoCharBlocks = attachCharacterBlocks(ui.autoCharInput, ui.autoCharNegInput, {
+    try {
+      const modeState = await storageGet("local", [CHAR_EDITOR_MODE_KEY]);
+      charEditorMode = modeState[CHAR_EDITOR_MODE_KEY] === "text" ? "text" : "blocks";
+    } catch (error) {
+      void error;
+    }
+    ui.autoCharBlocks = trackCharEditor(attachCharacterBlocks(ui.autoCharInput, ui.autoCharNegInput, {
       title: "캐릭터",
-      hint: "블록을 하나도 추가하지 않으면 현재 NovelAI 캐릭터 카드를 그대로 사용합니다.",
+      hint: "비워 두면 현재 NovelAI 캐릭터 카드를 그대로 사용합니다.",
       rows: 3,
-    });
-    ui.memoCharBlocks = attachCharacterBlocks(ui.memoCharInput, ui.memoCharNegInput, {
+      ...charEditorOptions(),
+    }));
+    ui.memoCharBlocks = trackCharEditor(attachCharacterBlocks(ui.memoCharInput, ui.memoCharNegInput, {
       title: "캐릭터",
       hint: "",
       rows: 3,
-    });
+      ...charEditorOptions(),
+    }));
 
     bindEvents();
 

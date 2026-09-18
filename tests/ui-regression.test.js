@@ -58,8 +58,9 @@ assert.match(source, /-webkit-backdrop-filter: blur\(26px\) saturate\(185%\)/);
 assert.match(source, /menuButton\.dataset\.action = config\.action/);
 assert.doesNotMatch(source, /actionSelect\.dataset\.role = "memo-actions"/);
 assert.ok(source.includes(`querySelectorAll('.character-prompt-input,[class*="character-prompt-input-"]')`));
-assert.ok(source.includes("child.matches?.('.sc-7d0727b8-33')"), 'trash must use the user-confirmed direct-child -33 icon');
-assert.ok(source.includes('width >= 15 && width <= 17.5'), 'trash selector must reject nested 14px Position icons');
+assert.ok(source.includes('const TRASH_ICON_CLASS = /^sc-[0-9a-z]+-33$/i;'), 'trash must match the -33 icon regardless of the build hash');
+assert.ok(source.includes('Array.from(button.children).find((child) =>'), 'trash icon must be a DIRECT child (nested Position icons are rejected)');
+assert.ok(source.includes('await commitActivePageEditor();'), 'Generate must commit the focused NovelAI editor first');
 assert.ok(source.includes('clickControlLikeUser(button);'));
 // Character cards are REUSED, not nuked and recreated. Deleting every card on
 // every queue item is what forced a full retype of every character prompt.
@@ -178,8 +179,16 @@ same(charBlocksToStrings([{ prompt: "", negative: "" }]), { prompt: "", negative
 same(splitCharacterBlocks("a ；； b"), ["a", "b"]);
 
 // The block UI is wired into all three editors.
-assert.ok(source.includes("ui.autoCharBlocks = attachCharacterBlocks(ui.autoCharInput, ui.autoCharNegInput"));
-assert.ok(source.includes("ui.memoCharBlocks = attachCharacterBlocks(ui.memoCharInput, ui.memoCharNegInput"));
+assert.ok(source.includes("ui.autoCharBlocks = trackCharEditor(attachCharacterBlocks(ui.autoCharInput, ui.autoCharNegInput"));
+assert.ok(source.includes("ui.memoCharBlocks = trackCharEditor(attachCharacterBlocks(ui.memoCharInput, ui.memoCharNegInput"));
 assert.ok(source.includes("attachCharacterBlocks(charInput, negInput"));
 
 console.log("ui regression tests passed");
+
+// Stop pressed while the next queue item's prompts are being typed must end
+// the run: no Generate click, no start sound.
+assert.ok(source.includes('if (queueRun.active && !keepQueue) {'), 'user stop must cancel the queue even while advancing');
+assert.ok(source.includes('await stopAutoGenerate({ playAudio: false, keepQueue: true });'), 'internal reset must not cancel its own queue');
+assert.ok(source.includes('shouldContinue: () => queueRun.active && runToken === queueRun.token,'), 'queue must pass a cancellation check');
+assert.equal((source.match(/if \(!stillWanted\(\)\) \{/g) || []).length, 3, 'cancellation is checked before negatives, before activation and before Generate');
+assert.ok(source.includes('await activateEditorForWrite(editor);'), 'each character card is selected before typing into it');
