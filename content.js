@@ -9082,6 +9082,11 @@
     }
     panelHost = document.createElement("div");
     panelHost.id = HOST_ID;
+    try {
+      panelHost.dataset.ext = chrome.runtime.id;
+    } catch (error) {
+      void error;
+    }
     panelShadow = panelHost.attachShadow({ mode: "open" });
     panelShadow.innerHTML = getTemplate();
     document.documentElement.append(panelHost);
@@ -9371,9 +9376,64 @@
     }
   }
 
-  function init() {
+  // ---------------------------------------------------------------------------
+  // Hand-off to the Web Store copy. A copy loaded with "압축해제된 확장 프로그램
+  // 로드" (installType "development") steps aside by itself once another copy
+  // of this panel is on the page: it removes its panel, the background stops
+  // its saving, and a page offers to remove it. The store copy never steps
+  // aside. Memos/queue/settings move over through the page mirror (SafeStore).
+  // ---------------------------------------------------------------------------
+  let retired = false;
+  function otherCopyPresent() {
+    return Array.from(document.querySelectorAll(`[id="${HOST_ID}"]`)).some((el) => el !== panelHost && el.dataset.ext !== chrome.runtime.id);
+  }
+  function retireIfReplaced() {
+    if (retired || !otherCopyPresent()) {
+      return;
+    }
+    chrome.runtime.sendMessage({ action: "retireIfDevCopy" }, (response) => {
+      void chrome.runtime.lastError;
+      if (!response?.retired) {
+        return;
+      }
+      retired = true;
+      try {
+        void stopAutoGenerate({ quiet: true });
+      } catch (error) {
+        void error;
+      }
+      panelHost?.remove();
+      panelHost = null;
+    });
+  }
+  function watchForStoreCopy() {
+    retireIfReplaced();
+    new MutationObserver(() => retireIfReplaced()).observe(document.documentElement, { childList: true });
+  }
+
+  async function init() {
     if (!location.href.startsWith("https://novelai.net/image")) {
       return;
+    }
+    const state = await new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage({ action: "devCopyState" }, (response) => {
+          void chrome.runtime.lastError;
+          resolve(response || {});
+        });
+      } catch (error) {
+        resolve({});
+      }
+    });
+    if (state.retired) {
+      // Handed over earlier. Stay out while the store copy is here; if it has
+      // been removed since, come back.
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      if (otherCopyPresent()) {
+        retired = true;
+        return;
+      }
+      chrome.runtime.sendMessage({ action: "unretireDevCopy" }, () => void chrome.runtime.lastError);
     }
     injectFontFace();
     void loadDiagLog();
@@ -9385,11 +9445,12 @@
       scope: (block) => Boolean(block.closest(".ProseMirror")),
       textareas: (area) => Boolean(panelShadow) && area.getRootNode() === panelShadow && !area.closest(".ias-tour-layer"),
     });
+    setTimeout(watchForStoreCopy, 1500);
   }
 
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", init, { once: true });
+    document.addEventListener("DOMContentLoaded", () => void init(), { once: true });
   } else {
-    init();
+    void init();
   }
 })(typeof globalThis !== "undefined" ? globalThis : window);

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NAI 자동저장 · 스토어 버전으로 옮겼어요</title>
+  <style>
+    :root { --bg: #F2F2F7; --card: rgba(255,255,255,0.75); --text: #1D1D1F; --text2: #6E6E73; --accent: #007AFF; --danger: #FF3B30; color-scheme: light dark; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #000; --card: rgba(44,44,46,0.75); --text: #F5F5F7; --text2: #A1A1A6; --accent: #0A84FF; --danger: #FF453A; } }
+    body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: radial-gradient(70% 60% at 20% 10%, rgba(0,122,255,0.18), transparent), radial-gradient(60% 60% at 90% 90%, rgba(255,55,95,0.14), transparent), var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; word-break: keep-all; }
+    .card { width: min(420px, calc(100vw - 32px)); padding: 28px 26px 22px; border-radius: 20px; background: var(--card); -webkit-backdrop-filter: blur(30px) saturate(180%); backdrop-filter: blur(30px) saturate(180%); box-shadow: 0 20px 60px rgba(0,0,0,0.15); text-align: center; }
+    .ok { width: 52px; height: 52px; margin: 0 auto 14px; border-radius: 26px; background: #34C759; display: flex; align-items: center; justify-content: center; }
+    h1 { margin: 0 0 10px; font-size: 21px; }
+    p { margin: 0 0 8px; color: var(--text2); font-size: 14px; line-height: 1.55; }
+    button { width: 100%; height: 44px; margin-top: 16px; border: none; border-radius: 12px; font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; }
+    .remove { background: var(--danger); color: #fff; }
+    .later { margin-top: 8px; background: transparent; color: var(--accent); font-weight: 500; }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="ok"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div>
+    <h1>스토어 버전으로 옮겼어요</h1>
+    <p>웹스토어에서 설치한 NAI 자동저장이 이제 일해요. 메모·대기열·설정은 그쪽으로 넘어갔어요.</p>
+    <p>이 예전(압축해제) 버전은 패널도 저장도 멈췄으니 지워도 돼요.</p>
+    <button class="remove" type="button" id="remove">이 예전 버전 지우기</button>
+    <button class="later" type="button" id="later">나중에</button>
+  </main>
+  <script src="handoff.js"></script>
+</body>
+</html>

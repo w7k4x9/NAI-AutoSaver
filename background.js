@@ -160,6 +160,21 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return false;
   }
 
+  if (request?.action === "devCopyState") {
+    void chrome.storage.local.get(RETIRED_KEY).then((r) => sendResponse({ retired: Boolean(r[RETIRED_KEY]) }));
+    return true;
+  }
+
+  if (request?.action === "unretireDevCopy") {
+    void chrome.storage.local.remove(RETIRED_KEY).then(() => sendResponse({ ok: true }));
+    return true;
+  }
+
+  if (request?.action === "retireIfDevCopy") {
+    void retireIfDevCopy().then((retired) => sendResponse({ retired }));
+    return true;
+  }
+
   if (request?.action === "downloadImage" && request.imageUrl) {
     void saveGeneratedImage(request).then(sendResponse, (error) => sendResponse({ ok: false, error: String(error?.message || error) }));
     return true;
@@ -265,7 +280,25 @@ chrome.downloads.onChanged.addListener((delta) => {
   naiDownloads.delete(delta.id);
 });
 
+// A copy loaded unpacked hands over to the Web Store copy (see content.js).
+const RETIRED_KEY = "naiAutoSaver.retiredForStore";
+async function retireIfDevCopy() {
+  try {
+    const self = await chrome.management.getSelf();
+    if (self.installType !== "development") return false;
+    const already = (await chrome.storage.local.get(RETIRED_KEY))[RETIRED_KEY];
+    await chrome.storage.local.set({ [RETIRED_KEY]: { at: Date.now() } });
+    if (!already) await chrome.tabs.create({ url: chrome.runtime.getURL("handoff.html") });
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
 async function saveGeneratedImage(request) {
+  if ((await chrome.storage.local.get(RETIRED_KEY))[RETIRED_KEY]) {
+    return { ok: false, error: "스토어 버전으로 옮겨서 이 버전은 저장하지 않아요." };
+  }
   const folder = sanitizeDownloadFolder(request.folder);
   const format = await resolveSaveFormat(request.format);
   const converted = await convertForSave(request.imageUrl, format);
