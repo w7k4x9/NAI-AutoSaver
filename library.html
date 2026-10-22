@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>보관함 · NAI 자동저장</title>
+  <link rel="icon" href="icons/icon32.png">
+  <link rel="stylesheet" href="library.css">
+</head>
+<body data-theme="dark">
+  <div class="app">
+    <aside class="side">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"><path d="M11 3l1.9 5.1L18 10l-5.1 1.9L11 17l-1.9-5.1L4 10l5.1-1.9z"/></svg></span>
+        <span class="brand-name">보관함</span>
+      </div>
+      <nav class="nav" aria-label="모아 보기"></nav>
+      <div class="side-label">캐릭터</div>
+      <nav class="nav nav-chars" aria-label="캐릭터"></nav>
+      <div class="grow"></div>
+      <div class="side-label">연결</div>
+      <div class="folder-box" data-state="none"></div>
+      <div class="folder-box notion-box" data-state="none"></div>
+    </aside>
+
+    <main class="main">
+      <header class="toolbar">
+        <div class="tb-left"><h1 class="title">전체</h1><span class="count"></span></div>
+        <div class="search-wrap">
+          <label class="search">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+            <span class="sr">프롬프트로 찾기</span>
+            <input class="search-input" type="search" placeholder="프롬프트로 찾기 · 예: 교실 웃음 (빼려면 -hat)" autocomplete="off">
+          </label>
+        </div>
+        <div class="tb-right">
+        <button class="btn plain pick-all" type="button" title="보이는 그림 모두 고르기 (⌘/Ctrl+A)">모두 선택</button>
+        <button class="btn plain clear-sel" type="button" hidden title="Esc">선택 해제</button>
+        <button class="btn plain open-files" type="button" title="다른 폴더에 있는 그림도 열어서 프롬프트를 보거나 사본을 만들어요. 보관함에는 넣지 않아요. 창에 끌어다 놓아도 돼요.">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3.5H7a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8.5z"/><path d="M14 3.5v5h5"/></svg>
+          파일 열기…
+        </button>
+        </div>
+        <input class="file-input" type="file" accept="image/png,image/webp,.png,.webp" multiple hidden>
+      </header>
+
+      <div class="body">
+        <section class="gallery" aria-label="그림">
+          <div class="banner" hidden></div>
+          <div class="grid" role="listbox" aria-multiselectable="true" aria-label="그림 목록"></div>
+          <div class="sentinel" aria-hidden="true"></div>
+          <div class="empty" hidden></div>
+        </section>
+        <aside class="inspector" aria-label="자세히"></aside>
+      </div>
+    </main>
+  </div>
+
+  <div class="lightbox" hidden role="dialog" aria-modal="true" aria-label="크게 보기">
+    <div class="lb-top"><span class="lb-name"></span><span class="lb-count"></span><button class="lb-close" type="button" aria-label="닫기" title="닫기 (Esc)">×</button></div>
+    <div class="lb-stage"><img class="lb-img" alt=""></div>
+    <button class="lb-nav lb-prev" type="button" aria-label="이전 그림">‹</button>
+    <button class="lb-nav lb-next" type="button" aria-label="다음 그림">›</button>
+    <div class="lb-note" hidden>작은 미리보기라 흐릿해요. 왼쪽 아래에서 NovelAI 폴더를 연결하면 원본 화질로 보여요.</div>
+    <div class="lb-hint">←/→ 넘기기 · 그림 누르면 실제 크기 · Esc 닫기</div>
+  </div>
+
+  <div class="drop-overlay" hidden>
+    <div class="drop-card">
+      <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V3"/><path d="M7 10l5 5 5-5"/><path d="M5 15v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/></svg>
+      <strong>여기에 놓으면 그림 정보를 읽어요</strong>
+      <span>읽은 뒤 메타데이터 지운 사본도 만들 수 있어요</span>
+    </div>
+  </div>
+  <div class="toast" role="status" aria-live="polite" hidden></div>
+  <dialog class="dialog"></dialog>
+  <dialog class="censor-dialog" aria-label="검열 사본 만들기"></dialog>
+
+  <script src="nai-meta.js"></script>
+  <script src="lib-db.js"></script>
+  <script src="tag-ko.js"></script>
+  <script src="vendor/ort/ort.wasm.min.js"></script>
+  <script src="censor.js"></script>
+  <script src="notion.js"></script>
+  <script src="library.js"></script>
+</body>
+</html>

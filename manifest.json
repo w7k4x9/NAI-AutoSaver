@@ -1,0 +1,76 @@
+{
+  "manifest_version": 3,
+  "name": "NAI 자동저장",
+  "version": "1.9.3",
+  "description": "NovelAI 이미지 생성 보조(비공식): 자동 생성·대기열·조합 생성, 날짜/캐릭터별 자동 저장, 프롬프트 메모 자동 백업.",
+  "permissions": [
+    "downloads",
+    "notifications",
+    "scripting",
+    "storage",
+    "offscreen"
+  ],
+  "host_permissions": [
+    "https://novelai.net/*"
+  ],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://novelai.net/image*"
+      ],
+      "js": [
+        "key-shield.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://novelai.net/image*"
+      ],
+      "js": [
+        "queue-store.js",
+        "safe-store.js",
+        "tag-ko.js",
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "assets/start.mp3",
+        "assets/stop.mp3",
+        "fonts/PretendardVariable.woff2",
+        "data/tags-ko.json"
+      ],
+      "matches": [
+        "https://novelai.net/*"
+      ]
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"
+  },
+  "optional_host_permissions": [
+    "https://api.notion.com/*"
+  ]
+}
