@@ -29,6 +29,7 @@
     dropped: [],        // files opened/dropped this session (not stored)
     files: new Map(),   // id -> File for dropped pictures
     nav: "all",
+    cullNav: "",        // 셀렉 / 별점 filter, combined with nav
     query: "",
     sel: [],
     anchor: null,
@@ -139,9 +140,11 @@
       const count = all.filter(NAV[key].test).length;
       nav.append(navButton(key, NAV[key].title, NAV[key].icon, count));
     }
-    renderCullNav(all);
+    // 셀렉 and 캐릭터 combine: counts on each side follow the other's choice.
+    renderCullNav(all.filter(navTest(state.nav)));
+    const cullTest = state.cullNav ? navTest(state.cullNav) : () => true;
     const chars = new Map();
-    for (const e of all) {
+    for (const e of all.filter(cullTest)) {
       if (e.char) chars.set(e.char, (chars.get(e.char) || 0) + 1);
     }
     const list = $(".nav-chars");
@@ -152,9 +155,10 @@
     renderFolderBox();
     renderNotionBox();
   }
+  const isCullKey = (key) => key.startsWith("cull:") || key.startsWith("rating:");
   function navButton(key, label, iconName, count) {
     const button = el("button", {
-      class: "nav-item", type: "button", "aria-current": String(state.nav === key),
+      class: "nav-item", type: "button", "aria-current": String(isCullKey(key) ? state.cullNav === key : state.nav === key),
       onclick: () => setNav(key),
       html: `${icon(iconName)}<span class="label"></span><span class="num">${count.toLocaleString("ko-KR")}</span>`,
     });
@@ -162,7 +166,8 @@
     return button;
   }
   function setNav(key) {
-    state.nav = key;
+    if (isCullKey(key)) state.cullNav = state.cullNav === key ? "" : key; // press again to turn off
+    else state.nav = key;
     state.sel = [];
     render();
   }
@@ -217,10 +222,13 @@
   function render() {
     const terms = parseQuery(state.query);
     const test = navTest(state.nav);
-    state.shown = allEntries().filter((e) => test(e) && matches(e, terms));
+    const cullTest = state.cullNav ? navTest(state.cullNav) : () => true;
+    state.shown = allEntries().filter((e) => test(e) && cullTest(e) && matches(e, terms));
     const visible = new Set(state.shown.map((e) => e.id));
     state.sel = state.sel.filter((id) => visible.has(id));
-    $(".title").textContent = navTitle(state.nav);
+    $(".title").textContent = state.cullNav
+      ? (state.nav === "all" ? navTitle(state.cullNav) : `${navTitle(state.cullNav)} · ${navTitle(state.nav)}`)
+      : navTitle(state.nav);
     state.found = terms.length > 0;
     renderPickBar();
     renderSidebar();
@@ -578,6 +586,7 @@
     const ids = state.shown.map((e) => e.id);
     $(".lb-name").textContent = entry.name;
     $(".lb-cull").innerHTML = cullSummaryHtml(id);
+    syncLightboxActions(id);
     $(".lb-count").textContent = ids.length > 1 ? `${ids.indexOf(id) + 1} / ${ids.length}` : "";
     box.dataset.actual = "false";
     if (lb.url) URL.revokeObjectURL(lb.url);
@@ -592,6 +601,18 @@
     }
     lb.url = URL.createObjectURL(file);
     img.src = lb.url;
+  }
+  function syncLightboxActions(id) {
+    const c = cullOf(id);
+    document.querySelectorAll("[data-lb-label]").forEach((b) => b.setAttribute("aria-pressed", String(c.label === b.dataset.lbLabel)));
+    document.querySelectorAll("[data-lb-star]").forEach((b) => { b.dataset.on = String(Number(b.dataset.lbStar) <= (c.rating || 0)); });
+  }
+  function lightboxCull(action) {
+    if (!lb.id) return;
+    applyCullAction([lb.id], action);
+    $(".lb-cull").innerHTML = cullSummaryHtml(lb.id);
+    syncLightboxActions(lb.id);
+    if ("label" in action && action.label && cullOf(lb.id).label) setTimeout(() => stepLightbox(1), 160); // keep going, like a culling viewer
   }
   function openLightbox(id) {
     $(".lightbox").hidden = false;
@@ -618,6 +639,12 @@
   function bindLightbox() {
     const box = $(".lightbox");
     $(".lb-close").addEventListener("click", closeLightbox);
+    $(".lb-actions").addEventListener("click", (event) => {
+      const label = event.target.closest("[data-lb-label]");
+      if (label) lightboxCull({ label: label.dataset.lbLabel });
+      const star = event.target.closest("[data-lb-star]");
+      if (star) lightboxCull({ rating: Number(star.dataset.lbStar) });
+    });
     $(".lb-prev").addEventListener("click", () => stepLightbox(-1));
     $(".lb-next").addEventListener("click", () => stepLightbox(1));
     $(".lb-stage").addEventListener("click", (event) => {
@@ -631,9 +658,7 @@
       const action = cullAction(event);
       if (action && lb.id) {
         event.preventDefault();
-        applyCullAction([lb.id], action);
-        $(".lb-cull").innerHTML = cullSummaryHtml(lb.id);
-        if ("label" in action && action.label) setTimeout(() => stepLightbox(1), 120); // keep going, like a culling viewer
+        lightboxCull(action);
         return;
       }
       if (event.key === "Escape" || event.key === " ") { event.preventDefault(); closeLightbox(); }
@@ -643,11 +668,11 @@
   }
 
   // ---------------------------------------------------------------- 셀렉 ---
-  // Culling marks per picture: a label (채택 / 보류 / 탈락) and 0–5 stars. Kept in
+  // Culling marks per picture: a label (채택 / B컷 / 탈락) and 0–5 stars. Kept in
   // the library database next to the entries (not inside them, so re-reading a
   // folder never wipes them). Keys follow the physical key so they also work
-  // while typing Korean: Q/P 채택, W 보류, E/X 탈락, R/U 지우기, 1–5 별점, 0 별점 지우기.
-  const LABELS = { pick: "채택", hold: "보류", reject: "탈락" };
+  // while typing Korean: Q/P 채택, W B컷, E/X 탈락, R/U 지우기, 1–5 별점, 0 별점 지우기.
+  const LABELS = { pick: "채택", hold: "B컷", reject: "탈락" };
   const CULL_KV = "cull";
   state.cull = new Map();
   let cullTimer = null;
@@ -738,7 +763,7 @@
       const badge = tile.querySelector(".tile-cull");
       if (badge) badge.innerHTML = tileCullHtml(id);
     }
-    renderCullNav(allEntries());
+    renderSidebar();
     if (state.sel.some((id) => ids.includes(id))) renderInspector();
     if (!$(".compare").hidden) renderCompare({ keepImages: true });
   }
@@ -751,25 +776,124 @@
       const label = cullOf(e.id).label;
       if (label) counts[label] += 1;
     }
-    const icons = { pick: "check_circle", hold: "pause", reject: "close" };
+    const icons = { pick: "check_circle", hold: "counter_2", reject: "minus_circle" };
     for (const label of ["pick", "hold", "reject"]) nav.append(navButton(`cull:${label}`, LABELS[label], icons[label], counts[label]));
     if (counts.pick + counts.hold + counts.reject) {
       nav.append(navButton("cull:none", "안 고른 그림", "image", all.length - counts.pick - counts.hold - counts.reject));
     }
-    const current = state.nav.startsWith("rating:") ? Number(state.nav.slice(7)) : 0;
+    const current = state.cullNav.startsWith("rating:") ? Number(state.cullNav.slice(7)) : 0;
     const row = el("div", { class: "rating-filter", title: "별점이 이만큼 이상인 그림만 봐요" }, [el("span", { class: "label", text: "별점" })]);
     for (let n = 1; n <= 5; n += 1) {
-      row.append(el("button", { type: "button", "data-on": String(n <= current), "aria-label": `별점 ${n}개 이상`, text: "★", onclick: () => setNav(current === n ? "all" : `rating:${n}`) }));
+      row.append(el("button", { type: "button", "data-on": String(n <= current), "aria-label": `별점 ${n}개 이상`, text: "★", onclick: () => setNav(`rating:${n}`) }));
     }
     nav.append(row);
+    if (counts.pick + counts.hold) {
+      nav.append(el("button", { class: "nav-item cull-export", type: "button", title: "채택·B컷을 캐릭터별 폴더로 나눠서 따로 저장해요", html: `${icon("folder")}<span class="label">폴더로 나눠 저장…</span>`, onclick: () => openCullExport() }));
+    }
+  }
+
+  // ------------------------------------------------- 셀렉 → 폴더로 나눠 저장 ---
+  // Copies (originals untouched) into 다운로드/NovelAI/_셀렉/채택/김춘자/… so the
+  // picks and B컷 of every character end up in their own folders.
+  const CULL_FOLDER = "_셀렉";
+  function openCullExport() {
+    const { dialog, body, right: save } = notionDialogShell("폴더로 나눠 저장", { rightLabel: "저장" });
+    const scopeIds = new Set((state.shown || []).map((e) => e.id));
+    const inScope = (onlyShown) => allEntries().filter((e) => !onlyShown || scopeIds.has(e.id));
+    const countOf = (label, onlyShown) => inScope(onlyShown).filter((e) => cullOf(e.id).label === label).length;
+    const boxes = {};
+    const labelRows = ["pick", "hold", "reject"].map((label) => {
+      const box = el("input", { type: "checkbox", class: "ios-check", id: `cx-${label}`, checked: label !== "reject" });
+      boxes[label] = box;
+      return el("label", { class: "ios-row", for: `cx-${label}` }, [el("span", { class: "grow" }, [document.createTextNode(LABELS[label]), el("small", { "data-count": label })]), box]);
+    });
+    const byChar = el("input", { type: "checkbox", class: "ios-switch", id: "cx-char", checked: true });
+    const onlyShown = el("input", { type: "checkbox", class: "ios-switch", id: "cx-shown", checked: false });
+    const orig = el("input", { type: "radio", name: "cx-file", class: "ios-check", id: "cx-orig", checked: true });
+    const clean = el("input", { type: "radio", name: "cx-file", class: "ios-check", id: "cx-clean" });
+    const preview = el("p", { class: "sheet-note" });
+    const update = () => {
+      for (const label of ["pick", "hold", "reject"]) body.querySelector(`[data-count="${label}"]`).textContent = `${countOf(label, onlyShown.checked)}장`;
+      const label = ["pick", "hold", "reject"].find((l) => boxes[l].checked) || "pick";
+      const sample = inScope(onlyShown.checked).find((e) => cullOf(e.id).label === label) || { name: "김춘자_교실 웃음 (3)", char: "김춘자" };
+      preview.textContent = `→ 다운로드/${state.saveFolder}/${CULL_FOLDER}/${LABELS[label]}/${byChar.checked ? `${sample.char || "기타"}/` : ""}${sample.name}.${sample.format || "webp"}`;
+      const total = ["pick", "hold", "reject"].filter((l) => boxes[l].checked).reduce((n, l) => n + countOf(l, onlyShown.checked), 0);
+      save.textContent = total ? `${total}장 저장` : "저장";
+      save.disabled = !total;
+    };
+    body.append(
+      el("p", { class: "sheet-note", text: "원본은 그대로 두고 복사본을 라벨 · 캐릭터별 폴더에 따로 저장해요." }),
+      el("div", { class: "ios-group-label", text: "무엇을" }),
+      el("div", { class: "ios-group" }, labelRows),
+      el("div", { class: "ios-group-label", text: "나누는 방법" }),
+      el("div", { class: "ios-group" }, [
+        el("label", { class: "ios-row", for: "cx-char" }, [el("span", { class: "grow", text: "캐릭터별 폴더로 나누기" }), byChar]),
+        el("label", { class: "ios-row", for: "cx-shown" }, [el("span", { class: "grow" }, [document.createTextNode("지금 보이는 그림 중에서만"), el("small", { text: `「${$(".title").textContent}」 ${scopeIds.size}장` })]), onlyShown]),
+      ]),
+      el("div", { class: "ios-group-label", text: "파일" }),
+      el("div", { class: "ios-group" }, [
+        el("label", { class: "ios-row", for: "cx-orig" }, [el("span", { class: "grow" }, [document.createTextNode("원본 그대로"), el("small", { text: "프롬프트·시드가 들어 있어요" })]), orig]),
+        el("label", { class: "ios-row", for: "cx-clean" }, [el("span", { class: "grow" }, [document.createTextNode("메타데이터 지운 사본"), el("small", { text: "바로 올려도 되는 파일" })]), clean]),
+      ]),
+      preview,
+    );
+    body.addEventListener("change", update);
+    update();
+    save.addEventListener("click", () => {
+      const labels = ["pick", "hold", "reject"].filter((l) => boxes[l].checked);
+      const list = inScope(onlyShown.checked).filter((e) => labels.includes(cullOf(e.id).label));
+      dialog.close();
+      void exportCulled(list, { byChar: byChar.checked, clean: clean.checked });
+    });
+  }
+
+  async function exportCulled(list, { byChar, clean }) {
+    if (!list.length) return;
+    let made = 0;
+    let lastId = null;
+    const missing = [];
+    for (let i = 0; i < list.length; i += 1) {
+      const entry = list[i];
+      toast(`폴더로 나눠 저장하는 중… ${i + 1} / ${list.length}`);
+      const file = await originalFile(entry, { ask: i === 0 || Boolean(state.root) });
+      if (!file) {
+        missing.push(entry.name);
+        if (!state.root && !state.files.has(entry.id)) break;
+        continue;
+      }
+      try {
+        let bytes = new Uint8Array(await file.arrayBuffer());
+        if (clean) {
+          const stripped = await NAIMeta.strip(bytes);
+          if (!stripped.bytes) throw new Error(stripped.error || "지우지 못함");
+          bytes = stripped.bytes;
+        }
+        const ext = NAIMeta.imageType(bytes) || "png";
+        const safe = (text) => String(text || "").replace(/[\\/:*?"<>|]/g, "_").trim();
+        const parts = [state.saveFolder, CULL_FOLDER, LABELS[cullOf(entry.id).label] || "기타"];
+        if (byChar) parts.push(safe(entry.char) || "기타");
+        const dl = await downloadBlob(new Blob([bytes], { type: `image/${ext}` }), `${parts.join("/")}/${safe(entry.name)}.${ext}`);
+        if (!dl.ok) throw new Error("저장이 중단됐어요");
+        lastId = dl.id;
+        made += 1;
+      } catch (error) {
+        missing.push(entry.name);
+      }
+    }
+    if (made) {
+      toast(`${made}장을 ${CULL_FOLDER} 폴더에 나눠 저장했어요${missing.length ? ` · ${missing.length}장은 원본을 못 찾았어요` : ""}.`, missing.length ? "warn" : "ok", lastId != null ? { label: "폴더에서 보기", run: () => chrome.downloads.show(lastId) } : null);
+    } else if (missing.length) {
+      toast("원본을 읽지 못해서 저장하지 못했어요. 왼쪽 아래에서 NovelAI 폴더를 연결해 주세요.", "warn");
+    }
   }
 
   // ------------------------------------------------------------- 비교 ---
   // Pictures side by side. Opened for the selected pictures, or for every
   // picture with the same name (김춘자_교실 웃음 (1), (2)…), then mark them.
-  // Two ways to look: 한눈에 (every picture at once) and 1:1 (a fixed 기준 on
-  // the left, candidates one by one on the right; a better one becomes 기준).
-  const cmp = { ids: [], focus: 0, filter: "all", group: null, urls: new Map(), token: 0, mode: "grid", a: null, b: null, side: "b", actual: false };
+  // Two ways to look: 한눈에 (every picture at once) and 1:1 (two at a time:
+  // pick the better one, the winner stays for the next round, and the last one
+  // standing is the best of the group).
+  const cmp = { ids: [], focus: 0, filter: "all", group: null, urls: new Map(), token: 0, mode: "grid", side: "b", actual: false, t: null };
   const CMP_MODE_KEY = "naiAutoSaver.compareMode";
   try {
     cmp.mode = localStorage.getItem(CMP_MODE_KEY) === "pair" ? "pair" : "grid";
@@ -777,36 +901,51 @@
     void error;
   }
   const CMP_HINTS = {
-    grid: "←/→ 고르기 · Q 채택 · W 보류 · E 탈락 · R 지우기 · 1–5 별점 · 두 번 누르면 크게 · M 1:1로 · Esc 닫기",
-    pair: "←/→ 후보 넘기기 · ↑ 또는 Enter 후보를 기준으로 · Q/W/E는 고른 쪽에 · Z 확대(양쪽 같이) · M 한눈에로 · Esc 닫기",
+    grid: "←/→ 고르기 · Q 채택 · W B컷 · E 탈락 · R 지우기 · 1–5 별점 · 두 번 누르면 크게 · M 1:1로 · Esc 닫기",
+    pair: "← 왼쪽이 더 좋아요 · → 오른쪽이 더 좋아요 · Backspace 되돌리기 · Z 둘 다 확대 · M 한눈에로 · Esc 닫기",
   };
-  // Keep 기준(a) and 후보(b) valid for what is visible now.
-  function settlePair(visible) {
-    if (!visible.includes(cmp.a)) cmp.a = visible[0] || null;
-    const others = visible.filter((id) => id !== cmp.a);
-    if (!others.includes(cmp.b)) cmp.b = others[0] || null;
+  // 1:1 is a small tournament over what was visible when it started.
+  function startTournament() {
+    const list = compareVisible();
+    cmp.t = { champ: list[0] || null, queue: list.slice(1), losers: [], history: [], total: list.length };
+    cmp.side = null;
   }
-  function stepCandidate(step) {
-    const others = compareVisible().filter((id) => id !== cmp.a);
-    if (!others.length) return;
-    const i = others.indexOf(cmp.b);
-    cmp.b = others[(i + step + others.length) % others.length];
-    cmp.side = "b";
+  function tournament() {
+    if (!cmp.t) startTournament();
+    return cmp.t;
   }
-  function promoteCandidate() {
-    if (!cmp.b) return;
-    const old = cmp.a;
-    const visible = compareVisible();
-    cmp.a = cmp.b;
-    // carry on with the picture after the new 기준 (the old one is already seen)
-    const at = visible.indexOf(cmp.a);
-    const rest = [...visible.slice(at + 1), ...visible.slice(0, at)].filter((id) => id !== cmp.a && id !== old);
-    cmp.b = rest[0] || (old !== cmp.a ? old : null);
-    cmp.side = "b";
+  function chooseSide(side) {
+    const t = tournament();
+    if (!t.queue.length) return;
+    cmp.side = null;
+    t.history.push({ champ: t.champ, queue: t.queue.slice(), losers: t.losers.slice() });
+    const challenger = t.queue.shift();
+    if (side === "b") {
+      t.losers.push(t.champ);
+      t.champ = challenger;
+    } else {
+      t.losers.push(challenger);
+    }
+    cmp.actual = false;
+  }
+  function undoChoice() {
+    const t = tournament();
+    const last = t.history.pop();
+    if (!last) return;
+    Object.assign(t, last);
+    cmp.actual = false;
+  }
+  function finishTournament(rest) {
+    const t = tournament();
+    if (!t.champ) return;
+    setCull([t.champ], { label: "pick" });
+    if (rest) setCull(t.losers, { label: rest });
+    toast(rest ? `베스트 1장은 채택, 나머지 ${t.losers.length}장은 ${LABELS[rest]}으로 표시했어요.` : "베스트 1장을 채택했어요.", "ok");
   }
   function setCompareMode(mode) {
     cmp.mode = mode === "pair" ? "pair" : "grid";
     cmp.actual = false;
+    cmp.t = null;
     try {
       localStorage.setItem(CMP_MODE_KEY, cmp.mode);
     } catch (error) {
@@ -846,8 +985,7 @@
     cmp.ids = ids.slice(0, 48);
     cmp.group = group;
     cmp.focus = 0;
-    cmp.a = null;
-    cmp.b = null;
+    cmp.t = null;
     cmp.side = "b";
     cmp.actual = false;
     $(".compare").hidden = false;
@@ -896,7 +1034,7 @@
     $(".cmp-title").textContent = cmp.group || `고른 ${cmp.ids.length}장`;
     const groups = cmp.group ? groupsInView() : [];
     const at = groups.findIndex(([key]) => key === cmp.group);
-    $(".cmp-sub").textContent = [`${visible.length} / ${cmp.ids.length}장`, `채택 ${counts.pick}`, `보류 ${counts.hold}`, `탈락 ${counts.reject}`, groups.length > 1 && at >= 0 ? `묶음 ${at + 1} / ${groups.length}` : ""].filter(Boolean).join(" · ");
+    $(".cmp-sub").textContent = [`${visible.length} / ${cmp.ids.length}장`, `채택 ${counts.pick}`, `B컷 ${counts.hold}`, `탈락 ${counts.reject}`, groups.length > 1 && at >= 0 ? `묶음 ${at + 1} / ${groups.length}` : ""].filter(Boolean).join(" · ");
     box.querySelectorAll(".cmp-nav").forEach((b) => { b.hidden = !(groups.length > 1); });
     box.querySelectorAll("[data-cmp-filter]").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.cmpFilter === cmp.filter)));
     box.querySelectorAll("[data-cmp-mode]").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.cmpMode === cmp.mode)));
@@ -931,38 +1069,62 @@
         el("span", { class: "cmp-name", text: counterOf(entry) ? `(${counterOf(entry)})` : entry.name }),
         el("span", { class: "tile-cull", html: tileCullHtml(id) }),
       ]));
+      const quick = el("div", { class: "cmp-quick", role: "group", "aria-label": "셀렉" });
+      for (const l of ["pick", "hold", "reject"]) quick.append(el("button", { type: "button", "data-quick": l, "aria-pressed": String(label === l), text: LABELS[l] }));
+      cell.append(quick);
       grid.append(cell);
     });
     if (!keepImages) void loadCompareOriginals(visible);
     grid.querySelector('.cmp-cell[data-focus="true"]')?.scrollIntoView({ block: "nearest" });
   }
   function renderPair(grid, visible, keepImages) {
-    settlePair(visible);
-    const old = keepImages ? new Map([...grid.querySelectorAll(".cmp-cell")].map((c) => [c.dataset.id, c.querySelector("img")])) : new Map();
+    const t = tournament();
+    const old = new Map([...grid.querySelectorAll(".cmp-cell")].map((c) => [c.dataset.id, c.querySelector("img")]));
     grid.innerHTML = "";
-    grid.style.gridTemplateColumns = cmp.b ? "repeat(2, minmax(0, 1fr))" : "minmax(0, 1fr)";
+    const done = !t.queue.length;
+    const shown = done ? [["a", t.champ]] : [["a", t.champ], ["b", t.queue[0]]];
+    grid.style.gridTemplateColumns = `repeat(${shown.length}, minmax(0, 1fr))`;
     grid.style.gridTemplateRows = "minmax(0, 1fr)";
-    const others = visible.filter((id) => id !== cmp.a);
-    for (const side of cmp.b ? ["a", "b"] : ["a"]) {
-      const id = cmp[side];
+    const round = t.history.length + 1;
+    if (!done) $(".cmp-sub").textContent = `둘 중 더 좋은 쪽을 골라요 · ${round} / ${Math.max(1, t.total - 1)}번째`;
+    for (const [side, id] of shown) {
       const entry = byId(id);
       if (!entry) continue;
-      const label = cullOf(id).label;
-      const cell = el("div", { class: "cmp-cell", "data-id": id, "data-side": side, "data-focus": String(cmp.side === side), "data-cull": label || null });
+      // No highlight while choosing; only after a side was clicked for Q/W/E.
+      const cell = el("div", { class: "cmp-cell", "data-id": id, "data-side": side, "data-focus": String(!done && cmp.side === side), "data-cull": cullOf(id).label || null });
       const img = old.get(id) || el("img", { src: cmp.urls.get(id) || thumbUrl(entry), alt: entry.name, draggable: "false" });
-      const role = side === "a" ? "기준" : `후보 ${others.indexOf(id) + 1} / ${others.length}`;
       cell.append(el("div", { class: "cmp-scroll" }, [img]), el("div", { class: "cmp-cap" }, [
-        el("span", { class: "cmp-role", "data-side": side, text: role }),
         el("span", { class: "cmp-name", text: counterOf(entry) ? `(${counterOf(entry)})` : entry.name }),
         el("span", { class: "tile-cull", html: tileCullHtml(id) }),
       ]));
-      if (side === "b") {
-        cell.append(el("button", { class: "cmp-promote", type: "button", text: "이게 더 좋아요 → 기준으로", title: "↑ 또는 Enter", onclick: (event) => { event.stopPropagation(); promoteCandidate(); renderCompare({ keepImages: true }); } }));
+      if (!done) {
+        cell.append(el("button", {
+          class: "cmp-choose", type: "button", "data-choose": side,
+          html: side === "a" ? "<kbd>←</kbd> 이게 더 좋아요" : "이게 더 좋아요 <kbd>→</kbd>",
+        }));
       }
       grid.append(cell);
     }
-    if (!keepImages) void loadCompareOriginals([cmp.a, cmp.b, ...visible].filter(Boolean));
-    else void loadCompareOriginals([cmp.a, cmp.b].filter(Boolean));
+    if (done && t.champ) {
+      const n = t.losers.length;
+      const card = el("div", { class: "cmp-result" }, [
+        el("strong", { text: "이 그림이 베스트예요" }),
+        el("span", { text: n ? `${t.total}장 중에서 골랐어요. 나머지 ${n}장은 어떻게 할까요?` : "비교할 그림이 한 장뿐이에요." }),
+        el("div", { class: "cmp-result-actions" }, [
+          el("button", { class: "btn", type: "button", "data-finish": "hold", text: n ? `채택 · 나머지 ${n}장은 B컷` : "채택하기" }),
+          n ? el("button", { class: "btn secondary", type: "button", "data-finish": "reject", text: `채택 · 나머지는 탈락` }) : null,
+          n ? el("button", { class: "btn secondary", type: "button", "data-finish": "", text: "베스트만 채택" }) : null,
+        ]),
+        el("div", { class: "cmp-result-actions" }, [
+          t.history.length ? el("button", { class: "btn plain small", type: "button", "data-undo": "1", text: "↶ 한 단계 되돌리기" }) : null,
+          el("button", { class: "btn plain small", type: "button", "data-restart": "1", text: "처음부터 다시" }),
+          cmp.group && groupsInView().length > 1 ? el("button", { class: "btn plain small", type: "button", "data-next-group": "1", text: "다음 묶음 ›" }) : null,
+        ]),
+      ]);
+      grid.querySelector(".cmp-cell")?.append(card);
+      $(".cmp-sub").textContent = `${t.total}장 중 베스트`;
+    }
+    void loadCompareOriginals([t.champ, t.queue[0], ...t.queue.slice(1, 3)].filter(Boolean));
     syncPairScroll(grid);
   }
   // In 1:1 zoom both pictures scroll together, so the same spot stays side by side.
@@ -1024,9 +1186,33 @@
       const filter = event.target.closest("[data-cmp-filter]");
       if (filter) {
         cmp.filter = filter.dataset.cmpFilter;
+        cmp.t = null;
         renderCompare({ keepImages: true });
         return;
       }
+      const quick = event.target.closest("[data-quick]");
+      if (quick) {
+        const id = quick.closest(".cmp-cell").dataset.id;
+        cmp.focus = compareVisible().indexOf(id);
+        applyCullAction([id], { label: quick.dataset.quick });
+        return;
+      }
+      const choose = event.target.closest("[data-choose]");
+      if (choose) {
+        chooseSide(choose.dataset.choose);
+        renderCompare({ keepImages: true });
+        return;
+      }
+      const finish = event.target.closest("[data-finish]");
+      if (finish) {
+        finishTournament(finish.dataset.finish || null);
+        if (cmp.group && groupsInView().length > 1) stepGroup(1);
+        else renderCompare({ keepImages: true });
+        return;
+      }
+      if (event.target.closest("[data-undo]")) { undoChoice(); renderCompare({ keepImages: true }); return; }
+      if (event.target.closest("[data-restart]")) { cmp.t = null; renderCompare({ keepImages: true }); return; }
+      if (event.target.closest("[data-next-group]")) { stepGroup(1); return; }
       const cell = event.target.closest(".cmp-cell");
       if (cell && cmp.mode === "pair") {
         cmp.side = cell.dataset.side;
@@ -1067,23 +1253,21 @@
         return;
       }
       if (cmp.mode === "pair") {
+        const t = tournament();
         if (action) {
           stop();
-          const id = cmp[cmp.side];
-          if (!id) return;
-          applyCullAction([id], action);
-          // A marked candidate makes way for the next one.
-          if (cmp.side === "b" && "label" in action && action.label) {
-            if (compareVisible().includes(id)) stepCandidate(1);
-          }
+          const id = cmp.side === "a" || !t.queue.length ? t.champ : t.queue[0]; // right side unless the left was clicked
+          if (id) applyCullAction([id], action);
           renderCompare({ keepImages: true });
           return;
         }
-        if (event.key === "ArrowRight" || event.key === "ArrowDown") { stop(); stepCandidate(1); renderCompare({ keepImages: true }); return; }
-        if (event.key === "ArrowLeft") { stop(); stepCandidate(-1); renderCompare({ keepImages: true }); return; }
-        if (event.key === "ArrowUp" || event.key === "Enter") { stop(); promoteCandidate(); renderCompare({ keepImages: true }); return; }
+        if (event.key === "ArrowLeft" && t.queue.length) { stop(); chooseSide("a"); renderCompare({ keepImages: true }); return; }
+        if (event.key === "ArrowRight" && t.queue.length) { stop(); chooseSide("b"); renderCompare({ keepImages: true }); return; }
+        if (event.key === "Backspace" || ((event.metaKey || event.ctrlKey) && event.code === "KeyZ")) { stop(); undoChoice(); renderCompare({ keepImages: true }); return; }
+        if (event.key === "Enter" && !t.queue.length) { stop(); finishTournament("hold"); if (cmp.group && groupsInView().length > 1) stepGroup(1); else renderCompare({ keepImages: true }); return; }
         if (event.code === "KeyZ" && !event.metaKey && !event.ctrlKey) { stop(); togglePairZoom(); return; }
         if (event.key === "Escape" && cmp.actual) { stop(); togglePairZoom(); return; }
+        if (event.key.startsWith("Arrow")) { stop(); return; }
       }
       if (action) {
         event.preventDefault();
@@ -1258,6 +1442,7 @@
   async function* walk(dir, prefix) {
     for await (const [name, handle] of dir.entries()) {
       if (name.startsWith(".")) continue;
+      if (handle.kind === "directory" && name === CULL_FOLDER) continue; // our own sorted copies
       if (handle.kind === "directory") {
         yield* walk(handle, `${prefix}/${name}`);
       } else if (/\.(png|webp)$/i.test(name)) {

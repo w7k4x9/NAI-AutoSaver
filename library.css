@@ -486,5 +486,35 @@ body { word-break: keep-all; overflow-wrap: anywhere; }
 .cmp-role { font-size: 11.5px; font-weight: 700; padding: 2px 8px; border-radius: 9px; background: rgba(255,255,255,0.88); color: #111; }
 .cmp-role[data-side="b"] { background: var(--accent-fill); color: #fff; }
 .compare[data-mode="pair"] .cmp-cell { cursor: zoom-in; }
-.cmp-promote { position: absolute; top: 10px; right: 10px; height: 30px; padding: 0 12px; border: none; border-radius: 15px; background: rgba(0,0,0,0.55); color: #fff; font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
-.cmp-promote:hover { background: var(--accent-fill); }
+
+/* easier culling: buttons you can see */
+.lb-actions { position: absolute; left: 50%; bottom: 30px; transform: translateX(-50%); display: flex; align-items: center; gap: 6px; padding: 6px; border-radius: 14px; background: rgba(40,40,44,0.72); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.12); }
+.lb-actions > button { height: 32px; padding: 0 12px; border: none; border-radius: 9px; background: transparent; color: #fff; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.lb-actions > button:hover { background: rgba(255,255,255,0.12); }
+.lb-actions > button[aria-pressed="true"] { background: rgba(255,255,255,0.9); color: #111; }
+.lb-actions > button[data-lb-label="pick"][aria-pressed="true"] { background: var(--accent-fill); color: #fff; }
+.lb-actions kbd, .cmp-choose kbd { font: inherit; font-size: 10.5px; font-weight: 700; padding: 1px 5px; border-radius: 4px; background: rgba(255,255,255,0.16); color: rgba(255,255,255,0.8); }
+.lb-actions > button[aria-pressed="true"] kbd { background: rgba(0,0,0,0.12); color: inherit; }
+.lb-stars { display: inline-flex; padding: 0 6px 0 4px; border-left: 1px solid rgba(255,255,255,0.14); margin-left: 2px; }
+.lb-stars button { border: none; background: transparent; color: rgba(255,255,255,0.35); font-size: 17px; padding: 0 2px; cursor: pointer; }
+.lb-stars button[data-on="true"] { color: #FFCC00; }
+.lightbox .lb-hint { bottom: 8px; }
+.lightbox .lb-stage { padding-bottom: 84px; }
+.cmp-quick { position: absolute; right: 8px; bottom: 8px; display: flex; gap: 2px; padding: 3px; border-radius: 10px; background: rgba(30,30,34,0.72); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); opacity: 0; transition: opacity 0.12s; }
+.cmp-cell:hover .cmp-quick, .cmp-cell[data-focus="true"] .cmp-quick { opacity: 1; }
+.cmp-quick button { height: 26px; padding: 0 10px; border: none; border-radius: 7px; background: transparent; color: #fff; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.cmp-quick button:hover { background: rgba(255,255,255,0.14); }
+.cmp-quick button[aria-pressed="true"] { background: rgba(255,255,255,0.9); color: #111; }
+.cmp-quick button[data-quick="pick"][aria-pressed="true"] { background: var(--accent-fill); color: #fff; }
+.cmp-choose { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); height: 40px; padding: 0 18px; border: none; border-radius: 20px; background: rgba(30,30,34,0.78); color: #fff; font: inherit; font-size: 14px; font-weight: 650; cursor: pointer; -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+.cmp-choose:hover { background: var(--accent-fill); }
+.compare[data-mode="pair"] .cmp-cap { bottom: auto; top: 10px; }
+.cmp-result { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); width: min(460px, calc(100% - 32px)); padding: 16px 18px 14px; border-radius: 16px; background: rgba(36,36,40,0.86); -webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px); border: 1px solid rgba(255,255,255,0.12); display: flex; flex-direction: column; gap: 6px; text-align: center; cursor: default; }
+.cmp-result strong { font-size: 16px; }
+.cmp-result > span { font-size: 12.5px; color: rgba(255,255,255,0.7); }
+.cmp-result-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin-top: 4px; }
+.cmp-result .btn.secondary { background: rgba(255,255,255,0.14); color: #fff; }
+.cmp-result .btn.plain { color: rgba(255,255,255,0.7); }
+.cmp-result .btn.plain:hover { background: rgba(255,255,255,0.1); color: #fff; }
+.nav-item.cull-export .label { color: var(--accent-text); }
+.nav-item.cull-export svg { color: var(--accent); }
