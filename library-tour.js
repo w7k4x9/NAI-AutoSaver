@@ -43,7 +43,7 @@
       ],
     },
     {
-      id: "select", icon: "check_circle", title: "여러 장 고르기", short: "윈도우 탐색기와 같은 방법",
+      id: "select", icon: "check", title: "여러 장 고르기", short: "윈도우 탐색기와 같은 방법",
       steps: [
         { target: firstTile, empty: NO_PICTURE, title: "하나씩 더하기", body: "<b>Ctrl</b>(맥은 ⌘)을 누른 채 클릭하거나, 그림 왼쪽 위 <b>동그라미</b>를 눌러요. <b>Shift</b>+클릭은 사이에 있는 그림 전부예요." },
         { target: () => $(".gallery"), title: "끌어서 고르기", body: "그림 사이 <b>빈 곳에서 끌면</b> 네모 안에 든 그림이 다 골라져요. 빈 곳을 누르거나 <b>Esc</b>를 누르면 풀려요." },
@@ -150,7 +150,7 @@
       <div class="lt-head"><div><div class="lt-title">보관함 안내</div><div class="lt-sub">하고 싶은 걸 고르면 화면에서 하나씩 짚어 드려요.</div></div>
         <button type="button" class="lt-close" data-close aria-label="안내 닫기">${ico("close", 14)}</button></div>
       <ul class="lt-topics">${items}</ul>
-      <p class="lt-foot">오른쪽 위 <b>안내</b>에서 언제든 다시 볼 수 있어요.</p>`;
+      <p class="lt-foot">왼쪽 아래 <b>안내</b>에서 언제든 다시 볼 수 있어요.</p>`;
     sheet.hidden = false;
     document.querySelector(".help-open")?.setAttribute("aria-expanded", "true");
     sheet.querySelector(".lt-topic")?.focus();
