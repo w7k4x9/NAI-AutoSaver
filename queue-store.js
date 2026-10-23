@@ -317,7 +317,8 @@
         return;
       }
       const count = Math.max(0, Number(ch.emotionCount) || 0);
-      (bgs || []).forEach((bg, bi) => {
+      // A character can carry its own background list (when 배경 is not shared).
+      (Array.isArray(ch.bgs) ? ch.bgs : bgs || []).forEach((bg, bi) => {
         const bgName = String(bg && bg.name != null ? bg.name : "").trim();
         if (!bgName) {
           return;

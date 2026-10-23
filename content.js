@@ -4095,15 +4095,19 @@
   }
 
   function emptyGenState() {
-    return { base: "", baseNeg: "", count: "1", split: "0", chars: [], bgs: [], emoShared: false, sharedExpressions: "", naming: presetNaming(NAME_PRESETS[0]), excluded: [] };
+    return { base: "", baseNeg: "", count: "1", split: "0", chars: [], bgs: [], bgShared: true, emoShared: false, sharedExpressions: "", naming: presetNaming(NAME_PRESETS[0]), excluded: [] };
   }
 
   function normalizeGenState(stored) {
     const s = stored && typeof stored === "object" ? stored : {};
     const str = (value) => String(value == null ? "" : value);
+    const bgList = (list) => (Array.isArray(list) ? list : [])
+      .map((b) => ({ code: str(b && b.code), tags: str(b && b.tags), negative: str(b && b.negative) }))
+      .filter((b) => b.code.trim() || b.tags.trim());
     const chars = (Array.isArray(s.chars) ? s.chars : [])
       .map((c) => ({
         code: str(c && c.code),
+        bgs: bgList(c && c.bgs),
         appearance: str(c && c.appearance),
         expressions: str(c && c.expressions),
         negative: str(c && c.negative),
@@ -4114,9 +4118,7 @@
         })),
       }))
       .filter((c) => c.code.trim() || c.appearance.trim() || c.expressions.trim());
-    const bgs = (Array.isArray(s.bgs) ? s.bgs : [])
-      .map((b) => ({ code: str(b && b.code), tags: str(b && b.tags), negative: str(b && b.negative) }))
-      .filter((b) => b.code.trim() || b.tags.trim());
+    const bgs = bgList(s.bgs);
     const hadData = Array.isArray(s.chars) && s.chars.some((c) => c && String(c.code || "").trim());
     return {
       base: str(s.base),
@@ -4125,7 +4127,8 @@
       split: str(s.split || "0"),
       chars,
       bgs,
-      // 표정 can be one list for every character, the way 배경 always is.
+      // 배경 and 표정 can each be one list for every character, or one per character.
+      bgShared: s.bgShared !== false,
       emoShared: Boolean(s.emoShared),
       sharedExpressions: str(s.sharedExpressions),
       // Old saves had no naming field and used character_background_emotion.
@@ -4151,6 +4154,34 @@
     get expressions() { return genState.sharedExpressions; },
     set expressions(value) { genState.sharedExpressions = value; },
   };
+  // The 배경 row's list: the shared one, or the active character's own.
+  function bgListFor(ch, raw = genState) {
+    return raw.bgShared === false ? (ch ? ch.bgs || (ch.bgs = []) : []) : raw.bgs;
+  }
+  function bgOwnerList() {
+    if (genState.bgShared !== false) return genState.bgs;
+    const ch = genState.chars[genActiveChar];
+    return ch ? bgListFor(ch) : null;
+  }
+
+  function setSharedBackgrounds(on) {
+    on = Boolean(on);
+    if (on === (genState.bgShared !== false)) return;
+    const copy = (list) => list.map((b) => ({ ...b }));
+    if (on && !genState.bgs.length) {
+      const seed = genState.chars[genActiveChar]?.bgs?.length ? genState.chars[genActiveChar] : genState.chars.find((ch) => ch.bgs && ch.bgs.length);
+      genState.bgs = seed ? copy(seed.bgs) : [];
+    }
+    if (!on) {
+      // Start every character from the shared list, then let each one change.
+      for (const ch of genState.chars) {
+        if (!ch.bgs || !ch.bgs.length) ch.bgs = copy(genState.bgs);
+      }
+    }
+    genState.bgShared = on;
+    if (genSelection.type === "bg") genSelection = { type: null, index: -1 };
+  }
+
   function emoOwner() {
     return genState.emoShared ? sharedEmoOwner : genState.chars[genActiveChar] || null;
   }
@@ -4198,7 +4229,11 @@
       emotionNames: genEmotionNames(ch),
       emotionCount: genEmotionCount(genCharacterMembers(ch)),
     }));
-    const bgs = raw.bgs.map((bg) => ({ name: Store.sanitizeFileName(bg.code, "").trim() }));
+    const bgName = (bg) => ({ name: Store.sanitizeFileName(bg.code, "").trim() });
+    const bgs = raw.bgs.map(bgName);
+    if (raw.bgShared === false) {
+      raw.chars.forEach((ch, i) => { chars[i].bgs = (ch.bgs || []).map(bgName); });
+    }
     const excluded = new Set(raw.excluded || []);
     return Store.buildComboPlan(chars, bgs, raw.naming).map((entry) => ({
       ...entry,
@@ -4233,7 +4268,7 @@
         continue;
       }
       const members = membersByChar[entry.ci];
-      const bg = raw.bgs[entry.bi];
+      const bg = bgListFor(raw.chars[entry.ci], raw)[entry.bi];
       const bgTags = String(bg.tags || "").trim();
       const bgNeg = String(bg.negative || "").trim();
       const index = entry.ei;
@@ -4386,7 +4421,9 @@
     const perChar = genState.chars.map((_, ci) => included.filter((e) => e.ci === ci).length);
 
     const charChips = genState.chars.map((ch, i) => `<button type="button" class="ias-chip ias-chip-round" data-kind="char" data-index="${i}" data-active="${i === genActiveChar}" data-selected="${isSelected("char", i)}">${escapeHtml(charDisplayName(ch, i))}<span class="ias-chip-count">${perChar[i]}</span></button>`).join("");
-    const bgChips = genState.bgs.map((bg, i) => `<button type="button" class="ias-chip ias-chip-round" data-kind="bg" data-index="${i}" data-selected="${isSelected("bg", i)}">${escapeHtml(bgDisplayName(bg, i))}</button>`).join("");
+    const bgOwner = bgOwnerList();
+    const bgShared = genState.bgShared !== false;
+    const bgChips = (bgOwner || []).map((bg, i) => `<button type="button" class="ias-chip ias-chip-round" data-kind="bg" data-index="${i}" data-selected="${isSelected("bg", i)}">${escapeHtml(bgDisplayName(bg, i))}</button>`).join("");
     const activeChar = genState.chars[genActiveChar];
     const owner = emoOwner();
     const emotions = owner ? charEmotionEntries(owner) : [];
@@ -4396,39 +4433,40 @@
       <span class="ias-picker-label">캐릭터</span>
       <div class="ias-chips">${charChips}<button type="button" class="ias-chip-add ias-chip-round" data-add="char" data-tour="combo-add-char" aria-label="캐릭터 추가">+</button></div>
       <span class="ias-picker-label">배경</span>
-      <div class="ias-chips">${bgChips}<button type="button" class="ias-chip-add ias-chip-round" data-add="bg" data-tour="combo-add-bg" aria-label="배경 추가">+</button>${genState.bgs.length ? '<span class="ias-picker-note">모든 캐릭터 공통</span>' : ""}</div>
+      <div class="ias-chips">${bgOwner ? `${bgChips}<button type="button" class="ias-chip-add ias-chip-round" data-add="bg" data-tour="combo-add-bg" aria-label="배경 추가">+</button>` : '<span class="ias-picker-note">캐릭터를 먼저 넣어 주세요</span>'}<label class="ias-picker-check" title="켜면 배경 목록 하나를 모든 캐릭터가 같이 써요"><input type="checkbox" data-shared-bg ${bgShared ? "checked" : ""}>모든 캐릭터 공통</label></div>
       <span class="ias-picker-label">표정</span>
       <div class="ias-chips">${owner ? `${emoChips}<button type="button" class="ias-chip-add" data-add="emo" data-tour="combo-add-emo" aria-label="표정 추가">+</button>` : '<span class="ias-picker-note">캐릭터를 먼저 넣어 주세요</span>'}<label class="ias-picker-check" title="켜면 표정 목록 하나를 모든 캐릭터가 같이 써요"><input type="checkbox" data-shared-emo ${genState.emoShared ? "checked" : ""}>모든 캐릭터 공통</label></div>
     `;
 
     // Result cards for the active character.
     const name = activeChar ? charDisplayName(activeChar, genActiveChar) : "";
+    const charBgs = activeChar ? bgListFor(activeChar) : [];
     ui.comboResultTitle.textContent = activeChar ? `만들어질 그림 · ${name} ${perChar[genActiveChar] || 0}장` : "만들어질 그림";
-    if (!activeChar || !genState.bgs.length || !emotions.length) {
+    if (!activeChar || !charBgs.length || !emotions.length) {
       ui.comboCards.style.gridTemplateColumns = "";
-      ui.comboCards.innerHTML = `<div class="ias-combo-empty">${!genState.chars.length ? "＋를 눌러 캐릭터부터 넣어 보세요." : !genState.bgs.length ? "배경을 하나 넣으면 카드가 생겨요." : "이 캐릭터의 표정을 하나 넣으면 카드가 생겨요."}</div>`;
+      ui.comboCards.innerHTML = `<div class="ias-combo-empty">${!genState.chars.length ? "＋를 눌러 캐릭터부터 넣어 보세요." : !charBgs.length ? "배경을 하나 넣으면 카드가 생겨요." : "이 캐릭터의 표정을 하나 넣으면 카드가 생겨요."}</div>`;
     } else {
       const charPlan = plan.filter((e) => e.ci === genActiveChar);
       const byCell = new Map(charPlan.map((e) => [`${e.ei}:${e.bi}`, e]));
-      const cols = genState.bgs.length;
+      const cols = charBgs.length;
       ui.comboCards.style.gridTemplateColumns = `repeat(${cols}, minmax(92px, 1fr))`;
-      const head = genState.bgs.map((bg, bi) => `<span class="ias-ccol">${escapeHtml(bgDisplayName(bg, bi))}</span>`).join("");
+      const head = charBgs.map((bg, bi) => `<span class="ias-ccol">${escapeHtml(bgDisplayName(bg, bi))}</span>`).join("");
       const cells = [];
       emotions.forEach((entry, ei) => {
-        genState.bgs.forEach((bg, bi) => {
+        charBgs.forEach((bg, bi) => {
           const e = byCell.get(`${ei}:${bi}`);
           if (!e) {
             cells.push('<span></span>');
             return;
           }
-          cells.push(`<button type="button" class="ias-ccard" data-key="${escapeAttr(e.key)}" aria-pressed="${!e.excluded}" ${ei === 0 && bi === genState.bgs.length - 1 ? 'data-tour="combo-card"' : ""} title="${escapeAttr(e.title)} · ${e.excluded ? "눌러서 다시 넣기" : "눌러서 빼기"}"><span class="ias-ccard-name">${escapeHtml(emoDisplayName(entry, ei))}</span><span class="ias-ccard-file">${e.excluded ? "만들지 않음" : escapeHtml(e.title)}</span>${e.excluded ? EMPTY_BADGE : CHECK_BADGE}</button>`);
+          cells.push(`<button type="button" class="ias-ccard" data-key="${escapeAttr(e.key)}" aria-pressed="${!e.excluded}" ${ei === 0 && bi === charBgs.length - 1 ? 'data-tour="combo-card"' : ""} title="${escapeAttr(e.title)} · ${e.excluded ? "눌러서 다시 넣기" : "눌러서 빼기"}"><span class="ias-ccard-name">${escapeHtml(emoDisplayName(entry, ei))}</span><span class="ias-ccard-file">${e.excluded ? "만들지 않음" : escapeHtml(e.title)}</span>${e.excluded ? EMPTY_BADGE : CHECK_BADGE}</button>`);
         });
       });
       ui.comboCards.innerHTML = head + cells.join("");
     }
 
     // Footer: name rule + totals.
-    const sample = { char: name || "김춘자", emo: emotions[0] ? emoDisplayName(emotions[0], 0) : "웃음", bg: genState.bgs[0] ? bgDisplayName(genState.bgs[0], 0) : "교실" };
+    const sample = { char: name || "김춘자", emo: emotions[0] ? emoDisplayName(emotions[0], 0) : "웃음", bg: (bgOwner || [])[0] ? bgDisplayName(bgOwner[0], 0) : "교실" };
     const example = (preset) => preset.order.filter((axis) => preset.on[axis]).map((axis) => sample[axis]).join(preset.sep);
     const current = NAME_PRESETS.find((preset) => namingMatchesPreset(genState.naming, preset));
     const customOption = current ? "" : `<option value="custom" selected>${escapeHtml(Store.buildComboPlan([{ name: sample.char, emotionNames: [sample.emo], emotionCount: 1 }], [{ name: sample.bg }], genState.naming)[0]?.title || "직접 만든 규칙")}</option>`;
@@ -4488,10 +4526,11 @@
         ${copyFromSelect("char")}
         <div class="ias-insp-spacer"></div>
         <button type="button" class="ias-insp-delete" data-delete="char">이 캐릭터 지우기</button>`;
-    } else if (type === "bg" && genState.bgs[index]) {
-      const bg = genState.bgs[index];
+    } else if (type === "bg" && bgOwnerList()?.[index]) {
+      const bg = bgOwnerList()[index];
+      const bgKicker = genState.bgShared !== false ? "배경 · 모든 캐릭터 공통" : `${charDisplayName(genState.chars[genActiveChar], genActiveChar)} · 배경`;
       html = `
-        <div class="ias-insp-head"><span class="ias-insp-kicker">배경 · 모든 캐릭터 공통</span><span class="ias-insp-title">${escapeHtml(bgDisplayName(bg, index))}</span></div>
+        <div class="ias-insp-head"><span class="ias-insp-kicker">${escapeHtml(bgKicker)}</span><span class="ias-insp-title">${escapeHtml(bgDisplayName(bg, index))}</span></div>
         ${inspectorField("이름", 'data-bfield="code" data-autofocus="true"', bg.code, { placeholder: "예: 교실" })}
         ${inspectorField("태그", 'data-bfield="tags"', bg.tags, { rows: 3, placeholder: "예: classroom, window" })}
         ${inspectorField("네거티브", 'data-bfield="negative"', bg.negative, { rows: 2, placeholder: "비우면 없음" })}
@@ -4559,12 +4598,14 @@
     if (add) {
       const kind = add.dataset.add;
       if (kind === "char") {
-        genState.chars.push({ code: "", appearance: "", expressions: "", negative: "", members: [] });
+        genState.chars.push({ code: "", appearance: "", expressions: "", negative: "", members: [], bgs: genState.bgShared !== false ? [] : genState.bgs.map((b) => ({ ...b })) });
         genActiveChar = genState.chars.length - 1;
         genSelection = { type: "char", index: genActiveChar };
       } else if (kind === "bg") {
-        genState.bgs.push({ code: "", tags: "", negative: "" });
-        genSelection = { type: "bg", index: genState.bgs.length - 1 };
+        const list = bgOwnerList();
+        if (!list) return;
+        list.push({ code: "", tags: "", negative: "" });
+        genSelection = { type: "bg", index: list.length - 1 };
       } else if (kind === "emo" && emoOwner()) {
         const ch = emoOwner();
         const entries = charEmotionEntries(ch);
@@ -4597,7 +4638,7 @@
         genState.chars.splice(index, 1);
         genActiveChar = Math.max(0, Math.min(genActiveChar, genState.chars.length - 1));
       } else if (type === "bg") {
-        genState.bgs.splice(index, 1);
+        bgOwnerList()?.splice(index, 1);
       } else if (type === "emo" && emoOwner()) {
         const ch = emoOwner();
         const entries = charEmotionEntries(ch);
@@ -4645,8 +4686,8 @@
       if (member) {
         member[el.dataset.mfield] = value;
       }
-    } else if (el.dataset.bfield && genState.bgs[index]) {
-      genState.bgs[index][el.dataset.bfield] = value;
+    } else if (el.dataset.bfield && bgOwnerList()?.[index]) {
+      bgOwnerList()[index][el.dataset.bfield] = value;
       if (el.dataset.bfield === "code" && value.trim()) {
         tourEvent("combo-bg-added");
       }
@@ -4683,6 +4724,12 @@
         genState.naming = presetNaming(preset);
         comboChanged();
       }
+      return;
+    }
+    if (el.matches("[data-shared-bg]")) {
+      setSharedBackgrounds(el.checked);
+      setStatus(el.checked ? "배경을 모든 캐릭터가 같이 써요." : "이제 캐릭터마다 배경을 따로 정해요.", "ok");
+      comboChanged({ inspector: true });
       return;
     }
     if (el.matches("[data-shared-emo]")) {
