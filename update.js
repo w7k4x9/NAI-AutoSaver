@@ -75,14 +75,10 @@ async function readManifestIn(dir) {
     return null;
   }
 }
-// Finds the copy Chrome is running *now* inside the picked folder: the picked
-// folder itself, or anywhere a few levels below it (so picking 문서 or
-// 다운로드 works too). The running copy is recognised by its manifest.json
-// being byte-for-byte the one Chrome serves, so an old copy or a freshly
-// unzipped new one never gets mistaken for it.
-const SEARCH_DEPTH = 4;
-const SEARCH_LIMIT = 4000;
-const SKIP_DIRS = /^(\.|node_modules$|\$RECYCLE\.BIN$|System Volume Information$|AppData$|Library$)/i;
+// The picked folder must be the copy Chrome is running now: its manifest.json
+// is byte-for-byte the one Chrome serves (so an old copy or a freshly unzipped
+// new one is never mistaken for it). The picked folder itself or one folder
+// inside it ("NAI-AutoSaver-main/NAI-AutoSaver-main") — nothing deeper.
 let loadedManifestText = null;
 async function loadedManifest() {
   if (loadedManifestText == null) {
@@ -90,43 +86,59 @@ async function loadedManifest() {
   }
   return loadedManifestText;
 }
-async function resolveExtensionFolder(dir, onProgress = () => {}) {
+async function resolveExtensionFolder(dir) {
   const want = (await loadedManifest()).trim();
   const candidates = [];
-  const queue = [{ dir, path: dir.name, depth: 0 }];
-  let seen = 0;
-  while (queue.length && seen < SEARCH_LIMIT) {
-    const { dir: d, path, depth } = queue.shift();
-    seen += 1;
-    if (seen % 50 === 0) onProgress(seen);
+  const look = async (d, path) => {
     const bytes = await readLocal(d, "manifest.json");
-    if (bytes) {
-      const text = new TextDecoder().decode(bytes);
-      let m = null;
-      try {
-        m = JSON.parse(text);
-      } catch (error) {
-        m = null;
-      }
-      if (m?.name === manifest.name) {
-        if (text.trim() === want) return { match: { dir: d, path }, candidates };
-        candidates.push({ path, version: String(m.version || "?") });
-        continue; // an extension folder: nothing more to find inside
-      }
-    }
-    if (depth >= SEARCH_DEPTH) continue;
+    if (!bytes) return false;
+    const text = new TextDecoder().decode(bytes);
+    let m = null;
     try {
-      for await (const [name, child] of d.entries()) {
-        if (child.kind === "directory" && !SKIP_DIRS.test(name)) queue.push({ dir: child, path: `${path}/${name}`, depth: depth + 1 });
-      }
+      m = JSON.parse(text);
     } catch (error) {
-      void error;
+      return false;
+    }
+    if (m?.name !== manifest.name) return false;
+    if (text.trim() === want) return true;
+    candidates.push({ path, version: String(m.version || "?") });
+    return false;
+  };
+  if (await look(dir, dir.name)) return { match: { dir, path: dir.name }, candidates };
+  if (!candidates.length) {
+    for await (const [name, child] of dir.entries()) {
+      if (child.kind === "directory" && await look(child, `${dir.name}/${name}`)) {
+        return { match: { dir: child, path: `${dir.name}/${name}` }, candidates };
+      }
     }
   }
   return { match: null, candidates };
 }
 function josaRo(version) {
   return /[036]$/.test(String(version)) ? "으로" : "로";
+}
+
+const STAGE_DIR = ".nai-update";
+
+function blockedError(path, cause) {
+  const err = new Error(`Windows 보안(백신)이 「${escapeHtml(path)}」 파일을 막았어요. 이번 버전은 아래 「직접 바꾸고 싶어요」로 바꿔 주세요.`);
+  err.blockedFile = path;
+  err.cause = cause;
+  return err;
+}
+
+// Moves one staged file over the real one (same name, so no new checks).
+async function placeStaged(stage, path) {
+  const parts = path.split("/");
+  const name = parts.pop();
+  const from = await (await dirFor(stage, parts, false)).getFileHandle(name);
+  const toDir = await dirFor(folder, parts, true);
+  try {
+    await from.move(toDir, name);
+  } catch (error) {
+    await toDir.removeEntry(name).catch(() => {});
+    await from.move(toDir, name);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -275,7 +287,7 @@ const WHERE_HELP = `<ol class="steps">
   <li><a href="#" data-open-ext>폴더 위치 보기</a>를 눌러요. 열린 화면의 <b>「소스」</b>에 적힌 경로가 그 폴더예요. 경로를 복사해 두세요.</li>
   <li>아래 <b>「설치된 폴더 고르기」</b> → 뜨는 창 맨 위 주소칸에 붙여 넣고 Enter → <b>「폴더 선택」</b>.</li>
 </ol>
-<p class="small">위치를 잘 모르겠으면 그 폴더가 들어 있을 만한 <b>상위 폴더</b>(예: 문서, 다운로드)를 골라도 돼요. 안쪽까지 찾아봐요.</p>`;
+<p class="small">「소스」 경로를 그대로 붙여 넣으면 헷갈릴 일이 없어요.</p>`;
 
 // First time only: say plainly which folder we mean before the picker opens.
 function renderPickStep(extraMsg = "") {
@@ -309,9 +321,7 @@ async function runUpdate() {
       }
       throw new Error(`폴더를 열지 못했어요 (${error?.message || error}).`);
     }
-    show({ icon: "folder", title: "폴더를 살펴보는 중…", sub: "안쪽까지 찾고 있어요" });
-    progress(0, 1, "찾는 중…");
-    const { match, candidates } = await resolveExtensionFolder(picked, (n) => progress(0, 1, `폴더 ${n}개 살펴봄…`));
+    const { match, candidates } = await resolveExtensionFolder(picked);
     if (!match) {
       folder = null;
       await LibDB.delKv(FOLDER_KEY).catch(() => {});
@@ -343,6 +353,7 @@ async function runUpdate() {
     // Everything is downloaded and checked before the first write, so a
     // broken connection never leaves a half-updated folder.
     const files = new Map();
+    const blobByPath = new Map(changed.map((b) => [b.path, b.sha]));
     for (let i = 0; i < changed.length; i += 1) {
       const b = changed[i];
       const url = `${U.RAW}${commit.sha}/${b.path.split("/").map(encodeURIComponent).join("/")}`;
@@ -358,16 +369,39 @@ async function runUpdate() {
       : await readManifestIn(folder);
     if (nextManifest?.name !== manifest.name) throw new Error("받은 파일이 NAI 자동저장이 아니에요.");
 
+    // Stage first: every new file is written into a hidden folder next to
+    // the real ones and read back. Windows security scans each file as it
+    // lands; if it removes one, we stop here and the real files stay as
+    // they were. Only when all of them made it do they move into place.
     const order = [...files.keys()].sort((a, b) => (a === "manifest.json") - (b === "manifest.json"));
+    await folder.removeEntry(STAGE_DIR, { recursive: true }).catch(() => {});
+    const stage = await folder.getDirectoryHandle(STAGE_DIR, { create: true });
+    const total = blobs.length * 4;
     for (let i = 0; i < order.length; i += 1) {
-      await writeLocal(folder, order[i], files.get(order[i]));
-      progress(blobs.length * 3 + ((i + 1) / order.length) * blobs.length, blobs.length * 4, `바꿔 넣는 중 ${i + 1}/${order.length}`);
+      const path = order[i];
+      try {
+        await writeLocal(stage, path, files.get(path));
+      } catch (error) {
+        throw blockedError(path, error);
+      }
+      progress(blobs.length * 3 + ((i + 1) / order.length) * blobs.length * 0.5, total, `바꿔 넣을 준비 ${i + 1}/${order.length}`);
     }
+    for (const path of order) {
+      const back = await readLocal(stage, path);
+      if (!back || (await gitBlobSha(back)) !== blobByPath.get(path)) throw blockedError(path, null);
+    }
+    for (let i = 0; i < order.length; i += 1) {
+      await placeStaged(stage, order[i]);
+      progress(blobs.length * 3.5 + ((i + 1) / order.length) * blobs.length * 0.5, total, `바꿔 넣는 중 ${i + 1}/${order.length}`);
+    }
+    await folder.removeEntry(STAGE_DIR, { recursive: true }).catch(() => {});
     await chrome.storage.local.set({ [APPLIED_KEY]: { from: manifest.version, to: nextManifest.version, at: Date.now(), notes: info.notes || [] } });
     progress(1, 1, "다시 켜는 중…");
     setTimeout(() => chrome.runtime.reload(), 300);
   } catch (error) {
-    renderAvailable({ msg: `<b>업데이트하지 못했어요.</b> ${escapeHtml(error?.message || error)}<br>지금 폴더는 그대로예요.` });
+    if (folder) await folder.removeEntry(STAGE_DIR, { recursive: true }).catch(() => {});
+    $("manual").open = Boolean(error?.blockedFile);
+    renderAvailable({ msg: `<b>업데이트하지 못했어요.</b> ${error?.blockedFile ? error.message : escapeHtml(error?.message || error)}<br>지금 폴더는 그대로예요.` });
   } finally {
     busy = false;
     if (!$("primary").hidden) $("primary").disabled = false;

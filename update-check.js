@@ -10,7 +10,7 @@
   const RAW = `https://raw.githubusercontent.com/${REPO}/`;
   const STATE_KEY = "naiAutoSaver.update";
   const RETIRED_KEY = "naiAutoSaver.retiredForStore";
-  const CHECK_EVERY = 6 * 60 * 60 * 1000;
+  const CHECK_EVERY = 60 * 60 * 1000;
 
   function parseVersion(v) {
     return String(v || "").trim().replace(/^v/i, "").split(".").map((n) => parseInt(n, 10) || 0);
