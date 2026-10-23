@@ -104,6 +104,7 @@
   function upsert(entry) {
     fixChar(entry);
     invalidateGroups();
+    dataVersion += 1;
     const list = entry.source === "dropped" ? state.dropped : state.entries;
     const i = list.findIndex((e) => e.id === entry.id);
     if (i >= 0) {
@@ -115,7 +116,7 @@
       list[i] = entry;
     } else {
       list.unshift(entry);
-      list.sort((a, b) => b.savedAt - a.savedAt);
+      list.sort((a, b) => b.savedAt - a.savedAt); // stored newest first; the grid order is sortShown()
     }
   }
 
@@ -257,7 +258,8 @@
     const terms = parseQuery(state.query);
     const test = navTest(state.nav);
     const cullTest = state.cullNav ? navTest(state.cullNav) : () => true;
-    state.shown = allEntries().filter((e) => test(e) && cullTest(e) && matches(e, terms));
+    state.shown = sortShown(allEntries().filter((e) => test(e) && cullTest(e) && matches(e, terms)));
+    renderSortButton();
     const visible = new Set(state.shown.map((e) => e.id));
     state.sel = state.sel.filter((id) => visible.has(id));
     $(".title").textContent = state.cullNav
@@ -282,6 +284,93 @@
       empty.hidden = true;
     }
     renderInspector();
+  }
+
+  // ---- 정렬: how the grid (and ←/→, 셀렉, 크게 보기) runs through pictures.
+  const SORTS = [
+    ["new", "최근 저장순", "새로 저장한 그림이 위로"],
+    ["old", "오래된 순", "먼저 저장한 그림이 위로"],
+    ["group", "같은 이름끼리", "같은 이름 그림을 붙여서 · 묶음은 최근 순"],
+    ["name", "이름순", "가나다 · (1) (2) (10) 순서로"],
+  ];
+  const SORT_KEY = "naiAutoSaver.librarySort";
+  state.sort = "new";
+  try {
+    const saved = localStorage.getItem(SORT_KEY);
+    if (SORTS.some(([k]) => k === saved)) state.sort = saved;
+  } catch (error) {
+    void error;
+  }
+  const nameOrder = new Intl.Collator("ko", { numeric: true, sensitivity: "base" });
+  // The full order is worked out once and reused (by rank) until the
+  // pictures change, so filtering a big library stays quick in 이름순 too.
+  let sortCache = null;
+  function sortShown(list) {
+    if (state.sort === "name" || state.sort === "group") {
+      const sig = [state.sort, dataVersion, state.entries, state.entries.length, state.dropped.length];
+      if (!sortCache || sortCache.sig.some((v, i) => v !== sig[i])) {
+        const rank = new Map();
+        sortByName(allEntries()).forEach((e, i) => rank.set(e.id, i));
+        sortCache = { sig, rank };
+      }
+      const rank = sortCache.rank;
+      return list.sort((a, b) => (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0));
+    }
+    return sortByName(list);
+  }
+  function sortByName(list) {
+    if (state.sort === "old") return list.sort((a, b) => a.savedAt - b.savedAt);
+    if (state.sort !== "name" && state.sort !== "group") return list.sort((a, b) => b.savedAt - a.savedAt);
+    // work out each name's group / number once (a big library sorts fast)
+    const rows = list.map((e) => {
+      const key = groupKeyOf(e);
+      return { e, key, n: String(e.name).slice(key.length).trim() };
+    });
+    if (state.sort === "name") {
+      rows.sort((a, b) => nameOrder.compare(a.key, b.key) || nameOrder.compare(a.n, b.n) || a.e.savedAt - b.e.savedAt);
+    } else {
+      const newest = new Map();
+      for (const r of rows) if (!(newest.get(r.key) >= r.e.savedAt)) newest.set(r.key, r.e.savedAt);
+      rows.sort((a, b) => (a.key === b.key ? 0 : newest.get(b.key) - newest.get(a.key) || nameOrder.compare(a.key, b.key))
+        || nameOrder.compare(a.n, b.n) || a.e.savedAt - b.e.savedAt);
+    }
+    return rows.map((r) => r.e);
+  }
+  function setSort(key) {
+    if (state.sort === key) return;
+    state.sort = key;
+    try {
+      localStorage.setItem(SORT_KEY, key);
+    } catch (error) {
+      void error;
+    }
+    const keep = state.sel[0];
+    render();
+    $(".gallery").scrollTop = 0;
+    if (keep) document.querySelector(`.tile[data-id="${CSS.escape(keep)}"]`)?.scrollIntoView({ block: "nearest" });
+  }
+  function renderSortButton() {
+    const btn = $(".sort-btn");
+    if (!btn) return;
+    const [, label] = SORTS.find(([k]) => k === state.sort) || SORTS[0];
+    btn.innerHTML = `${icon("sort", 15)}<span>${label}</span>`;
+  }
+  function openSortMenu(event) {
+    event.stopPropagation();
+    const wrap = $(".sort-wrap");
+    const open = wrap.querySelector(".menu");
+    if (open) {
+      open.remove();
+      return;
+    }
+    const menu = el("div", { class: "menu sort-menu", role: "menu" });
+    for (const [key, label, hint] of SORTS) {
+      menu.append(el("button", { type: "button", role: "menuitemradio", "aria-checked": String(state.sort === key), onclick: () => { menu.remove(); setSort(key); } }, [
+        el("span", { class: "sort-check", html: state.sort === key ? icon("check", 13) : "" }),
+        el("span", { class: "sort-text" }, [el("span", { text: label }), el("small", { text: hint })]),
+      ]));
+    }
+    wrap.append(menu);
   }
 
   function renderBanner() {
@@ -1034,6 +1123,7 @@
     const at = state.entries.findIndex((e) => e.id === entry.id);
     if (at >= 0) state.entries[at] = moved;
     invalidateGroups();
+    dataVersion += 1;
     if (state.cull.has(entry.id)) {
       state.cull.set(newPath, state.cull.get(entry.id));
       state.cull.delete(entry.id);
@@ -1051,6 +1141,7 @@
     await LibDB.remove(entry.id);
     state.entries = state.entries.filter((e) => e.id !== entry.id);
     invalidateGroups();
+    dataVersion += 1;
     state.cull.delete(entry.id);
     const url = thumbUrls.get(entry.id);
     if (url) URL.revokeObjectURL(url);
@@ -1400,6 +1491,7 @@
   function invalidateGroups() {
     groupIndex = null;
   }
+  let dataVersion = 0; // bumped when a picture is added, renamed, moved or removed
   function groupMembers(entry) {
     if (!groupIndex) {
       groupIndex = new Map();
@@ -2653,6 +2745,20 @@
     const [ok, err] = await Promise.all([LibDB.getKv("notionLastOk").catch(() => null), LibDB.getKv("notionLastError").catch(() => null)]);
     notionAuto = { ok, err };
   }
+  // Notion works again (연결 확인 passed, or a send went through): an old
+  // failure message would only confuse.
+  async function clearNotionError() {
+    await LibDB.delKv("notionLastError").catch(() => {});
+    notionAuto.err = null;
+    renderNotionBox();
+    refreshNotionLast();
+  }
+  let refreshNotionLast = () => {};
+  function notionLastLine() {
+    return notionAutoFailing()
+      ? el("p", { class: "sheet-warn", text: `마지막 자동 보내기 실패 (${new Date(notionAuto.err.at).toLocaleString("ko-KR")} · ${notionAuto.err.name || ""}): ${notionAuto.err.message}` })
+      : notionAuto.ok ? el("p", { class: "sheet-note", text: `마지막으로 자동으로 보낸 그림: ${notionAuto.ok.name || ""} (${new Date(notionAuto.ok.at).toLocaleString("ko-KR")})${notionAuto.ok.same ? " · 같은 프롬프트라 건너뜀" : ""}` }) : null;
+  }
   function notionAutoFailing() {
     const { ok, err } = notionAuto;
     return Boolean(err && (!ok || err.at > ok.at));
@@ -2798,9 +2904,13 @@
     orig.classList.add("ios-check");
     once.classList.add("ios-check");
     every.classList.add("ios-check");
-    const last = notionAutoFailing()
-      ? el("p", { class: "sheet-warn", text: `마지막 자동 보내기 실패 (${new Date(notionAuto.err.at).toLocaleString("ko-KR")} · ${notionAuto.err.name || ""}): ${notionAuto.err.message}` })
-      : notionAuto.ok ? el("p", { class: "sheet-note", text: `마지막으로 자동으로 보낸 그림: ${notionAuto.ok.name || ""} (${new Date(notionAuto.ok.at).toLocaleString("ko-KR")})${notionAuto.ok.same ? " · 같은 프롬프트라 건너뜀" : ""}` }) : null;
+    const last = el("div", { class: "nt-last" });
+    refreshNotionLast = () => {
+      if (!last.isConnected && dialog.open === false) return;
+      last.replaceChildren(...[notionLastLine()].filter(Boolean));
+    };
+    refreshNotionLast();
+    dialog.addEventListener("close", () => { refreshNotionLast = () => {}; }, { once: true });
     const checkOut = el("div", { class: "nt-check", hidden: true });
     const checkBtn = el("button", { class: "btn small", type: "button", text: "연결 확인" });
     checkBtn.addEventListener("click", async () => {
@@ -2810,6 +2920,7 @@
       // the click lets Chrome ask for the Notion permission again if it is off
       if (!(await NotionSync.hasPermission())) await NotionSync.requestPermission().catch(() => false);
       const result = await NotionSync.check(notionCfg);
+      if (result.ok) await clearNotionError();
       checkOut.innerHTML = "";
       for (const st of result.steps) checkOut.append(el("div", { class: "nt-step", "data-ok": String(st.ok), text: `${st.ok ? "✓" : "✕"} ${st.text}` }));
       checkOut.append(el("p", { class: "sheet-note", text: result.ok
@@ -2892,6 +3003,7 @@
       }
     }
     render();
+    if ((sent || same) && !failed.length) await clearNotionError();
     const parts = [`노션에 ${sent}장을 보냈어요`];
     if (same) parts.push(`${same}장은 같은 프롬프트가 이미 있어서 건너뛰었어요`);
     if (noPicture) parts.push(`${noPicture}장은 원본을 못 읽어서 프롬프트만`);
@@ -3110,6 +3222,7 @@
       if (!tile) return;
       openLightbox(tile.dataset.id);
     });
+    $(".sort-btn").addEventListener("click", openSortMenu);
     $(".pick-all").addEventListener("click", () => {
       while (state.rendered < state.shown.length) renderMoreTiles();
       state.sel = state.shown.map((e) => e.id);
@@ -3228,6 +3341,7 @@
     });
     chrome.runtime.onMessage.addListener((message) => {
       if (message?.action === "libraryChanged" && message.id) arrived(message.id);
+      if (message?.action === "notionStatus") void loadNotion().then(() => { renderNotionBox(); refreshNotionLast(); });
     });
     for (const type of ["keydown", "pointerdown", "wheel"]) document.addEventListener(type, () => { lastInput = Date.now(); }, { capture: true, passive: true });
     if (state.root && state.rootPerm === "granted") void scanFolder().then(() => syncFolder({ quiet: true }));
@@ -3240,7 +3354,7 @@
     if (location.hash.includes("notion")) void (notionReady() ? openNotionSettings() : openNotionConnect());
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area === "local" && changes[NotionSync.CONFIG_KEY]) {
-        void loadNotion().then(renderNotionBox);
+        void loadNotion().then(() => { renderNotionBox(); refreshNotionLast(); });
       }
     });
   }

@@ -206,6 +206,13 @@ button.conn-row:hover, .conn-act:hover { background: var(--hover); }
 .menu { position: absolute; right: 0; top: 30px; z-index: 20; min-width: 190px; padding: 5px; background: var(--elev); border-radius: 9px; box-shadow: 0 0 0 0.5px var(--field-border), var(--shadow); display: flex; flex-direction: column; }
 .menu button { height: 26px; border: none; border-radius: 5px; background: transparent; text-align: left; padding: 0 10px; cursor: pointer; white-space: nowrap; }
 .menu button:hover { background: var(--accent-fill); color: #fff; }
+.sort-btn { gap: 5px; }
+.sort-menu { min-width: 230px; }
+.sort-menu button { height: auto; padding: 6px 10px 6px 6px; display: flex; align-items: flex-start; gap: 6px; }
+.sort-check { width: 16px; flex: 0 0 16px; display: flex; justify-content: center; padding-top: 2px; color: var(--accent); }
+.sort-text { display: flex; flex-direction: column; gap: 1px; }
+.sort-text small { font-size: 11.5px; color: var(--text3); }
+.sort-menu button:hover .sort-text small, .sort-menu button:hover .sort-check { color: rgba(255,255,255,0.85); }
 .menu button[data-danger] { color: var(--danger); }
 .menu button[data-danger]:hover { background: var(--danger); color: #fff; }
 
@@ -517,6 +524,7 @@ body { word-break: keep-all; overflow-wrap: anywhere; }
 .cmp-lane-empty p { margin: 0; }
 .cmp-lane-empty b { color: #fff; }
 .cmp-lane[data-focus="false"] .cmp-lane-head { opacity: 0.7; }
+.nt-last:empty { display: none; }
 .sheet-warn { margin: 0 0 4px; padding: 10px 12px; border-radius: 10px; background: var(--warn-bg); color: var(--warn-text); font-size: 12.5px; line-height: 1.45; word-break: break-all; }
 .notion-box[data-state="warn"] .conn-sub { color: var(--warn-text); }
 .tile img, .insp-thumb img, .lb-img { -webkit-user-drag: none; }

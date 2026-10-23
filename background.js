@@ -442,6 +442,11 @@ async function indexSavedImage(bytes, requested, downloadId) {
   }
 }
 
+// An open 보관함 redraws its Notion line right away.
+function notionStatusChanged() {
+  chrome.runtime.sendMessage({ action: "notionStatus" }).catch(() => {});
+}
+
 // 노션: send each newly saved picture when the user turned that on.
 async function autoSendToNotion(entry, bytes) {
   try {
@@ -451,6 +456,7 @@ async function autoSendToNotion(entry, bytes) {
     if (!(await NotionSync.hasPermission())) {
       // used to stop here without a word
       await LibDB.setKv("notionLastError", { at: Date.now(), name: entry.name, message: "확장 프로그램의 노션 접속 허락이 꺼져 있어요. 보관함 → 노션 설정 → 「연결 확인」을 누르면 다시 허락할 수 있어요." });
+      notionStatusChanged();
       return;
     }
     let upload = bytes;
@@ -467,10 +473,13 @@ async function autoSendToNotion(entry, bytes) {
     entry.notion = { id: page.id, url: page.url, at: Date.now(), ...(page.skipped ? { samePrompt: true } : {}) };
     await LibDB.put(entry);
     await LibDB.setKv("notionLastOk", { at: Date.now(), name: entry.name, same: Boolean(page.skipped) });
+    await LibDB.delKv("notionLastError").catch(() => {}); // working again: the old failure is history
+    notionStatusChanged();
   } catch (error) {
     console.warn("notion auto send failed", error);
     try {
       await LibDB.setKv("notionLastError", { at: Date.now(), message: String(error?.message || error), name: entry.name });
+      notionStatusChanged();
     } catch (e) {
       void e;
     }
