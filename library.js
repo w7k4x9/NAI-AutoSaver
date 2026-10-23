@@ -103,6 +103,7 @@
   }
   function upsert(entry) {
     fixChar(entry);
+    invalidateGroups();
     const list = entry.source === "dropped" ? state.dropped : state.entries;
     const i = list.findIndex((e) => e.id === entry.id);
     if (i >= 0) {
@@ -252,6 +253,7 @@
   }
 
   function render() {
+    invalidateGroups();
     const terms = parseQuery(state.query);
     const test = navTest(state.nav);
     const cullTest = state.cullNav ? navTest(state.cullNav) : () => true;
@@ -796,7 +798,9 @@
       const badge = tile.querySelector(".tile-cull");
       if (badge) badge.innerHTML = tileCullHtml(id);
     }
-    renderSidebar();
+    // Only the 셀렉 counts (and characters, when filtered by 셀렉) change.
+    renderCullNav(allEntries().filter(navTest(state.nav)));
+    if (state.cullNav) renderSidebar();
     if (state.sel.some((id) => ids.includes(id))) renderInspector();
     if (!$(".compare").hidden) renderCompare({ keepImages: true });
   }
@@ -1029,6 +1033,7 @@
     await LibDB.remove(entry.id);
     const at = state.entries.findIndex((e) => e.id === entry.id);
     if (at >= 0) state.entries[at] = moved;
+    invalidateGroups();
     if (state.cull.has(entry.id)) {
       state.cull.set(newPath, state.cull.get(entry.id));
       state.cull.delete(entry.id);
@@ -1045,6 +1050,7 @@
   async function forget(entry) {
     await LibDB.remove(entry.id);
     state.entries = state.entries.filter((e) => e.id !== entry.id);
+    invalidateGroups();
     state.cull.delete(entry.id);
     const url = thumbUrls.get(entry.id);
     if (url) URL.revokeObjectURL(url);
@@ -1388,9 +1394,26 @@
   function counterOf(entry) {
     return String(entry.name).slice(groupKeyOf(entry).length).trim();
   }
+  // Same-name groups, built once per change of the picture list (a big
+  // library made every arrow key / 셀렉 key scan all of it again).
+  let groupIndex = null;
+  function invalidateGroups() {
+    groupIndex = null;
+  }
   function groupMembers(entry) {
-    const key = groupKeyOf(entry);
-    return allEntries().filter((e) => groupKeyOf(e) === key).sort((a, b) => a.savedAt - b.savedAt || a.name.localeCompare(b.name, "ko", { numeric: true }));
+    if (!groupIndex) {
+      groupIndex = new Map();
+      for (const e of allEntries()) {
+        const k = groupKeyOf(e);
+        const list = groupIndex.get(k);
+        if (list) list.push(e);
+        else groupIndex.set(k, [e]);
+      }
+      for (const list of groupIndex.values()) {
+        if (list.length > 1) list.sort((a, b) => a.savedAt - b.savedAt || a.name.localeCompare(b.name, "ko", { numeric: true }));
+      }
+    }
+    return (groupIndex.get(groupKeyOf(entry)) || [entry]).slice();
   }
   function groupsInView() {
     const seen = new Map();
@@ -1907,7 +1930,8 @@
       }
       const added = state.scan.added;
       state.scan = null;
-      render();
+      if (added) render();
+      else renderFolderBox();
       if (!quiet || added) toast(added ? `폴더에서 새 그림 ${added.toLocaleString("ko-KR")}장을 가져왔어요.` : "폴더의 그림은 이미 다 보관함에 있어요.");
       watchFolder();
     } catch (error) {
@@ -1915,6 +1939,42 @@
       render();
       toast(`폴더를 훑다가 멈췄어요: ${error.message || error}`, "warn");
     }
+  }
+
+  // ---- New pictures while the page is open (a queue is running). They are
+  // gathered and drawn in one go, and never while the user is pressing keys
+  // (셀렉): a full redraw of a big library under the fingers feels like a freeze.
+  let lastInput = 0;
+  const incoming = new Set();
+  let incomingTimer = null;
+  let incomingSince = 0;
+  function arrived(id) {
+    incoming.add(id);
+    if (!incomingSince) incomingSince = Date.now();
+    clearTimeout(incomingTimer);
+    incomingTimer = setTimeout(flushIncoming, 800);
+  }
+  async function flushIncoming() {
+    incomingTimer = null;
+    const busy = Date.now() - lastInput < 2500;
+    if (busy && Date.now() - incomingSince < 20000) {
+      incomingTimer = setTimeout(flushIncoming, 1500);
+      return;
+    }
+    const ids = [...incoming];
+    incoming.clear();
+    incomingSince = 0;
+    let changed = false;
+    for (const id of ids) {
+      const entry = await LibDB.get(id).catch(() => null);
+      if (!entry) continue;
+      upsert(entry);
+      changed = true;
+    }
+    if (!changed) return;
+    const keepScroll = $(".gallery").scrollTop;
+    render();
+    $(".gallery").scrollTop = keepScroll;
   }
 
   // ---- 폴더와 맞추기: what changed in the folder (탐색기에서 지우기·옮기기·새 파일)
@@ -2001,15 +2061,72 @@
       syncing = false;
     }
   }
+  async function importNew(items) {
+    if (!state.root || state.scan) return;
+    // pictures the extension already filed but not drawn yet count as known
+    for (const id of incoming) {
+      const entry = await LibDB.get(id).catch(() => null);
+      if (entry) upsert(entry);
+    }
+    const byPath = new Set(state.entries.map((e) => e.path));
+    const knownSig = new Set(state.entries.filter((e) => e.bytes).map((e) => pictureSig(e.name, e.bytes)));
+    let added = 0;
+    for (const [rel, handle] of items) {
+      const path = `${state.root.name}/${rel}`;
+      if (byPath.has(path) || incoming.has(path)) continue;
+      try {
+        const file = await handle.getFile();
+        const name = rel.split("/").pop().replace(/\.(png|webp)$/i, "");
+        if (knownSig.has(pictureSig(name, file.size))) continue;
+        if (await LibDB.get(path)) { arrived(path); continue; }
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const entry = await LibDB.buildEntry({ path, bytes, savedAt: file.lastModified || Date.now(), source: path.includes("/_메타없음/") ? "clean" : "folder" });
+        await LibDB.put(entry);
+        arrived(entry.id);
+        added += 1;
+      } catch (error) {
+        void error; // gone again, still being written, …
+      }
+    }
+    return added;
+  }
   let folderObserver = null;
   function watchFolder() {
     if (!state.root || state.rootPerm !== "granted") return;
     if (!folderObserver && typeof window.FileSystemObserver === "function") {
       let t = null;
+      const later = new Map(); // path inside the folder → file handle
+      let laterTimer = null;
       try {
-        folderObserver = new window.FileSystemObserver(() => {
-          clearTimeout(t);
-          t = setTimeout(() => void syncFolder(), 1500);
+        folderObserver = new window.FileSystemObserver((records) => {
+          let full = false;
+          for (const r of records || []) {
+            const parts = r.relativePathComponents || [];
+            const name = parts[parts.length - 1] || "";
+            if (parts.includes(CULL_FOLDER) || parts.includes(TRASH_FOLDER) || parts.some((p) => p.startsWith("."))) continue;
+            const from = r.relativePathMovedFrom || [];
+            const finished = r.type === "moved" && String(from[from.length - 1] || "").endsWith(".crdownload");
+            if ((r.type === "appeared" || r.type === "modified" || finished) && r.changedHandle?.kind === "file") {
+              if (/\.(png|webp)$/i.test(name)) later.set(parts.join("/"), r.changedHandle);
+              continue; // .crdownload and other files: nothing to do
+            }
+            if (r.type === "appeared" && r.changedHandle?.kind === "directory") continue; // its files report themselves
+            if ((r.type === "disappeared" || r.type === "moved") && name.endsWith(".crdownload")) continue; // a download finishing
+            full = true; // removed, moved, renamed, unknown: look at the whole folder
+          }
+          if (later.size) {
+            clearTimeout(laterTimer);
+            // the extension usually files a new save itself within a few seconds
+            laterTimer = setTimeout(() => {
+              const items = [...later];
+              later.clear();
+              void importNew(items);
+            }, 6000);
+          }
+          if (full) {
+            clearTimeout(t);
+            t = setTimeout(() => void syncFolder(), 2500);
+          }
         });
         folderObserver.observe(state.root, { recursive: true }).catch(() => { folderObserver = null; });
       } catch (error) {
@@ -3110,20 +3227,16 @@
       }
     });
     chrome.runtime.onMessage.addListener((message) => {
-      if (message?.action === "libraryChanged" && message.id) {
-        void LibDB.get(message.id).then((entry) => {
-          if (!entry) return;
-          upsert(entry);
-          const keepScroll = $(".gallery").scrollTop;
-          render();
-          $(".gallery").scrollTop = keepScroll;
-        });
-      }
+      if (message?.action === "libraryChanged" && message.id) arrived(message.id);
     });
+    for (const type of ["keydown", "pointerdown", "wheel"]) document.addEventListener(type, () => { lastInput = Date.now(); }, { capture: true, passive: true });
     if (state.root && state.rootPerm === "granted") void scanFolder().then(() => syncFolder({ quiet: true }));
-    document.addEventListener("visibilitychange", () => { if (!document.hidden) void syncFolder(); });
-    window.addEventListener("focus", () => void syncFolder());
-    setInterval(() => { if (!document.hidden) void syncFolder(); }, 60000);
+    // Coming back to the page re-checks the folder (at most every 2 minutes);
+    // without a folder watcher, a slow check every 5 minutes covers the rest.
+    const sometimes = () => { if (!document.hidden && Date.now() - lastSync > 120000) void syncFolder(); };
+    document.addEventListener("visibilitychange", sometimes);
+    window.addEventListener("focus", sometimes);
+    setInterval(() => { if (!folderObserver && !document.hidden) void syncFolder(); }, 300000);
     if (location.hash.includes("notion")) void (notionReady() ? openNotionSettings() : openNotionConnect());
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area === "local" && changes[NotionSync.CONFIG_KEY]) {
