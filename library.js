@@ -1417,11 +1417,13 @@
   // ------------------------------------------------------------- 비교 ---
   // Pictures side by side. Opened for the selected pictures, or for every
   // picture with the same name (김춘자_교실 웃음 (1), (2)…), then mark them.
-  // Two ways to look: 한눈에 (every picture at once) and 나란히: two lanes,
-  // 미분류 on the left and the chosen ones (채택, or B컷) on the right. Click
-  // a lane (or Tab) to choose which one ←/→ rolls through; Q/W/E/R mark the
-  // picture showing in that lane, so it moves from the left lane to the right.
-  const cmp = { ids: [], focus: 0, filter: "all", group: null, urls: new Map(), token: 0, mode: "pair", actual: false, lane: { side: "a", a: 0, b: 0, right: "pick" } };
+  // Two ways to look: 한눈에 (every picture at once) and 나란히: two lanes.
+  // The right lane is the 기준 (채택, or B컷) and stays put; the left lane rolls
+  // through 미분류 — or through 채택 too, for "mark all 채택, then knock them
+  // down to B컷 one by one against the best". Click a lane (or Tab) to choose
+  // which one ←/→ rolls; Q/W/E/R mark the picture in that lane; S swaps the
+  // two (the left picture becomes the 기준).
+  const cmp = { ids: [], focus: 0, filter: "all", group: null, urls: new Map(), token: 0, mode: "pair", actual: false, lane: { side: "a", a: 0, b: 0, aId: null, bId: null, left: "none", right: "pick" } };
   const CMP_MODE_KEY = "naiAutoSaver.compareMode2";
   try {
     cmp.mode = localStorage.getItem(CMP_MODE_KEY) === "grid" ? "grid" : "pair";
@@ -1430,41 +1432,91 @@
   }
   const CMP_HINTS = {
     grid: "←/→ 고르기 · Q 채택 · W B컷 · E 탈락 · R 미분류 · 두 번 누르면 크게 · M 나란히로 · Esc 닫기",
-    pair: "←/→ 넘기기 · 왼쪽·오른쪽을 눌러(또는 Tab) 넘길 쪽 고르기 · Q 채택 · W B컷 · E 탈락 · R 미분류 · Z 둘 다 확대 · M 한눈에로 · Esc 닫기",
+    pair: "←/→ 넘기기 · 왼쪽·오른쪽을 눌러(또는 Tab) 넘길 쪽 고르기 · Q 채택 · W B컷 · E 탈락 · R 미분류 · S 왼쪽을 기준으로 · Z 둘 다 확대 · M 한눈에로 · Esc 닫기",
   };
+  const laneLabelOf = (key) => (key === "none" ? null : key);
   function laneList(side) {
-    return cmp.ids.filter((id) => {
-      const label = cullOf(id).label;
-      return side === "a" ? !label : label === cmp.lane.right;
-    });
+    const want = laneLabelOf(side === "a" ? cmp.lane.left : cmp.lane.right);
+    // the 기준 on the right never shows up on the left as well
+    const skip = side === "a" ? laneCurrent("b") : null;
+    return cmp.ids.filter((id) => (cullOf(id).label || null) === want && id !== skip);
   }
+  // Each lane holds on to the picture it shows (by id): marking another
+  // picture never swaps the 기준 out. When a lane's picture leaves the lane,
+  // the one that took its place shows (= the next one).
   function laneIndex(side) {
-    const n = laneList(side).length;
-    cmp.lane[side] = n ? Math.max(0, Math.min(cmp.lane[side], n - 1)) : 0;
+    laneCurrent(side);
     return cmp.lane[side];
   }
   function laneCurrent(side) {
-    return laneList(side)[laneIndex(side)] || null;
+    const list = laneList(side);
+    const key = `${side}Id`;
+    const at = list.indexOf(cmp.lane[key]);
+    if (at >= 0) {
+      cmp.lane[side] = at;
+      return cmp.lane[key];
+    }
+    if (!list.length) {
+      cmp.lane[side] = 0;
+      cmp.lane[key] = null;
+      return null;
+    }
+    cmp.lane[side] = Math.max(0, Math.min(cmp.lane[side], list.length - 1));
+    cmp.lane[key] = list[cmp.lane[side]];
+    return cmp.lane[key];
   }
   function rollLane(side, step) {
-    const n = laneList(side).length;
+    const list = laneList(side);
     cmp.lane.side = side;
-    if (n) cmp.lane[side] = (laneIndex(side) + step + n) % n;
+    if (list.length) {
+      const at = (laneIndex(side) + step + list.length) % list.length;
+      cmp.lane[side] = at;
+      cmp.lane[`${side}Id`] = list[at];
+    }
     cmp.actual = false;
   }
   // After a mark: the left lane shows the next picture by itself; a picture
-  // that just landed in the right lane is shown there.
-  function followMark(id) {
-    const at = laneList("b").indexOf(id);
-    if (at >= 0) cmp.lane.b = at;
-    laneIndex("a");
-    laneIndex("b");
+  // that was marked into the right lane's label (from the left) is shown there.
+  function followMark(id, fromSide) {
+    if (fromSide === "a" && laneList("b").includes(id) && laneLabelOf(cmp.lane.left) !== laneLabelOf(cmp.lane.right)) cmp.lane.bId = id;
+    laneCurrent("b");
+    laneCurrent("a");
+  }
+  // S: the left picture becomes the 기준 and the old 기준 goes to the left —
+  // each takes the other's label when the lanes show different ones.
+  function swapLanes() {
+    const a = laneCurrent("a");
+    const b = laneCurrent("b");
+    if (!a) return;
+    const left = laneLabelOf(cmp.lane.left);
+    const right = laneLabelOf(cmp.lane.right);
+    if (left !== right) {
+      applyCullAction([a], { label: right });
+      if (b) applyCullAction([b], { label: left });
+    }
+    cmp.lane.bId = a;
+    cmp.lane.aId = b;
+    cmp.lane.side = "a";
+    laneCurrent("b");
+    laneCurrent("a");
+    renderCompare({ keepImages: true });
+  }
+  // 나란히 opened on pictures that are all marked already (e.g. everything
+  // 채택 first): roll the left lane through that label, not an empty 미분류.
+  function pickLeftLane() {
+    const count = (want) => cmp.ids.filter((id) => (cullOf(id).label || null) === want).length;
+    if (count(laneLabelOf(cmp.lane.left)) > (cmp.lane.left === cmp.lane.right ? 1 : 0)) return;
+    if (count(null)) cmp.lane.left = "none";
+    else if (count(laneLabelOf(cmp.lane.right)) > 1) cmp.lane.left = cmp.lane.right;
+    else if (count("pick") > 1) cmp.lane.left = cmp.lane.right = "pick";
+    else if (count("hold") > 1) cmp.lane.left = cmp.lane.right = "hold";
   }
   function markInLane(action) {
-    const id = laneCurrent(cmp.lane.side);
+    const side = cmp.lane.side;
+    const id = laneCurrent(side);
     if (!id) return;
     applyCullAction([id], action);
-    followMark(id);
+    followMark(id, side);
     renderCompare({ keepImages: true });
   }
   function setCompareMode(mode) {
@@ -1528,7 +1580,8 @@
     cmp.ids = ids.slice(0, 48);
     cmp.group = group;
     cmp.focus = 0;
-    cmp.lane = { side: "a", a: 0, b: 0, right: cmp.lane.right || "pick" };
+    cmp.lane = { side: "a", a: 0, b: 0, aId: null, bId: null, left: cmp.lane.left || "none", right: cmp.lane.right || "pick" };
+    pickLeftLane();
     cmp.actual = false;
     $(".compare").hidden = false;
     renderCompare();
@@ -1629,11 +1682,13 @@
       const entry = id ? byId(id) : null;
       const cell = el("div", { class: "cmp-cell cmp-lane", "data-side": side, "data-id": id || null, "data-focus": String(cmp.lane.side === side), "data-cull": id ? cullOf(id).label || null : null });
       const title = side === "a"
-        ? el("span", { class: "cmp-lane-title", text: NONE_LABEL })
-        : el("div", { class: "cmp-lane-pick", role: "radiogroup", "aria-label": "오른쪽에 볼 것" },
-          ["pick", "hold"].map((l) => el("button", { type: "button", role: "radio", "data-lane-right": l, "aria-checked": String(cmp.lane.right === l), text: LABELS[l] })));
+        ? el("div", { class: "cmp-lane-pick", role: "radiogroup", "aria-label": "왼쪽에서 넘겨 볼 것" },
+          ["none", "pick", "hold"].map((l) => el("button", { type: "button", role: "radio", "data-lane-left": l, "aria-checked": String(cmp.lane.left === l), text: l === "none" ? NONE_LABEL : LABELS[l] })))
+        : el("div", { class: "cmp-lane-pick", role: "radiogroup", "aria-label": "기준 (오른쪽)" },
+          ["pick", "hold"].map((l) => el("button", { type: "button", role: "radio", "data-lane-right": l, "aria-checked": String(cmp.lane.right === l), text: `기준 ${LABELS[l]}` })));
       cell.append(el("div", { class: "cmp-lane-head" }, [
         title,
+        side === "b" ? el("button", { class: "cmp-swap", type: "button", "data-swap": "1", title: "왼쪽 그림을 기준으로 (S)", disabled: laneCurrent("a") ? null : "", html: `${icon("swap", 14)}<span>바꾸기</span>` }) : null,
         el("span", { class: "cmp-lane-count", text: list.length ? `${at + 1} / ${list.length}` : "0장" }),
         el("button", { class: "cmp-roll", type: "button", "data-roll": "-1", "aria-label": "이전", disabled: list.length < 2 ? "" : null, text: "‹" }),
         el("button", { class: "cmp-roll", type: "button", "data-roll": "1", "aria-label": "다음", disabled: list.length < 2 ? "" : null, text: "›" }),
@@ -1650,8 +1705,11 @@
         cell.append(quick);
         preload.push(id, list[(at + 1) % list.length], list[(at - 1 + list.length) % list.length]);
       } else {
+        const leftName = cmp.lane.left === "none" ? NONE_LABEL : LABELS[cmp.lane.left];
         const msg = side === "a"
-          ? (cmp.ids.length ? "<p>미분류 그림이 없어요. 다 골랐어요!</p>" : "")
+          ? (!cmp.ids.length ? ""
+            : cmp.lane.left === cmp.lane.right ? `<p>기준 말고 남은 ${leftName}이 없어요. 다 골랐어요!</p>`
+            : `<p>${leftName} 그림이 없어요.${cmp.lane.left === "none" ? " 다 골랐어요!" : ""}</p>`)
           : `<p>아직 ${LABELS[cmp.lane.right]}이 없어요.<br>왼쪽에서 <b>${cmp.lane.right === "pick" ? "Q" : "W"}</b>를 누르면 여기로 와요.</p>`;
         cell.append(el("div", { class: "cmp-lane-empty", html: msg }));
         if (side === "a" && cmp.group && groupsInView().length > 1) {
@@ -1733,7 +1791,7 @@
         cmp.focus = compareVisible().indexOf(id);
         if (cmp.mode === "pair") cmp.lane.side = quick.closest(".cmp-cell").dataset.side;
         applyCullAction([id], { label: quick.dataset.quick === "none" ? null : quick.dataset.quick });
-        if (cmp.mode === "pair") { followMark(id); renderCompare({ keepImages: true }); }
+        if (cmp.mode === "pair") { followMark(id, quick.closest(".cmp-cell").dataset.side); renderCompare({ keepImages: true }); }
         return;
       }
       const roll = event.target.closest("[data-roll]");
@@ -1746,10 +1804,21 @@
       if (right) {
         cmp.lane.right = right.dataset.laneRight;
         cmp.lane.b = 0;
+        cmp.lane.bId = null;
         cmp.lane.side = "b";
         renderCompare({ keepImages: true });
         return;
       }
+      const left = event.target.closest("[data-lane-left]");
+      if (left) {
+        cmp.lane.left = left.dataset.laneLeft;
+        cmp.lane.a = 0;
+        cmp.lane.aId = null;
+        cmp.lane.side = "a";
+        renderCompare({ keepImages: true });
+        return;
+      }
+      if (event.target.closest("[data-swap]")) { swapLanes(); return; }
       if (event.target.closest("[data-next-group]")) { stepGroup(1); return; }
       const cell = event.target.closest(".cmp-cell");
       if (cell && cmp.mode === "pair") {
@@ -1794,6 +1863,7 @@
         if (action) { stop(); markInLane(action); return; }
         if (event.key === "ArrowLeft" || event.key === "ArrowUp") { stop(); rollLane(cmp.lane.side, -1); renderCompare({ keepImages: true }); return; }
         if (event.key === "ArrowRight" || event.key === "ArrowDown") { stop(); rollLane(cmp.lane.side, 1); renderCompare({ keepImages: true }); return; }
+        if (event.code === "KeyS" && !event.metaKey && !event.ctrlKey && !event.altKey) { stop(); swapLanes(); return; }
         if (event.key === "Tab") { stop(); cmp.lane.side = cmp.lane.side === "a" ? "b" : "a"; renderCompare({ keepImages: true }); return; }
         if (event.code === "KeyZ" && !event.metaKey && !event.ctrlKey) { stop(); togglePairZoom(); return; }
         if (event.key === "Escape" && cmp.actual) { stop(); togglePairZoom(); return; }

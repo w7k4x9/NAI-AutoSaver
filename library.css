@@ -523,6 +523,9 @@ body { word-break: keep-all; overflow-wrap: anywhere; }
 .cmp-lane-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: rgba(255,255,255,0.55); text-align: center; line-height: 1.6; font-size: 13.5px; padding: 20px; }
 .cmp-lane-empty p { margin: 0; }
 .cmp-lane-empty b { color: #fff; }
+.cmp-swap { height: 26px; display: inline-flex; align-items: center; gap: 4px; padding: 0 9px; border: none; border-radius: 7px; background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.85); font: inherit; font-size: 12.5px; cursor: pointer; }
+.cmp-swap:hover:not(:disabled) { background: rgba(255,255,255,0.18); }
+.cmp-swap:disabled { opacity: 0.35; cursor: default; }
 .cmp-lane[data-focus="false"] .cmp-lane-head { opacity: 0.7; }
 .nt-last:empty { display: none; }
 .sheet-warn { margin: 0 0 4px; padding: 10px 12px; border-radius: 10px; background: var(--warn-bg); color: var(--warn-text); font-size: 12.5px; line-height: 1.45; word-break: break-all; }
