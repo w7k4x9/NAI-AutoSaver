@@ -9957,7 +9957,7 @@
       chrome.storage.local.get(UPDATE_TOAST_KEY, (r) => {
         if (chrome.runtime.lastError || r?.[UPDATE_TOAST_KEY] === info.latest) return;
         chrome.storage.local.set({ [UPDATE_TOAST_KEY]: info.latest });
-        showToast(`새 버전이 나왔어요 (${info.latest}) · 설정 맨 아래에서 업데이트할 수 있어요`);
+        showToast(`새 버전 ${info.latest} · 설정 맨 아래에서 업데이트해요`);
       });
     });
   }
