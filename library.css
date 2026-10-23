@@ -500,7 +500,7 @@ body { word-break: keep-all; overflow-wrap: anywhere; }
 .nav-item.cull-export svg { color: var(--accent); }
 .ios-row[data-disabled="true"] { opacity: 0.4; pointer-events: none; }
 
-/* 나란히: two lanes, 안 고름 | 채택 (or B컷); the blue one is what ←/→ rolls */
+/* 나란히: two lanes, 미분류 | 채택 (or B컷); the blue one is what ←/→ rolls */
 .compare[data-mode="pair"] .cmp-filter { display: none; }
 .cmp-lane { flex-direction: column; align-items: stretch; justify-content: flex-start; }
 .cmp-lane .cmp-scroll { flex: 1; min-height: 0; }

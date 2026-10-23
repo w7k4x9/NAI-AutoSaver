@@ -660,13 +660,13 @@
   }
 
   // ---------------------------------------------------------------- 셀렉 ---
-  // Culling mark per picture: 안 고름 (nothing), 채택, B컷 or 탈락. Kept in the
+  // Culling mark per picture: 미분류 (nothing), 채택, B컷 or 탈락. Kept in the
   // library database next to the entries (not inside them, so re-reading a
   // folder never wipes them). Keys follow the physical key so they also work
-  // while typing Korean: Q/P 채택, W B컷, E/X 탈락, R/U 안 고름.
+  // while typing Korean: Q/P 채택, W B컷, E/X 탈락, R/U 미분류.
   const LABELS = { pick: "채택", hold: "B컷", reject: "탈락" };
-  const NONE_LABEL = "안 고름";
-  const CULL_CHOICES = [["none", NONE_LABEL, "R"], ["pick", "채택", "Q"], ["hold", "B컷", "W"], ["reject", "탈락", "E"]];
+  const NONE_LABEL = "미분류";
+  const CULL_CHOICES = [["pick", "채택", "Q"], ["hold", "B컷", "W"], ["reject", "탈락", "E"], ["none", NONE_LABEL, "R"]];
   const CULL_KV = "cull";
   state.cull = new Map();
   let cullTimer = null;
@@ -699,7 +699,7 @@
     saveCull();
     refreshCullLook(ids);
   }
-  // A plain choice, like a segmented control: 안 고름 is its own option.
+  // A plain choice, like a segmented control: 미분류 is its own option.
   function applyCullAction(ids, action) {
     if (!ids.length || !action || !("label" in action)) return;
     setCull(ids, { label: action.label || null });
@@ -758,8 +758,8 @@
       if (label) counts[label] += 1;
     }
     const icons = { pick: "check_circle", hold: "counter_2", reject: "minus_circle" };
-    nav.append(navButton("cull:none", NONE_LABEL, "image", all.length - counts.pick - counts.hold - counts.reject));
     for (const label of ["pick", "hold", "reject"]) nav.append(navButton(`cull:${label}`, LABELS[label], icons[label], counts[label]));
+    nav.append(navButton("cull:none", NONE_LABEL, "ring", all.length - counts.pick - counts.hold - counts.reject));
     if (counts.pick + counts.hold) {
       nav.append(el("button", { class: "nav-item cull-export", type: "button", title: "채택·B컷을 캐릭터별 폴더로 나눠서 따로 저장해요", html: `${icon("folder")}<span class="label">폴더로 나눠 저장…</span>`, onclick: () => openCullExport() }));
     }
@@ -983,7 +983,7 @@
   // Pictures side by side. Opened for the selected pictures, or for every
   // picture with the same name (김춘자_교실 웃음 (1), (2)…), then mark them.
   // Two ways to look: 한눈에 (every picture at once) and 나란히: two lanes,
-  // 안 고름 on the left and the chosen ones (채택, or B컷) on the right. Click
+  // 미분류 on the left and the chosen ones (채택, or B컷) on the right. Click
   // a lane (or Tab) to choose which one ←/→ rolls through; Q/W/E/R mark the
   // picture showing in that lane, so it moves from the left lane to the right.
   const cmp = { ids: [], focus: 0, filter: "all", group: null, urls: new Map(), token: 0, mode: "pair", actual: false, lane: { side: "a", a: 0, b: 0, right: "pick" } };
@@ -994,8 +994,8 @@
     void error;
   }
   const CMP_HINTS = {
-    grid: "←/→ 고르기 · R 안 고름 · Q 채택 · W B컷 · E 탈락 · 두 번 누르면 크게 · M 나란히로 · Esc 닫기",
-    pair: "←/→ 넘기기 · 왼쪽·오른쪽을 눌러(또는 Tab) 넘길 쪽 고르기 · Q 채택 · W B컷 · E 탈락 · R 안 고름 · Z 둘 다 확대 · M 한눈에로 · Esc 닫기",
+    grid: "←/→ 고르기 · Q 채택 · W B컷 · E 탈락 · R 미분류 · 두 번 누르면 크게 · M 나란히로 · Esc 닫기",
+    pair: "←/→ 넘기기 · 왼쪽·오른쪽을 눌러(또는 Tab) 넘길 쪽 고르기 · Q 채택 · W B컷 · E 탈락 · R 미분류 · Z 둘 다 확대 · M 한눈에로 · Esc 닫기",
   };
   function laneList(side) {
     return cmp.ids.filter((id) => {
@@ -1119,7 +1119,7 @@
     $(".cmp-title").textContent = cmp.group || `고른 ${cmp.ids.length}장`;
     const groups = cmp.group ? groupsInView() : [];
     const at = groups.findIndex(([key]) => key === cmp.group);
-    $(".cmp-sub").textContent = [cmp.mode === "pair" ? `${cmp.ids.length}장` : `${visible.length} / ${cmp.ids.length}장`, `${NONE_LABEL} ${counts.none}`, `채택 ${counts.pick}`, `B컷 ${counts.hold}`, `탈락 ${counts.reject}`, groups.length > 1 && at >= 0 ? `묶음 ${at + 1} / ${groups.length}` : ""].filter(Boolean).join(" · ");
+    $(".cmp-sub").textContent = [cmp.mode === "pair" ? `${cmp.ids.length}장` : `${visible.length} / ${cmp.ids.length}장`, `채택 ${counts.pick}`, `B컷 ${counts.hold}`, `탈락 ${counts.reject}`, `${NONE_LABEL} ${counts.none}`, groups.length > 1 && at >= 0 ? `묶음 ${at + 1} / ${groups.length}` : ""].filter(Boolean).join(" · ");
     box.querySelectorAll(".cmp-nav").forEach((b) => { b.hidden = !(groups.length > 1); });
     box.querySelectorAll("[data-cmp-filter]").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.cmpFilter === cmp.filter)));
     box.querySelectorAll("[data-cmp-mode]").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.cmpMode === cmp.mode)));
@@ -1197,7 +1197,7 @@
         preload.push(id, list[(at + 1) % list.length], list[(at - 1 + list.length) % list.length]);
       } else {
         const msg = side === "a"
-          ? (cmp.ids.length ? "<p>안 고른 그림이 없어요. 다 골랐어요!</p>" : "")
+          ? (cmp.ids.length ? "<p>미분류 그림이 없어요. 다 골랐어요!</p>" : "")
           : `<p>아직 ${LABELS[cmp.lane.right]}이 없어요.<br>왼쪽에서 <b>${cmp.lane.right === "pick" ? "Q" : "W"}</b>를 누르면 여기로 와요.</p>`;
         cell.append(el("div", { class: "cmp-lane-empty", html: msg }));
         if (side === "a" && cmp.group && groupsInView().length > 1) {
