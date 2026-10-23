@@ -9925,9 +9925,13 @@
   function applyUpdateInfo(info) {
     if (!ui.updateRow || !info?.eligible) return;
     ui.updateRow.hidden = false;
-    ui.updateRow.dataset.available = info.available ? "true" : "false";
+    ui.updateRow.dataset.available = info.available || info.store ? "true" : "false";
     const label = ui.updateButton.querySelector("span");
-    if (info.available) {
+    if (info.store) {
+      ui.updateSub.textContent = "웹 스토어 버전이 나왔어요 · 업데이트가 자동이에요";
+      label.textContent = "옮기기…";
+      ui.updateButton.classList.remove("secondary");
+    } else if (info.available) {
       ui.updateSub.textContent = `새 버전 ${info.latest} · 지금 ${info.current}`;
       label.textContent = "업데이트…";
       ui.updateButton.classList.remove("secondary");
@@ -9953,11 +9957,12 @@
     chrome.runtime.sendMessage({ action: "updateStatus" }, (info) => {
       void chrome.runtime.lastError;
       applyUpdateInfo(info);
-      if (!info?.available) return;
+      if (!info?.available && !info?.store) return;
+      const key = info.store ? "store" : info.latest;
       chrome.storage.local.get(UPDATE_TOAST_KEY, (r) => {
-        if (chrome.runtime.lastError || r?.[UPDATE_TOAST_KEY] === info.latest) return;
-        chrome.storage.local.set({ [UPDATE_TOAST_KEY]: info.latest });
-        showToast(`새 버전 ${info.latest} · 설정 맨 아래에서 업데이트해요`);
+        if (chrome.runtime.lastError || r?.[UPDATE_TOAST_KEY] === key) return;
+        chrome.storage.local.set({ [UPDATE_TOAST_KEY]: key });
+        showToast(info.store ? "웹 스토어 버전이 나왔어요 · 설정 맨 아래에서 옮길 수 있어요" : `새 버전 ${info.latest} · 설정 맨 아래에서 업데이트해요`);
       });
     });
   }

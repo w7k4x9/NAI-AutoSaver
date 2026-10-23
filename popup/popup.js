@@ -68,6 +68,15 @@ async function init() {
 // GitHub copies only: Chrome doesn't update those, so say when a new one is out.
 async function showUpdate() {
   const info = await runtimeSend({ action: "updateStatus" });
+  if (info?.store) {
+    // The store copy updates by itself: offer that instead of GitHub updates.
+    $("storeGroup").hidden = false;
+    $("storeBtn").addEventListener("click", async () => {
+      await runtimeSend({ action: "openUpdatePage" });
+      window.close();
+    });
+    return;
+  }
   if (!info?.available) return;
   $("updateTitle").textContent = `새 버전 ${info.latest}`;
   $("updateSub").textContent = `지금 ${info.current} · 눌러서 업데이트`;

@@ -79,6 +79,8 @@
       latest,
       available: Boolean(isEligible && latest && compareVersions(latest, current) > 0),
       notes: latest && compareVersions(latest, current) > 0 ? (state.notes || []).filter((n) => compareVersions(n.version, current) > 0) : [],
+      // Web Store page once the store copy is out (store.json in the repo).
+      store: isEligible && state?.store ? state.store : "",
       checkedAt: state?.checkedAt || 0,
       error: state?.error || "",
     };
@@ -88,6 +90,16 @@
     const res = await fetch(`${RAW}${BRANCH}/${path}?t=${Date.now()}`, { cache: "no-store" });
     if (!res.ok) throw new Error(`GitHub ${res.status}`);
     return res.text();
+  }
+
+  // Only a real Chrome Web Store page is ever offered.
+  function storeUrl(url) {
+    try {
+      const u = new URL(String(url || ""));
+      return u.protocol === "https:" && u.hostname === "chromewebstore.google.com" && u.pathname.startsWith("/detail/") ? u.href : "";
+    } catch (error) {
+      return "";
+    }
   }
 
   let inflight = null;
@@ -113,6 +125,11 @@
         } catch (error) {
           next.error = String(error?.message || error);
         }
+        try {
+          next.store = storeUrl(JSON.parse(await fetchText("store.json")).url);
+        } catch (error) {
+          next.store = next.error ? (state.store || "") : "";
+        }
         await chrome.storage.local.set({ [STATE_KEY]: next });
         return next;
       })().finally(() => { inflight = null; });
@@ -125,7 +142,7 @@
     return describe(state, await eligible());
   }
 
-  const api = { REPO, BRANCH, RAW, STATE_KEY, compareVersions, changesSince, check, status, eligible };
+  const api = { REPO, BRANCH, RAW, STATE_KEY, compareVersions, changesSince, storeUrl, check, status, eligible };
   if (typeof module === "object" && module.exports) module.exports = api;
   root.NAIUpdate = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);

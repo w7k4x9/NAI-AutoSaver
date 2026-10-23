@@ -216,6 +216,7 @@ async function render({ force = false } = {}) {
     });
     return;
   }
+  if (info.store) return renderStore();
   if (!info.available) {
     show({
       icon: "check_circle",
@@ -226,6 +227,26 @@ async function render({ force = false } = {}) {
     return;
   }
   renderAvailable();
+}
+
+// The Web Store copy updates by itself, so once it's out we suggest moving.
+// Installing it is enough: this copy then steps aside on its own and hands
+// memos, queue and settings over (see handoff.html).
+function renderStore() {
+  show({
+    icon: "check_circle",
+    title: "웹 스토어 버전이 나왔어요",
+    sub: `지금 쓰는 버전 ${info.current} (GitHub)`,
+    msg: `<p>스토어에서 설치하면 <b>업데이트를 크롬이 알아서</b> 해 줘요. 폴더 고르기도, zip도 이제 필요 없어요.</p>
+<ol class="steps">
+  <li>아래 「웹 스토어에서 설치」 → <b>Chrome에 추가</b></li>
+  <li>NovelAI 탭을 새로고침하면 이 GitHub 버전은 알아서 물러나고, <b>메모·대기열·설정</b>은 스토어 버전으로 넘어가요.</li>
+  <li>「예전 버전 지우기」 화면이 뜨면 눌러서 정리해요.</li>
+</ol>
+<p class="small">보관함은 스토어 버전에서 폴더를 한 번 다시 연결하면 다시 채워져요.</p>`,
+    primary: { label: "웹 스토어에서 설치", onClick: () => chrome.tabs.create({ url: info.store }) },
+    secondary: info.available ? { label: `그냥 GitHub로 ${info.latest} 업데이트`, onClick: () => renderAvailable() } : null,
+  });
 }
 
 function renderAvailable(extra = {}) {
