@@ -517,3 +517,5 @@ body { word-break: keep-all; overflow-wrap: anywhere; }
 .cmp-lane-empty p { margin: 0; }
 .cmp-lane-empty b { color: #fff; }
 .cmp-lane[data-focus="false"] .cmp-lane-head { opacity: 0.7; }
+.sheet-warn { margin: 0 0 4px; padding: 10px 12px; border-radius: 10px; background: var(--warn-bg); color: var(--warn-text); font-size: 12.5px; line-height: 1.45; word-break: break-all; }
+.notion-box[data-state="warn"] .conn-sub { color: var(--warn-text); }

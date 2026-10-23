@@ -2118,8 +2118,16 @@
 
   // ------------------------------------------------------------------ 노션 ---
   let notionCfg = { autoSend: false, upload: "clean" };
+  // Last automatic send, good or bad (written by the background worker).
+  let notionAuto = { ok: null, err: null };
   async function loadNotion() {
     notionCfg = await NotionSync.getConfig();
+    const [ok, err] = await Promise.all([LibDB.getKv("notionLastOk").catch(() => null), LibDB.getKv("notionLastError").catch(() => null)]);
+    notionAuto = { ok, err };
+  }
+  function notionAutoFailing() {
+    const { ok, err } = notionAuto;
+    return Boolean(err && (!ok || err.at > ok.at));
   }
   function notionReady() {
     return Boolean(notionCfg.token && notionCfg.dataSourceId);
@@ -2130,9 +2138,12 @@
     box.innerHTML = "";
     box.dataset.state = notionReady() ? "ok" : "none";
     if (notionReady()) {
+      const failing = notionCfg.autoSend && notionAutoFailing();
+      box.dataset.state = failing ? "warn" : "ok";
       box.append(connRow({
         iconName: "notion", title: notionCfg.title || "노션",
-        meta: notionCfg.autoSend ? '<i class="dot"></i>자동' : '<i class="dot"></i>',
+        sub: failing ? "자동 보내기가 실패했어요 · 눌러서 보기" : notionCfg.autoSend ? "새 그림 자동으로 보내는 중" : "자동 보내기 꺼짐 · 눌러서 켜기",
+        meta: notionCfg.autoSend && !failing ? '<i class="dot"></i>자동' : "",
         action: () => void openNotionSettings(), actionTitle: "노션 설정",
       }));
     } else {
@@ -2259,8 +2270,12 @@
     orig.classList.add("ios-check");
     once.classList.add("ios-check");
     every.classList.add("ios-check");
+    const last = notionAutoFailing()
+      ? el("p", { class: "sheet-warn", text: `마지막 자동 보내기 실패 (${new Date(notionAuto.err.at).toLocaleString("ko-KR")} · ${notionAuto.err.name || ""}): ${notionAuto.err.message}` })
+      : notionAuto.ok ? el("p", { class: "sheet-note", text: `마지막으로 자동으로 보낸 그림: ${notionAuto.ok.name || ""} (${new Date(notionAuto.ok.at).toLocaleString("ko-KR")})${notionAuto.ok.same ? " · 같은 프롬프트라 건너뜀" : ""}` }) : null;
     body.append(
-      el("p", { class: "sheet-note", text: `연결된 곳: ${notionCfg.title || ""}` }),
+      el("p", { class: "sheet-note", text: `연결된 곳: ${notionCfg.title || ""} · 노션에서 이름이나 아이콘을 바꿔도 괜찮아요.` }),
+      last,
       el("div", { class: "ios-group" }, [
         el("label", { class: "ios-row", for: "nt-auto" }, [el("span", { class: "grow", text: "새로 저장되는 그림 자동으로 보내기" }), auto]),
       ]),

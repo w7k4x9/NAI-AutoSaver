@@ -462,6 +462,7 @@ async function autoSendToNotion(entry, bytes) {
     // skipped: the same prompt is already in Notion; link to that page.
     entry.notion = { id: page.id, url: page.url, at: Date.now(), ...(page.skipped ? { samePrompt: true } : {}) };
     await LibDB.put(entry);
+    await LibDB.setKv("notionLastOk", { at: Date.now(), name: entry.name, same: Boolean(page.skipped) });
   } catch (error) {
     console.warn("notion auto send failed", error);
     try {
