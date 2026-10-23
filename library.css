@@ -520,3 +520,4 @@ body { word-break: keep-all; overflow-wrap: anywhere; }
 .cmp-result .btn.plain:hover { background: rgba(255,255,255,0.1); color: #fff; }
 .nav-item.cull-export .label { color: var(--accent-text); }
 .nav-item.cull-export svg { color: var(--accent); }
+.ios-row[data-disabled="true"] { opacity: 0.4; pointer-events: none; }

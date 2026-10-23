@@ -809,6 +809,9 @@
     });
     const byChar = el("input", { type: "checkbox", class: "ios-switch", id: "cx-char", checked: true });
     const onlyShown = el("input", { type: "checkbox", class: "ios-switch", id: "cx-shown", checked: false });
+    const copyMode = el("input", { type: "radio", name: "cx-how", class: "ios-check", id: "cx-copy", checked: true });
+    const moveMode = el("input", { type: "radio", name: "cx-how", class: "ios-check", id: "cx-move" });
+    const intro = el("p", { class: "sheet-note" });
     const orig = el("input", { type: "radio", name: "cx-file", class: "ios-check", id: "cx-orig", checked: true });
     const clean = el("input", { type: "radio", name: "cx-file", class: "ios-check", id: "cx-clean" });
     const preview = el("p", { class: "sheet-note" });
@@ -818,11 +821,24 @@
       const sample = inScope(onlyShown.checked).find((e) => cullOf(e.id).label === label) || { name: "김춘자_교실 웃음 (3)", char: "김춘자" };
       preview.textContent = `→ 다운로드/${state.saveFolder}/${CULL_FOLDER}/${LABELS[label]}/${byChar.checked ? `${sample.char || "기타"}/` : ""}${sample.name}.${sample.format || "webp"}`;
       const total = ["pick", "hold", "reject"].filter((l) => boxes[l].checked).reduce((n, l) => n + countOf(l, onlyShown.checked), 0);
-      save.textContent = total ? `${total}장 저장` : "저장";
+      const moving = moveMode.checked;
+      // Moving keeps the file as it is, so the clean-copy choice does not apply.
+      clean.disabled = moving;
+      if (moving) orig.checked = true;
+      clean.closest(".ios-row").dataset.disabled = String(moving);
+      intro.textContent = moving
+        ? "원본 파일을 라벨 · 캐릭터별 폴더로 옮겨요. 날짜 폴더에서는 빠지고, 보관함은 새 위치를 따라가요."
+        : "원본은 그대로 두고 복사본을 라벨 · 캐릭터별 폴더에 따로 저장해요.";
+      save.textContent = total ? `${total}장 ${moving ? "옮기기" : "저장"}` : moving ? "옮기기" : "저장";
       save.disabled = !total;
     };
     body.append(
-      el("p", { class: "sheet-note", text: "원본은 그대로 두고 복사본을 라벨 · 캐릭터별 폴더에 따로 저장해요." }),
+      intro,
+      el("div", { class: "ios-group-label", text: "방법" }),
+      el("div", { class: "ios-group" }, [
+        el("label", { class: "ios-row", for: "cx-copy" }, [el("span", { class: "grow" }, [document.createTextNode("복사"), el("small", { text: "원본은 그대로 · 추천" })]), copyMode]),
+        el("label", { class: "ios-row", for: "cx-move" }, [el("span", { class: "grow" }, [document.createTextNode("이동"), el("small", { text: "원본을 옮겨요 · 크롬이 폴더 수정 허락을 한 번 물어봐요" })]), moveMode]),
+      ]),
       el("div", { class: "ios-group-label", text: "무엇을" }),
       el("div", { class: "ios-group" }, labelRows),
       el("div", { class: "ios-group-label", text: "나누는 방법" }),
@@ -843,8 +859,111 @@
       const labels = ["pick", "hold", "reject"].filter((l) => boxes[l].checked);
       const list = inScope(onlyShown.checked).filter((e) => labels.includes(cullOf(e.id).label));
       dialog.close();
-      void exportCulled(list, { byChar: byChar.checked, clean: clean.checked });
+      if (moveMode.checked) void moveCulled(list, { byChar: byChar.checked });
+      else void exportCulled(list, { byChar: byChar.checked, clean: clean.checked });
     });
+  }
+
+  // ---- 이동: move the originals inside the linked folder ----------------------
+  async function ensureWritable() {
+    if (!state.root && !(await connectFolder())) return false;
+    try {
+      if ((await state.root.queryPermission({ mode: "readwrite" })) === "granted") return true;
+      return (await state.root.requestPermission({ mode: "readwrite" })) === "granted";
+    } catch (error) {
+      return false;
+    }
+  }
+  // Path segments of an entry relative to the linked folder.
+  function relSegments(entry) {
+    const segments = entry.path.split("/");
+    const at = segments.indexOf(state.root.name);
+    return at >= 0 ? segments.slice(at + 1) : segments;
+  }
+  async function dirAt(parts, create = false) {
+    let dir = state.root;
+    for (const part of parts) dir = await dir.getDirectoryHandle(part, { create });
+    return dir;
+  }
+  async function freeName(dir, name) {
+    const dot = name.lastIndexOf(".");
+    const stem = dot > 0 ? name.slice(0, dot) : name;
+    const ext = dot > 0 ? name.slice(dot) : "";
+    for (let n = 1; n < 1000; n += 1) {
+      const candidate = n === 1 ? name : `${stem} [${n}]${ext}`;
+      try {
+        await dir.getFileHandle(candidate);
+      } catch (error) {
+        return candidate;
+      }
+    }
+    return `${stem} [${Date.now()}]${ext}`;
+  }
+  async function moveCulled(list, { byChar }) {
+    const movable = list.filter((e) => e.source !== "dropped");
+    if (!movable.length) {
+      toast("불러온 파일은 옮길 수 없어요. 복사를 골라 주세요.", "warn");
+      return;
+    }
+    const ok = await confirmDialog(`${movable.length}장을 옮길까요?`, `날짜 폴더에서 다운로드/${state.saveFolder}/${CULL_FOLDER}/ 아래 라벨${byChar ? " · 캐릭터" : ""} 폴더로 옮겨요. 되돌리려면 직접 옮겨야 해요.`, "옮기기");
+    if (!ok || !(await ensureWritable())) {
+      if (ok) toast("폴더를 수정하도록 허락해야 옮길 수 있어요.", "warn");
+      return;
+    }
+    const safe = (text) => String(text || "").replace(/[\\/:*?"<>|]/g, "_").trim();
+    // Keep the sorted folders next to the date folders, inside the save folder.
+    const saveParts = state.saveFolder.split("/").filter(Boolean);
+    const lead = relSegments(movable[0]);
+    const base = state.root.name === saveParts[saveParts.length - 1] ? []
+      : saveParts.every((part, i) => lead[i] === part) ? saveParts : [];
+    let moved = 0;
+    const failed = [];
+    for (let i = 0; i < movable.length; i += 1) {
+      const entry = movable[i];
+      toast(`옮기는 중… ${i + 1} / ${movable.length}`);
+      try {
+        const rel = relSegments(entry);
+        const from = await dirAt(rel.slice(0, -1));
+        const handle = await from.getFileHandle(rel[rel.length - 1]);
+        const target = [...base, CULL_FOLDER, LABELS[cullOf(entry.id).label] || "기타"];
+        if (byChar) target.push(safe(entry.char) || "기타");
+        const to = await dirAt(target, true);
+        const name = await freeName(to, rel[rel.length - 1]);
+        if (typeof handle.move === "function") {
+          await handle.move(to, name);
+        } else {
+          // Older Chrome: write a copy, then remove the original.
+          const data = await (await handle.getFile()).arrayBuffer();
+          const writable = await (await to.getFileHandle(name, { create: true })).createWritable();
+          await writable.write(data);
+          await writable.close();
+          await from.removeEntry(rel[rel.length - 1]);
+        }
+        const newPath = [state.root.name, ...target, name].join("/");
+        const moved_ = { ...entry, id: newPath, path: newPath, downloadId: null };
+        await LibDB.put(moved_);
+        await LibDB.remove(entry.id);
+        const at = state.entries.findIndex((e) => e.id === entry.id);
+        if (at >= 0) state.entries[at] = moved_;
+        if (state.cull.has(entry.id)) {
+          state.cull.set(newPath, state.cull.get(entry.id));
+          state.cull.delete(entry.id);
+        }
+        const url = thumbUrls.get(entry.id);
+        if (url) {
+          thumbUrls.set(newPath, url);
+          thumbUrls.delete(entry.id);
+        }
+        state.sel = state.sel.map((id) => (id === entry.id ? newPath : id));
+        moved += 1;
+      } catch (error) {
+        failed.push(entry.name);
+      }
+    }
+    saveCull();
+    render();
+    if (moved) toast(`${moved}장을 ${CULL_FOLDER} 폴더로 옮겼어요${failed.length ? ` · ${failed.length}장은 못 옮겼어요` : ""}.`, failed.length ? "warn" : "ok");
+    else toast(`옮기지 못했어요${failed.length ? `: ${failed.slice(0, 2).join(", ")}${failed.length > 2 ? " …" : ""}` : ""}. 파일이 그 자리에 있는지 확인해 주세요.`, "warn");
   }
 
   async function exportCulled(list, { byChar, clean }) {
@@ -2358,13 +2477,16 @@
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => { node.hidden = true; }, action ? 9000 : 4500);
   }
-  function confirmDialog(title, text, okLabel) {
+  async function confirmDialog(title, text, okLabel) {
     const dialog = $(".dialog");
+    if (dialog.open) dialog.close();
+    // Let a just-closed sheet finish its own close handling first.
+    await new Promise((r) => setTimeout(r, 0));
+    dialog.classList.remove("sheet");
     dialog.innerHTML = "";
     return new Promise((resolve) => {
-      const finish = (value) => { dialog.close(); resolve(value); };
+      const finish = (value) => { dialog.close(); dialog.classList.remove("alert"); resolve(value); };
       dialog.classList.add("alert"); // iOS-style alert
-      dialog.addEventListener("close", () => dialog.classList.remove("alert"), { once: true });
       dialog.append(
         el("div", { class: "dialog-body" }, [el("strong", { text: title }), el("p", { text })]),
         el("div", { class: "dialog-foot" }, [
@@ -2372,7 +2494,7 @@
           el("button", { class: "btn", type: "button", text: okLabel, onclick: () => finish(true) }),
         ]),
       );
-      dialog.addEventListener("cancel", () => resolve(false), { once: true });
+      dialog.addEventListener("cancel", () => { dialog.classList.remove("alert"); resolve(false); }, { once: true });
       dialog.showModal();
     });
   }
