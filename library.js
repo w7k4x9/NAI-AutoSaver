@@ -767,7 +767,53 @@
   // ------------------------------------------------------------- 비교 ---
   // Pictures side by side. Opened for the selected pictures, or for every
   // picture with the same name (김춘자_교실 웃음 (1), (2)…), then mark them.
-  const cmp = { ids: [], focus: 0, filter: "all", group: null, urls: new Map(), token: 0 };
+  // Two ways to look: 한눈에 (every picture at once) and 1:1 (a fixed 기준 on
+  // the left, candidates one by one on the right; a better one becomes 기준).
+  const cmp = { ids: [], focus: 0, filter: "all", group: null, urls: new Map(), token: 0, mode: "grid", a: null, b: null, side: "b", actual: false };
+  const CMP_MODE_KEY = "naiAutoSaver.compareMode";
+  try {
+    cmp.mode = localStorage.getItem(CMP_MODE_KEY) === "pair" ? "pair" : "grid";
+  } catch (error) {
+    void error;
+  }
+  const CMP_HINTS = {
+    grid: "←/→ 고르기 · Q 채택 · W 보류 · E 탈락 · R 지우기 · 1–5 별점 · 두 번 누르면 크게 · M 1:1로 · Esc 닫기",
+    pair: "←/→ 후보 넘기기 · ↑ 또는 Enter 후보를 기준으로 · Q/W/E는 고른 쪽에 · Z 확대(양쪽 같이) · M 한눈에로 · Esc 닫기",
+  };
+  // Keep 기준(a) and 후보(b) valid for what is visible now.
+  function settlePair(visible) {
+    if (!visible.includes(cmp.a)) cmp.a = visible[0] || null;
+    const others = visible.filter((id) => id !== cmp.a);
+    if (!others.includes(cmp.b)) cmp.b = others[0] || null;
+  }
+  function stepCandidate(step) {
+    const others = compareVisible().filter((id) => id !== cmp.a);
+    if (!others.length) return;
+    const i = others.indexOf(cmp.b);
+    cmp.b = others[(i + step + others.length) % others.length];
+    cmp.side = "b";
+  }
+  function promoteCandidate() {
+    if (!cmp.b) return;
+    const old = cmp.a;
+    const visible = compareVisible();
+    cmp.a = cmp.b;
+    // carry on with the picture after the new 기준 (the old one is already seen)
+    const at = visible.indexOf(cmp.a);
+    const rest = [...visible.slice(at + 1), ...visible.slice(0, at)].filter((id) => id !== cmp.a && id !== old);
+    cmp.b = rest[0] || (old !== cmp.a ? old : null);
+    cmp.side = "b";
+  }
+  function setCompareMode(mode) {
+    cmp.mode = mode === "pair" ? "pair" : "grid";
+    cmp.actual = false;
+    try {
+      localStorage.setItem(CMP_MODE_KEY, cmp.mode);
+    } catch (error) {
+      void error;
+    }
+    renderCompare({ keepImages: true });
+  }
   function groupKeyOf(entry) {
     return LibDB.stripCounter(entry.name).trim();
   }
@@ -800,6 +846,10 @@
     cmp.ids = ids.slice(0, 48);
     cmp.group = group;
     cmp.focus = 0;
+    cmp.a = null;
+    cmp.b = null;
+    cmp.side = "b";
+    cmp.actual = false;
     $(".compare").hidden = false;
     renderCompare();
   }
@@ -849,9 +899,17 @@
     $(".cmp-sub").textContent = [`${visible.length} / ${cmp.ids.length}장`, `채택 ${counts.pick}`, `보류 ${counts.hold}`, `탈락 ${counts.reject}`, groups.length > 1 && at >= 0 ? `묶음 ${at + 1} / ${groups.length}` : ""].filter(Boolean).join(" · ");
     box.querySelectorAll(".cmp-nav").forEach((b) => { b.hidden = !(groups.length > 1); });
     box.querySelectorAll("[data-cmp-filter]").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.cmpFilter === cmp.filter)));
+    box.querySelectorAll("[data-cmp-mode]").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.cmpMode === cmp.mode)));
+    box.dataset.mode = cmp.mode;
+    box.dataset.actual = String(cmp.actual);
+    $(".cmp-hint").textContent = CMP_HINTS[cmp.mode];
     if (!visible.length) {
       grid.style.gridTemplateColumns = "";
       grid.innerHTML = `<div class="cmp-empty">${cmp.filter === "pick" ? "아직 채택한 그림이 없어요." : "보이는 그림이 없어요."}<br><button type="button" class="btn small" data-cmp-filter="all">전체 보기</button></div>`;
+      return;
+    }
+    if (cmp.mode === "pair") {
+      renderPair(grid, visible, keepImages);
       return;
     }
     const first = byId(visible[0]) || {};
@@ -878,6 +936,66 @@
     if (!keepImages) void loadCompareOriginals(visible);
     grid.querySelector('.cmp-cell[data-focus="true"]')?.scrollIntoView({ block: "nearest" });
   }
+  function renderPair(grid, visible, keepImages) {
+    settlePair(visible);
+    const old = keepImages ? new Map([...grid.querySelectorAll(".cmp-cell")].map((c) => [c.dataset.id, c.querySelector("img")])) : new Map();
+    grid.innerHTML = "";
+    grid.style.gridTemplateColumns = cmp.b ? "repeat(2, minmax(0, 1fr))" : "minmax(0, 1fr)";
+    grid.style.gridTemplateRows = "minmax(0, 1fr)";
+    const others = visible.filter((id) => id !== cmp.a);
+    for (const side of cmp.b ? ["a", "b"] : ["a"]) {
+      const id = cmp[side];
+      const entry = byId(id);
+      if (!entry) continue;
+      const label = cullOf(id).label;
+      const cell = el("div", { class: "cmp-cell", "data-id": id, "data-side": side, "data-focus": String(cmp.side === side), "data-cull": label || null });
+      const img = old.get(id) || el("img", { src: cmp.urls.get(id) || thumbUrl(entry), alt: entry.name, draggable: "false" });
+      const role = side === "a" ? "기준" : `후보 ${others.indexOf(id) + 1} / ${others.length}`;
+      cell.append(el("div", { class: "cmp-scroll" }, [img]), el("div", { class: "cmp-cap" }, [
+        el("span", { class: "cmp-role", "data-side": side, text: role }),
+        el("span", { class: "cmp-name", text: counterOf(entry) ? `(${counterOf(entry)})` : entry.name }),
+        el("span", { class: "tile-cull", html: tileCullHtml(id) }),
+      ]));
+      if (side === "b") {
+        cell.append(el("button", { class: "cmp-promote", type: "button", text: "이게 더 좋아요 → 기준으로", title: "↑ 또는 Enter", onclick: (event) => { event.stopPropagation(); promoteCandidate(); renderCompare({ keepImages: true }); } }));
+      }
+      grid.append(cell);
+    }
+    if (!keepImages) void loadCompareOriginals([cmp.a, cmp.b, ...visible].filter(Boolean));
+    else void loadCompareOriginals([cmp.a, cmp.b].filter(Boolean));
+    syncPairScroll(grid);
+  }
+  // In 1:1 zoom both pictures scroll together, so the same spot stays side by side.
+  function syncPairScroll(grid) {
+    const panes = [...grid.querySelectorAll(".cmp-scroll")];
+    let busy = false;
+    for (const pane of panes) {
+      pane.addEventListener("scroll", () => {
+        if (busy || !cmp.actual) return;
+        busy = true;
+        const fx = pane.scrollLeft / Math.max(1, pane.scrollWidth - pane.clientWidth);
+        const fy = pane.scrollTop / Math.max(1, pane.scrollHeight - pane.clientHeight);
+        for (const other of panes) {
+          if (other === pane) continue;
+          other.scrollLeft = fx * (other.scrollWidth - other.clientWidth);
+          other.scrollTop = fy * (other.scrollHeight - other.clientHeight);
+        }
+        requestAnimationFrame(() => { busy = false; });
+      });
+    }
+  }
+  function togglePairZoom(atX = 0.5, atY = 0.5) {
+    cmp.actual = !cmp.actual;
+    $(".compare").dataset.actual = String(cmp.actual);
+    if (!cmp.actual) return;
+    requestAnimationFrame(() => {
+      for (const pane of document.querySelectorAll(".cmp-scroll")) {
+        pane.scrollLeft = atX * (pane.scrollWidth - pane.clientWidth);
+        pane.scrollTop = atY * (pane.scrollHeight - pane.clientHeight);
+      }
+    });
+  }
+
   async function loadCompareOriginals(ids) {
     const token = (cmp.token += 1);
     for (const id of ids) {
@@ -898,6 +1016,11 @@
     $(".cmp-prev-group").addEventListener("click", () => stepGroup(-1));
     $(".cmp-next-group").addEventListener("click", () => stepGroup(1));
     box.addEventListener("click", (event) => {
+      const mode = event.target.closest("[data-cmp-mode]");
+      if (mode) {
+        setCompareMode(mode.dataset.cmpMode);
+        return;
+      }
       const filter = event.target.closest("[data-cmp-filter]");
       if (filter) {
         cmp.filter = filter.dataset.cmpFilter;
@@ -905,6 +1028,11 @@
         return;
       }
       const cell = event.target.closest(".cmp-cell");
+      if (cell && cmp.mode === "pair") {
+        cmp.side = cell.dataset.side;
+        box.querySelectorAll(".cmp-cell").forEach((c) => { c.dataset.focus = String(c === cell); });
+        return;
+      }
       if (cell) {
         cmp.focus = compareVisible().indexOf(cell.dataset.id);
         box.querySelectorAll(".cmp-cell").forEach((c) => { c.dataset.focus = String(c === cell); });
@@ -912,7 +1040,14 @@
     });
     box.addEventListener("dblclick", (event) => {
       const cell = event.target.closest(".cmp-cell");
-      if (cell) openLightbox(cell.dataset.id);
+      if (!cell) return;
+      if (cmp.mode === "pair") {
+        // zoom both to the spot that was double-clicked
+        const img = cell.querySelector("img").getBoundingClientRect();
+        togglePairZoom((event.clientX - img.left) / Math.max(1, img.width), (event.clientY - img.top) / Math.max(1, img.height));
+        return;
+      }
+      openLightbox(cell.dataset.id);
     });
     let resizeTimer = null;
     window.addEventListener("resize", () => {
@@ -925,6 +1060,31 @@
       if (event.target.closest?.("input, textarea")) return;
       const visible = compareVisible();
       const action = cullAction(event);
+      const stop = () => { event.preventDefault(); event.stopImmediatePropagation(); };
+      if (!event.metaKey && !event.ctrlKey && event.code === "KeyM") {
+        stop();
+        setCompareMode(cmp.mode === "pair" ? "grid" : "pair");
+        return;
+      }
+      if (cmp.mode === "pair") {
+        if (action) {
+          stop();
+          const id = cmp[cmp.side];
+          if (!id) return;
+          applyCullAction([id], action);
+          // A marked candidate makes way for the next one.
+          if (cmp.side === "b" && "label" in action && action.label) {
+            if (compareVisible().includes(id)) stepCandidate(1);
+          }
+          renderCompare({ keepImages: true });
+          return;
+        }
+        if (event.key === "ArrowRight" || event.key === "ArrowDown") { stop(); stepCandidate(1); renderCompare({ keepImages: true }); return; }
+        if (event.key === "ArrowLeft") { stop(); stepCandidate(-1); renderCompare({ keepImages: true }); return; }
+        if (event.key === "ArrowUp" || event.key === "Enter") { stop(); promoteCandidate(); renderCompare({ keepImages: true }); return; }
+        if (event.code === "KeyZ" && !event.metaKey && !event.ctrlKey) { stop(); togglePairZoom(); return; }
+        if (event.key === "Escape" && cmp.actual) { stop(); togglePairZoom(); return; }
+      }
       if (action) {
         event.preventDefault();
         event.stopImmediatePropagation();

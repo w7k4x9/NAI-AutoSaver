@@ -476,3 +476,15 @@ body { word-break: keep-all; overflow-wrap: anywhere; }
 .cmp-name { font-size: 11.5px; font-weight: 650; padding: 2px 7px; border-radius: 9px; background: rgba(0,0,0,0.55); color: rgba(255,255,255,0.85); }
 .cmp-empty { grid-column: 1 / -1; align-self: center; text-align: center; color: rgba(255,255,255,0.6); line-height: 2.2; }
 .cmp-hint { position: absolute; bottom: 9px; left: 0; right: 0; text-align: center; font-size: 11.5px; color: rgba(255,255,255,0.5); pointer-events: none; }
+
+/* 비교 1:1: 기준 on the left, 후보 on the right */
+.cmp-top .cmp-seg + .cmp-seg { margin-left: 6px; }
+.cmp-scroll { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.cmp-scroll img { width: 100%; height: 100%; object-fit: contain; display: block; user-select: none; }
+.compare[data-actual="true"] .cmp-scroll { overflow: auto; align-items: flex-start; justify-content: flex-start; cursor: zoom-out; }
+.compare[data-actual="true"] .cmp-scroll img { width: auto; height: auto; max-width: none; max-height: none; object-fit: none; margin: auto; }
+.cmp-role { font-size: 11.5px; font-weight: 700; padding: 2px 8px; border-radius: 9px; background: rgba(255,255,255,0.88); color: #111; }
+.cmp-role[data-side="b"] { background: var(--accent-fill); color: #fff; }
+.compare[data-mode="pair"] .cmp-cell { cursor: zoom-in; }
+.cmp-promote { position: absolute; top: 10px; right: 10px; height: 30px; padding: 0 12px; border: none; border-radius: 15px; background: rgba(0,0,0,0.55); color: #fff; font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+.cmp-promote:hover { background: var(--accent-fill); }

@@ -74,6 +74,10 @@
       <div class="cmp-titles"><span class="cmp-title"></span><span class="cmp-sub"></span></div>
       <button class="cmp-nav cmp-next-group" type="button" aria-label="다음 묶음" title="다음 묶음 (])">›</button>
       <span class="grow"></span>
+      <div class="cmp-seg" role="radiogroup" aria-label="보는 방법">
+        <button type="button" role="radio" data-cmp-mode="grid" title="모두 한 화면에">한눈에</button>
+        <button type="button" role="radio" data-cmp-mode="pair" title="기준 한 장과 후보 한 장을 크게 (M)">1:1</button>
+      </div>
       <div class="cmp-seg" role="radiogroup" aria-label="보이는 그림">
         <button type="button" role="radio" data-cmp-filter="all">전체</button>
         <button type="button" role="radio" data-cmp-filter="keep" title="탈락은 빼고 봐요">탈락 빼기</button>
@@ -82,7 +86,7 @@
       <button class="lb-close cmp-close" type="button" aria-label="닫기" title="닫기 (Esc)">×</button>
     </div>
     <div class="cmp-grid"></div>
-    <div class="cmp-hint">←/→ 고르기 · Q 채택 · W 보류 · E 탈락 · R 지우기 · 1–5 별점 · 두 번 누르면 크게 · Esc 닫기</div>
+    <div class="cmp-hint"></div>
   </div>
 
   <div class="drop-overlay" hidden>
