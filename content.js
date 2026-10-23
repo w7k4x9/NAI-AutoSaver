@@ -7127,8 +7127,14 @@
     if (item.axes) return { char: item.axes.char || item.folderName || "", bg: item.axes.bg || "" };
     // Older items: the character is the folder (or the name before "_"); the
     // background is guessed from the combination screen's background names.
+    // Names are compared word by word, so "눈 오는 거리" also matches, and the
+    // longest name wins ("밤 거리" before "밤").
+    const words = (text) => ` ${String(text || "").replace(/[_\s-]+/g, " ").trim()} `;
     const parts = String(item.title || "").split(/[_\s-]+/).filter(Boolean);
-    return { char: item.folderName || parts[0] || "", bg: parts.slice(1).find((p) => bgNames.has(p)) || "" };
+    const char = item.folderName || parts[0] || "";
+    const rest = words(String(item.title || "").replace(char, " "));
+    const bg = [...bgNames].sort((a, b) => b.length - a.length).find((name) => rest.includes(words(name))) || "";
+    return { char, bg };
   }
   function queueGroups(axis) {
     const bgNames = knownBackgroundNames();
