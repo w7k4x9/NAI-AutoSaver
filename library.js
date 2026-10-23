@@ -1921,7 +1921,12 @@
       for await (const item of walk(state.root, state.root.name)) found.set(item.path.split("/").slice(1).join("/"), item);
       if (!found.size) return; // an empty or unreachable folder never empties the library
       const tops = new Set([...found.keys()].map((k) => k.split("/")[0]));
-      const covered = (rel) => rel.length > 1 && tops.has(rel[0]) && !rel.includes(CULL_FOLDER) && !rel.includes(TRASH_FOLDER);
+      // An entry belongs to this folder when its path runs through the linked
+      // folder's name (NovelAI/2/… with NovelAI linked: even if folder "2" is
+      // gone now), or starts with a folder that is there (NovelAI/… with 다운로드
+      // linked).
+      const covered = (e, rel) => rel.length > 1 && !rel.includes(CULL_FOLDER) && !rel.includes(TRASH_FOLDER)
+        && (e.path.split("/").slice(0, -1).includes(state.root.name) || tops.has(rel[0]));
       const files = onDisk(state.entries);
       const known = new Set();
       const gone = [];
@@ -1929,7 +1934,7 @@
         const rel = relSegments(e);
         const key = rel.join("/");
         known.add(key);
-        if (covered(rel) && !found.has(key)) gone.push(e);
+        if (covered(e, rel) && !found.has(key)) gone.push(e);
       }
       // Same name + size showing up elsewhere = the file was moved: follow it.
       const goneBySig = new Map();
@@ -1952,7 +1957,7 @@
         }
       }
       // Many files missing at once looks like a drive/folder problem: ask first.
-      const coveredCount = files.filter((e) => covered(relSegments(e))).length;
+      const coveredCount = files.filter((e) => covered(e, relSegments(e))).length;
       const drop = async () => {
         for (const e of gone) await forget(e);
         saveCull();
