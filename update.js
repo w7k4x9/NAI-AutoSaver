@@ -75,22 +75,55 @@ async function readManifestIn(dir) {
     return null;
   }
 }
-// The folder the user picked must be the one Chrome loaded this copy from.
-// Allows one level of nesting ("NAI-AutoSaver-main/NAI-AutoSaver-main").
-async function resolveExtensionFolder(dir) {
-  const check = async (d) => {
-    const m = await readManifestIn(d);
-    return m && m.name === manifest.name ? { dir: d, version: String(m.version || "") } : null;
-  };
-  const direct = await check(dir);
-  if (direct) return direct;
-  for await (const [, child] of dir.entries()) {
-    if (child.kind === "directory") {
-      const nested = await check(child);
-      if (nested) return nested;
+// Finds the copy Chrome is running *now* inside the picked folder: the picked
+// folder itself, or anywhere a few levels below it (so picking 문서 or
+// 다운로드 works too). The running copy is recognised by its manifest.json
+// being byte-for-byte the one Chrome serves, so an old copy or a freshly
+// unzipped new one never gets mistaken for it.
+const SEARCH_DEPTH = 4;
+const SEARCH_LIMIT = 4000;
+const SKIP_DIRS = /^(\.|node_modules$|\$RECYCLE\.BIN$|System Volume Information$|AppData$|Library$)/i;
+let loadedManifestText = null;
+async function loadedManifest() {
+  if (loadedManifestText == null) {
+    loadedManifestText = await (await fetch(chrome.runtime.getURL("manifest.json"), { cache: "no-store" })).text();
+  }
+  return loadedManifestText;
+}
+async function resolveExtensionFolder(dir, onProgress = () => {}) {
+  const want = (await loadedManifest()).trim();
+  const candidates = [];
+  const queue = [{ dir, path: dir.name, depth: 0 }];
+  let seen = 0;
+  while (queue.length && seen < SEARCH_LIMIT) {
+    const { dir: d, path, depth } = queue.shift();
+    seen += 1;
+    if (seen % 50 === 0) onProgress(seen);
+    const bytes = await readLocal(d, "manifest.json");
+    if (bytes) {
+      const text = new TextDecoder().decode(bytes);
+      let m = null;
+      try {
+        m = JSON.parse(text);
+      } catch (error) {
+        m = null;
+      }
+      if (m?.name === manifest.name) {
+        if (text.trim() === want) return { match: { dir: d, path }, candidates };
+        candidates.push({ path, version: String(m.version || "?") });
+        continue; // an extension folder: nothing more to find inside
+      }
+    }
+    if (depth >= SEARCH_DEPTH) continue;
+    try {
+      for await (const [name, child] of d.entries()) {
+        if (child.kind === "directory" && !SKIP_DIRS.test(name)) queue.push({ dir: child, path: `${path}/${name}`, depth: depth + 1 });
+      }
+    } catch (error) {
+      void error;
     }
   }
-  return null;
+  return { match: null, candidates };
 }
 function josaRo(version) {
   return /[036]$/.test(String(version)) ? "으로" : "로";
@@ -188,10 +221,10 @@ function renderAvailable(extra = {}) {
     title: `새 버전 ${info.latest}`,
     sub: `지금 쓰는 버전 ${info.current}`,
     notes: info.notes,
-    primary: { label: "업데이트", onClick: runUpdate },
+    primary: { label: "업데이트", onClick: startUpdate },
     tip: folder
       ? "바뀐 파일만 받아서 지금 폴더에 바꿔 넣어요. 메모·대기열·보관함은 그대로예요."
-      : "처음 한 번은 확장 프로그램 폴더를 골라 주세요. 다음부턴 버튼 한 번이면 돼요.",
+      : "처음 한 번만, 지금 설치돼 있는 폴더를 알려 주면 돼요. 다음부턴 버튼 하나예요.",
     manual: true,
     ...extra,
   });
@@ -238,8 +271,27 @@ async function pickFolder() {
   return dir;
 }
 
-function folderHelp(text) {
-  return `${text}<br><br>폴더 위치는 <a href="#" data-open-ext>확장 프로그램 페이지</a>의 NAI 자동저장 → 세부정보 → 「소스」에 적혀 있어요.`;
+const WHERE_HELP = `<ol class="steps">
+  <li><a href="#" data-open-ext>폴더 위치 보기</a>를 눌러요. 열린 화면의 <b>「소스」</b>에 적힌 경로가 그 폴더예요. 경로를 복사해 두세요.</li>
+  <li>아래 <b>「설치된 폴더 고르기」</b> → 뜨는 창 맨 위 주소칸에 붙여 넣고 Enter → <b>「폴더 선택」</b>.</li>
+</ol>
+<p class="small">위치를 잘 모르겠으면 그 폴더가 들어 있을 만한 <b>상위 폴더</b>(예: 문서, 다운로드)를 골라도 돼요. 안쪽까지 찾아봐요.</p>`;
+
+// First time only: say plainly which folder we mean before the picker opens.
+function renderPickStep(extraMsg = "") {
+  show({
+    icon: "folder",
+    title: "설치된 폴더를 알려 주세요",
+    sub: "처음 한 번만 해요",
+    msg: `${extraMsg ? `<div class="warn">${extraMsg}</div>` : ""}<p><b>새로 설치할 곳이 아니에요.</b> 지금 NAI 자동저장이 <b>들어 있는</b> 폴더예요. 새 버전 파일을 그 폴더에 바꿔 넣어요.</p>${WHERE_HELP}`,
+    primary: { label: "설치된 폴더 고르기", onClick: runUpdate },
+    secondary: { label: "취소", onClick: () => renderAvailable() },
+  });
+}
+
+function startUpdate() {
+  if (folder) return runUpdate();
+  return renderPickStep();
 }
 
 async function runUpdate() {
@@ -251,19 +303,25 @@ async function runUpdate() {
     try {
       picked = await pickFolder();
     } catch (error) {
-      if (error?.name === "AbortError") return renderAvailable();
+      if (error?.name === "AbortError") return folder ? renderAvailable() : renderPickStep();
       if (error?.name === "NotAllowedError") {
-        return renderAvailable({ msg: "폴더를 고쳐도 된다는 허락이 있어야 바꿔 넣을 수 있어요. 「업데이트」를 다시 누르고 폴더를 골라 주세요." });
+        return renderPickStep("폴더를 고쳐도 된다는 허락이 있어야 새 파일을 바꿔 넣을 수 있어요. 크롬이 물으면 「수정 허용」을 눌러 주세요.");
       }
       throw new Error(`폴더를 열지 못했어요 (${error?.message || error}).`);
     }
-    const found = await resolveExtensionFolder(picked);
-    if (!found) {
-      return renderAvailable({ msg: folderHelp("고른 폴더에 NAI 자동저장 파일이 없어요. <b>확장 프로그램을 로드한 그 폴더</b>를 골라 주세요.") });
+    show({ icon: "folder", title: "폴더를 살펴보는 중…", sub: "안쪽까지 찾고 있어요" });
+    progress(0, 1, "찾는 중…");
+    const { match, candidates } = await resolveExtensionFolder(picked, (n) => progress(0, 1, `폴더 ${n}개 살펴봄…`));
+    if (!match) {
+      folder = null;
+      await LibDB.delKv(FOLDER_KEY).catch(() => {});
+      const list = candidates.slice(0, 4).map((c) => `<li><code>${escapeHtml(c.path)}</code> · ${escapeHtml(c.version)}</li>`).join("");
+      const msg = candidates.length
+        ? `고른 「${escapeHtml(picked.name)}」 안에 NAI 자동저장이 있긴 한데, <b>지금 켜져 있는 버전(${escapeHtml(manifest.version)})이 아닌 다른 복사본</b>이에요.<ul class="found">${list}</ul>`
+        : `고른 「${escapeHtml(picked.name)}」 안에서 지금 켜져 있는 NAI 자동저장을 못 찾았어요.`;
+      return renderPickStep(msg);
     }
-    if (U.compareVersions(found.version, manifest.version) !== 0 && U.compareVersions(found.version, info.latest) < 0) {
-      return renderAvailable({ msg: folderHelp(`고른 폴더는 ${escapeHtml(found.version)} 버전이라 지금 켜져 있는 ${escapeHtml(manifest.version)}과 달라요. 다른 복사본 같아요. <b>지금 로드된 폴더</b>를 골라 주세요.`) });
-    }
+    const found = match;
     folder = found.dir;
     await LibDB.setKv(FOLDER_KEY, folder).catch(() => {});
 

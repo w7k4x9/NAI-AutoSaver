@@ -53,6 +53,15 @@
     .msg { margin: 16px 0 0; padding: 12px 14px; border-radius: 12px; background: var(--fill); color: var(--text); font-size: 13.5px; }
     .msg b { font-weight: 650; }
     .msg a { color: var(--accent); }
+    .msg p { margin: 0; }
+    .msg p + p, .msg p + ol, .msg ol + p { margin-top: 8px; }
+    .msg .warn .found { margin-top: 6px; }
+    .msg .warn { padding: 10px 12px; margin: -2px -4px 10px; border-radius: 10px; background: var(--card); }
+    .msg .steps { margin: 8px 0 0; padding-left: 20px; }
+    .msg .steps li + li { margin-top: 6px; }
+    .msg .small { color: var(--text2); font-size: 12.5px; }
+    .msg .found { margin: 8px 0 0; padding-left: 18px; color: var(--text2); font-size: 12.5px; }
+    .msg .found code { word-break: break-all; }
     .manual { margin-top: 14px; border-top: 0.5px solid var(--sep); padding-top: 4px; }
     .manual summary { list-style: none; cursor: pointer; color: var(--accent); font-size: 14px; text-align: center; padding: 10px 0 4px; }
     .manual summary::-webkit-details-marker { display: none; }
