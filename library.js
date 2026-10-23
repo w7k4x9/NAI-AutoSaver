@@ -29,7 +29,7 @@
     dropped: [],        // files opened/dropped this session (not stored)
     files: new Map(),   // id -> File for dropped pictures
     nav: "all",
-    cullNav: "",        // 셀렉 / 별점 filter, combined with nav
+    cullNav: "",        // 셀렉 filter, combined with nav
     query: "",
     sel: [],
     anchor: null,
@@ -112,10 +112,6 @@
       const want = nav.slice(5);
       return want === "none" ? (e) => !cullOf(e.id).label : (e) => cullOf(e.id).label === want;
     }
-    if (nav.startsWith("rating:")) {
-      const min = Number(nav.slice(7)) || 1;
-      return (e) => (cullOf(e.id).rating || 0) >= min;
-    }
     if (nav.startsWith("char:")) {
       const name = nav.slice(5);
       return (e) => e.char === name;
@@ -123,8 +119,7 @@
     return NAV[nav]?.test || NAV.all.test;
   }
   function navTitle(nav) {
-    if (nav.startsWith("cull:")) return nav === "cull:none" ? "안 고른 그림" : LABELS[nav.slice(5)] || "셀렉";
-    if (nav.startsWith("rating:")) return `별점 ${nav.slice(7)}개 이상`;
+    if (nav.startsWith("cull:")) return nav === "cull:none" ? NONE_LABEL : LABELS[nav.slice(5)] || "셀렉";
     return nav.startsWith("char:") ? nav.slice(5) || "이름 없음" : NAV[nav]?.title || "전체";
   }
 
@@ -155,7 +150,7 @@
     renderFolderBox();
     renderNotionBox();
   }
-  const isCullKey = (key) => key.startsWith("cull:") || key.startsWith("rating:");
+  const isCullKey = (key) => key.startsWith("cull:");
   function navButton(key, label, iconName, count) {
     const button = el("button", {
       class: "nav-item", type: "button", "aria-current": String(isCullKey(key) ? state.cullNav === key : state.nav === key),
@@ -604,8 +599,7 @@
   }
   function syncLightboxActions(id) {
     const c = cullOf(id);
-    document.querySelectorAll("[data-lb-label]").forEach((b) => b.setAttribute("aria-pressed", String(c.label === b.dataset.lbLabel)));
-    document.querySelectorAll("[data-lb-star]").forEach((b) => { b.dataset.on = String(Number(b.dataset.lbStar) <= (c.rating || 0)); });
+    document.querySelectorAll("[data-lb-label]").forEach((b) => b.setAttribute("aria-pressed", String((c.label || "none") === b.dataset.lbLabel)));
   }
   function lightboxCull(action) {
     if (!lb.id) return;
@@ -641,9 +635,7 @@
     $(".lb-close").addEventListener("click", closeLightbox);
     $(".lb-actions").addEventListener("click", (event) => {
       const label = event.target.closest("[data-lb-label]");
-      if (label) lightboxCull({ label: label.dataset.lbLabel });
-      const star = event.target.closest("[data-lb-star]");
-      if (star) lightboxCull({ rating: Number(star.dataset.lbStar) });
+      if (label) lightboxCull({ label: label.dataset.lbLabel === "none" ? null : label.dataset.lbLabel });
     });
     $(".lb-prev").addEventListener("click", () => stepLightbox(-1));
     $(".lb-next").addEventListener("click", () => stepLightbox(1));
@@ -668,18 +660,23 @@
   }
 
   // ---------------------------------------------------------------- 셀렉 ---
-  // Culling marks per picture: a label (채택 / B컷 / 탈락) and 0–5 stars. Kept in
-  // the library database next to the entries (not inside them, so re-reading a
+  // Culling mark per picture: 안 고름 (nothing), 채택, B컷 or 탈락. Kept in the
+  // library database next to the entries (not inside them, so re-reading a
   // folder never wipes them). Keys follow the physical key so they also work
-  // while typing Korean: Q/P 채택, W B컷, E/X 탈락, R/U 지우기, 1–5 별점, 0 별점 지우기.
+  // while typing Korean: Q/P 채택, W B컷, E/X 탈락, R/U 안 고름.
   const LABELS = { pick: "채택", hold: "B컷", reject: "탈락" };
+  const NONE_LABEL = "안 고름";
+  const CULL_CHOICES = [["none", NONE_LABEL, "R"], ["pick", "채택", "Q"], ["hold", "B컷", "W"], ["reject", "탈락", "E"]];
   const CULL_KV = "cull";
   state.cull = new Map();
   let cullTimer = null;
   async function loadCull() {
     try {
       const saved = await LibDB.getKv(CULL_KV);
-      if (saved && typeof saved === "object") state.cull = new Map(Object.entries(saved));
+      if (saved && typeof saved === "object") {
+        // Older marks may carry a 별점 (dropped): keep only the label.
+        state.cull = new Map(Object.entries(saved).filter(([, v]) => v?.label).map(([k, v]) => [k, { label: v.label }]));
+      }
     } catch (error) {
       void error;
     }
@@ -694,24 +691,18 @@
   function setCull(ids, patch) {
     for (const id of ids) {
       const next = { ...cullOf(id), ...patch };
+      delete next.rating; // 별점 was dropped in 1.13
       if (!next.label) delete next.label;
-      if (!next.rating) delete next.rating;
-      if (next.label || next.rating) state.cull.set(id, next);
+      if (next.label) state.cull.set(id, next);
       else state.cull.delete(id);
     }
     saveCull();
     refreshCullLook(ids);
   }
-  // Pressing the label every picture already has clears it (same for stars).
+  // A plain choice, like a segmented control: 안 고름 is its own option.
   function applyCullAction(ids, action) {
-    if (!ids.length || !action) return;
-    if ("label" in action) {
-      const same = action.label && ids.every((id) => cullOf(id).label === action.label);
-      setCull(ids, { label: same ? null : action.label });
-    } else {
-      const same = action.rating && ids.every((id) => cullOf(id).rating === action.rating);
-      setCull(ids, { rating: same ? 0 : action.rating });
-    }
+    if (!ids.length || !action || !("label" in action)) return;
+    setCull(ids, { label: action.label || null });
   }
   function cullAction(event) {
     if (event.metaKey || event.ctrlKey || event.altKey) return null;
@@ -720,37 +711,27 @@
     if (code === "KeyW") return { label: "hold" };
     if (code === "KeyE" || code === "KeyX") return { label: "reject" };
     if (code === "KeyR" || code === "KeyU") return { label: null };
-    const digit = code.match(/^(?:Digit|Numpad)([0-5])$/);
-    if (digit) return { rating: Number(digit[1]) };
-    if (code === "Backquote") return { rating: 0 };
     return null;
   }
-  const starText = (n) => "★".repeat(n);
   function tileCullHtml(id) {
     const c = cullOf(id);
-    return `${c.label ? `<span class="cull-pill" data-label="${c.label}">${LABELS[c.label]}</span>` : ""}${c.rating ? `<span class="cull-stars">${starText(c.rating)}</span>` : ""}`;
+    return c.label ? `<span class="cull-pill" data-label="${c.label}">${LABELS[c.label]}</span>` : "";
   }
   function cullSummaryHtml(id) {
-    const c = cullOf(id);
-    return tileCullHtml(id) || (c.label || c.rating ? "" : '<span class="cull-none">안 고름</span>');
+    return tileCullHtml(id) || `<span class="cull-none">${NONE_LABEL}</span>`;
   }
   function cullControls(ids) {
     const all = (fn) => ids.length && ids.every(fn);
     const wrap = el("div", { class: "cull-row" });
     const seg = el("div", { class: "seg cull-seg", role: "group", "aria-label": "셀렉" });
-    for (const [label, key] of [["pick", "Q"], ["hold", "W"], ["reject", "E"]]) {
+    for (const [label, text, key] of CULL_CHOICES) {
       seg.append(el("button", {
-        type: "button", "data-label": label, "aria-pressed": String(all((id) => cullOf(id).label === label)),
-        title: `${LABELS[label]} (${key}) · 한 번 더 누르면 지워져요`, text: LABELS[label],
-        onclick: () => applyCullAction(ids, { label }),
+        type: "button", "data-label": label, "aria-pressed": String(all((id) => (cullOf(id).label || "none") === label)),
+        title: `${text} (${key})`, text,
+        onclick: () => applyCullAction(ids, { label: label === "none" ? null : label }),
       }));
     }
-    const stars = el("div", { class: "cull-stars-input", role: "group", "aria-label": "별점" });
-    const shown = ids.length && ids.every((id) => (cullOf(id).rating || 0) === (cullOf(ids[0]).rating || 0)) ? cullOf(ids[0]).rating || 0 : 0;
-    for (let n = 1; n <= 5; n += 1) {
-      stars.append(el("button", { type: "button", "data-on": String(n <= shown), title: `별 ${n}개 (${n})`, "aria-label": `별 ${n}개`, text: "★", onclick: () => applyCullAction(ids, { rating: n }) }));
-    }
-    wrap.append(seg, stars);
+    wrap.append(seg);
     return wrap;
   }
   function refreshCullLook(ids) {
@@ -777,16 +758,8 @@
       if (label) counts[label] += 1;
     }
     const icons = { pick: "check_circle", hold: "counter_2", reject: "minus_circle" };
+    nav.append(navButton("cull:none", NONE_LABEL, "image", all.length - counts.pick - counts.hold - counts.reject));
     for (const label of ["pick", "hold", "reject"]) nav.append(navButton(`cull:${label}`, LABELS[label], icons[label], counts[label]));
-    if (counts.pick + counts.hold + counts.reject) {
-      nav.append(navButton("cull:none", "안 고른 그림", "image", all.length - counts.pick - counts.hold - counts.reject));
-    }
-    const current = state.cullNav.startsWith("rating:") ? Number(state.cullNav.slice(7)) : 0;
-    const row = el("div", { class: "rating-filter", title: "별점이 이만큼 이상인 그림만 봐요" }, [el("span", { class: "label", text: "별점" })]);
-    for (let n = 1; n <= 5; n += 1) {
-      row.append(el("button", { type: "button", "data-on": String(n <= current), "aria-label": `별점 ${n}개 이상`, text: "★", onclick: () => setNav(`rating:${n}`) }));
-    }
-    nav.append(row);
     if (counts.pick + counts.hold) {
       nav.append(el("button", { class: "nav-item cull-export", type: "button", title: "채택·B컷을 캐릭터별 폴더로 나눠서 따로 저장해요", html: `${icon("folder")}<span class="label">폴더로 나눠 저장…</span>`, onclick: () => openCullExport() }));
     }
@@ -1009,62 +982,59 @@
   // ------------------------------------------------------------- 비교 ---
   // Pictures side by side. Opened for the selected pictures, or for every
   // picture with the same name (김춘자_교실 웃음 (1), (2)…), then mark them.
-  // Two ways to look: 한눈에 (every picture at once) and 1:1 (two at a time:
-  // pick the better one, the winner stays for the next round, and the last one
-  // standing is the best of the group).
-  const cmp = { ids: [], focus: 0, filter: "all", group: null, urls: new Map(), token: 0, mode: "grid", side: "b", actual: false, t: null };
-  const CMP_MODE_KEY = "naiAutoSaver.compareMode";
+  // Two ways to look: 한눈에 (every picture at once) and 나란히: two lanes,
+  // 안 고름 on the left and the chosen ones (채택, or B컷) on the right. Click
+  // a lane (or Tab) to choose which one ←/→ rolls through; Q/W/E/R mark the
+  // picture showing in that lane, so it moves from the left lane to the right.
+  const cmp = { ids: [], focus: 0, filter: "all", group: null, urls: new Map(), token: 0, mode: "pair", actual: false, lane: { side: "a", a: 0, b: 0, right: "pick" } };
+  const CMP_MODE_KEY = "naiAutoSaver.compareMode2";
   try {
-    cmp.mode = localStorage.getItem(CMP_MODE_KEY) === "pair" ? "pair" : "grid";
+    cmp.mode = localStorage.getItem(CMP_MODE_KEY) === "grid" ? "grid" : "pair";
   } catch (error) {
     void error;
   }
   const CMP_HINTS = {
-    grid: "←/→ 고르기 · Q 채택 · W B컷 · E 탈락 · R 지우기 · 1–5 별점 · 두 번 누르면 크게 · M 1:1로 · Esc 닫기",
-    pair: "← 왼쪽이 더 좋아요 · → 오른쪽이 더 좋아요 · Backspace 되돌리기 · Z 둘 다 확대 · M 한눈에로 · Esc 닫기",
+    grid: "←/→ 고르기 · R 안 고름 · Q 채택 · W B컷 · E 탈락 · 두 번 누르면 크게 · M 나란히로 · Esc 닫기",
+    pair: "←/→ 넘기기 · 왼쪽·오른쪽을 눌러(또는 Tab) 넘길 쪽 고르기 · Q 채택 · W B컷 · E 탈락 · R 안 고름 · Z 둘 다 확대 · M 한눈에로 · Esc 닫기",
   };
-  // 1:1 is a small tournament over what was visible when it started.
-  function startTournament() {
-    const list = compareVisible();
-    cmp.t = { champ: list[0] || null, queue: list.slice(1), losers: [], history: [], total: list.length };
-    cmp.side = null;
+  function laneList(side) {
+    return cmp.ids.filter((id) => {
+      const label = cullOf(id).label;
+      return side === "a" ? !label : label === cmp.lane.right;
+    });
   }
-  function tournament() {
-    if (!cmp.t) startTournament();
-    return cmp.t;
+  function laneIndex(side) {
+    const n = laneList(side).length;
+    cmp.lane[side] = n ? Math.max(0, Math.min(cmp.lane[side], n - 1)) : 0;
+    return cmp.lane[side];
   }
-  function chooseSide(side) {
-    const t = tournament();
-    if (!t.queue.length) return;
-    cmp.side = null;
-    t.history.push({ champ: t.champ, queue: t.queue.slice(), losers: t.losers.slice() });
-    const challenger = t.queue.shift();
-    if (side === "b") {
-      t.losers.push(t.champ);
-      t.champ = challenger;
-    } else {
-      t.losers.push(challenger);
-    }
+  function laneCurrent(side) {
+    return laneList(side)[laneIndex(side)] || null;
+  }
+  function rollLane(side, step) {
+    const n = laneList(side).length;
+    cmp.lane.side = side;
+    if (n) cmp.lane[side] = (laneIndex(side) + step + n) % n;
     cmp.actual = false;
   }
-  function undoChoice() {
-    const t = tournament();
-    const last = t.history.pop();
-    if (!last) return;
-    Object.assign(t, last);
-    cmp.actual = false;
+  // After a mark: the left lane shows the next picture by itself; a picture
+  // that just landed in the right lane is shown there.
+  function followMark(id) {
+    const at = laneList("b").indexOf(id);
+    if (at >= 0) cmp.lane.b = at;
+    laneIndex("a");
+    laneIndex("b");
   }
-  function finishTournament(rest) {
-    const t = tournament();
-    if (!t.champ) return;
-    setCull([t.champ], { label: "pick" });
-    if (rest) setCull(t.losers, { label: rest });
-    toast(rest ? `베스트 1장은 채택, 나머지 ${t.losers.length}장은 ${LABELS[rest]}으로 표시했어요.` : "베스트 1장을 채택했어요.", "ok");
+  function markInLane(action) {
+    const id = laneCurrent(cmp.lane.side);
+    if (!id) return;
+    applyCullAction([id], action);
+    followMark(id);
+    renderCompare({ keepImages: true });
   }
   function setCompareMode(mode) {
     cmp.mode = mode === "pair" ? "pair" : "grid";
     cmp.actual = false;
-    cmp.t = null;
     try {
       localStorage.setItem(CMP_MODE_KEY, cmp.mode);
     } catch (error) {
@@ -1104,8 +1074,7 @@
     cmp.ids = ids.slice(0, 48);
     cmp.group = group;
     cmp.focus = 0;
-    cmp.t = null;
-    cmp.side = "b";
+    cmp.lane = { side: "a", a: 0, b: 0, right: cmp.lane.right || "pick" };
     cmp.actual = false;
     $(".compare").hidden = false;
     renderCompare();
@@ -1145,28 +1114,25 @@
     const grid = $(".cmp-grid");
     const visible = compareVisible();
     cmp.focus = Math.max(0, Math.min(cmp.focus, visible.length - 1));
-    const counts = { pick: 0, hold: 0, reject: 0 };
-    for (const id of cmp.ids) {
-      const label = cullOf(id).label;
-      if (label) counts[label] += 1;
-    }
+    const counts = { none: 0, pick: 0, hold: 0, reject: 0 };
+    for (const id of cmp.ids) counts[cullOf(id).label || "none"] += 1;
     $(".cmp-title").textContent = cmp.group || `고른 ${cmp.ids.length}장`;
     const groups = cmp.group ? groupsInView() : [];
     const at = groups.findIndex(([key]) => key === cmp.group);
-    $(".cmp-sub").textContent = [`${visible.length} / ${cmp.ids.length}장`, `채택 ${counts.pick}`, `B컷 ${counts.hold}`, `탈락 ${counts.reject}`, groups.length > 1 && at >= 0 ? `묶음 ${at + 1} / ${groups.length}` : ""].filter(Boolean).join(" · ");
+    $(".cmp-sub").textContent = [cmp.mode === "pair" ? `${cmp.ids.length}장` : `${visible.length} / ${cmp.ids.length}장`, `${NONE_LABEL} ${counts.none}`, `채택 ${counts.pick}`, `B컷 ${counts.hold}`, `탈락 ${counts.reject}`, groups.length > 1 && at >= 0 ? `묶음 ${at + 1} / ${groups.length}` : ""].filter(Boolean).join(" · ");
     box.querySelectorAll(".cmp-nav").forEach((b) => { b.hidden = !(groups.length > 1); });
     box.querySelectorAll("[data-cmp-filter]").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.cmpFilter === cmp.filter)));
     box.querySelectorAll("[data-cmp-mode]").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.cmpMode === cmp.mode)));
     box.dataset.mode = cmp.mode;
     box.dataset.actual = String(cmp.actual);
     $(".cmp-hint").textContent = CMP_HINTS[cmp.mode];
+    if (cmp.mode === "pair") {
+      renderPair(grid);
+      return;
+    }
     if (!visible.length) {
       grid.style.gridTemplateColumns = "";
       grid.innerHTML = `<div class="cmp-empty">${cmp.filter === "pick" ? "아직 채택한 그림이 없어요." : "보이는 그림이 없어요."}<br><button type="button" class="btn small" data-cmp-filter="all">전체 보기</button></div>`;
-      return;
-    }
-    if (cmp.mode === "pair") {
-      renderPair(grid, visible, keepImages);
       return;
     }
     const first = byId(visible[0]) || {};
@@ -1189,61 +1155,58 @@
         el("span", { class: "tile-cull", html: tileCullHtml(id) }),
       ]));
       const quick = el("div", { class: "cmp-quick", role: "group", "aria-label": "셀렉" });
-      for (const l of ["pick", "hold", "reject"]) quick.append(el("button", { type: "button", "data-quick": l, "aria-pressed": String(label === l), text: LABELS[l] }));
+      for (const [l, text] of CULL_CHOICES) quick.append(el("button", { type: "button", "data-quick": l, "aria-pressed": String((label || "none") === l), text }));
       cell.append(quick);
       grid.append(cell);
     });
     if (!keepImages) void loadCompareOriginals(visible);
     grid.querySelector('.cmp-cell[data-focus="true"]')?.scrollIntoView({ block: "nearest" });
   }
-  function renderPair(grid, visible, keepImages) {
-    const t = tournament();
+  function renderPair(grid) {
     const old = new Map([...grid.querySelectorAll(".cmp-cell")].map((c) => [c.dataset.id, c.querySelector("img")]));
     grid.innerHTML = "";
-    const done = !t.queue.length;
-    const shown = done ? [["a", t.champ]] : [["a", t.champ], ["b", t.queue[0]]];
-    grid.style.gridTemplateColumns = `repeat(${shown.length}, minmax(0, 1fr))`;
+    grid.style.gridTemplateColumns = "repeat(2, minmax(0, 1fr))";
     grid.style.gridTemplateRows = "minmax(0, 1fr)";
-    const round = t.history.length + 1;
-    if (!done) $(".cmp-sub").textContent = `둘 중 더 좋은 쪽을 골라요 · ${round} / ${Math.max(1, t.total - 1)}번째`;
-    for (const [side, id] of shown) {
-      const entry = byId(id);
-      if (!entry) continue;
-      // No highlight while choosing; only after a side was clicked for Q/W/E.
-      const cell = el("div", { class: "cmp-cell", "data-id": id, "data-side": side, "data-focus": String(!done && cmp.side === side), "data-cull": cullOf(id).label || null });
-      const img = old.get(id) || el("img", { src: cmp.urls.get(id) || thumbUrl(entry), alt: entry.name, draggable: "false" });
-      cell.append(el("div", { class: "cmp-scroll" }, [img]), el("div", { class: "cmp-cap" }, [
-        el("span", { class: "cmp-name", text: counterOf(entry) ? `(${counterOf(entry)})` : entry.name }),
-        el("span", { class: "tile-cull", html: tileCullHtml(id) }),
+    const preload = [];
+    for (const side of ["a", "b"]) {
+      const list = laneList(side);
+      const at = laneIndex(side);
+      const id = list[at] || null;
+      const entry = id ? byId(id) : null;
+      const cell = el("div", { class: "cmp-cell cmp-lane", "data-side": side, "data-id": id || null, "data-focus": String(cmp.lane.side === side), "data-cull": id ? cullOf(id).label || null : null });
+      const title = side === "a"
+        ? el("span", { class: "cmp-lane-title", text: NONE_LABEL })
+        : el("div", { class: "cmp-lane-pick", role: "radiogroup", "aria-label": "오른쪽에 볼 것" },
+          ["pick", "hold"].map((l) => el("button", { type: "button", role: "radio", "data-lane-right": l, "aria-checked": String(cmp.lane.right === l), text: LABELS[l] })));
+      cell.append(el("div", { class: "cmp-lane-head" }, [
+        title,
+        el("span", { class: "cmp-lane-count", text: list.length ? `${at + 1} / ${list.length}` : "0장" }),
+        el("button", { class: "cmp-roll", type: "button", "data-roll": "-1", "aria-label": "이전", disabled: list.length < 2 ? "" : null, text: "‹" }),
+        el("button", { class: "cmp-roll", type: "button", "data-roll": "1", "aria-label": "다음", disabled: list.length < 2 ? "" : null, text: "›" }),
       ]));
-      if (!done) {
-        cell.append(el("button", {
-          class: "cmp-choose", type: "button", "data-choose": side,
-          html: side === "a" ? "<kbd>←</kbd> 이게 더 좋아요" : "이게 더 좋아요 <kbd>→</kbd>",
-        }));
+      if (entry) {
+        const img = old.get(id) || el("img", { src: cmp.urls.get(id) || thumbUrl(entry), alt: entry.name, draggable: "false" });
+        cell.append(el("div", { class: "cmp-scroll" }, [img]), el("div", { class: "cmp-cap" }, [
+          el("span", { class: "cmp-name", text: counterOf(entry) ? `(${counterOf(entry)})` : entry.name }),
+          el("span", { class: "tile-cull", html: tileCullHtml(id) }),
+        ]));
+        const quick = el("div", { class: "cmp-quick", role: "group", "aria-label": "셀렉" });
+        const label = cullOf(id).label;
+        for (const [l, text] of CULL_CHOICES) quick.append(el("button", { type: "button", "data-quick": l, "aria-pressed": String((label || "none") === l), text }));
+        cell.append(quick);
+        preload.push(id, list[(at + 1) % list.length], list[(at - 1 + list.length) % list.length]);
+      } else {
+        const msg = side === "a"
+          ? (cmp.ids.length ? "<p>안 고른 그림이 없어요. 다 골랐어요!</p>" : "")
+          : `<p>아직 ${LABELS[cmp.lane.right]}이 없어요.<br>왼쪽에서 <b>${cmp.lane.right === "pick" ? "Q" : "W"}</b>를 누르면 여기로 와요.</p>`;
+        cell.append(el("div", { class: "cmp-lane-empty", html: msg }));
+        if (side === "a" && cmp.group && groupsInView().length > 1) {
+          cell.querySelector(".cmp-lane-empty").append(el("button", { class: "btn small", type: "button", "data-next-group": "1", text: "다음 묶음 ›" }));
+        }
       }
       grid.append(cell);
     }
-    if (done && t.champ) {
-      const n = t.losers.length;
-      const card = el("div", { class: "cmp-result" }, [
-        el("strong", { text: "이 그림이 베스트예요" }),
-        el("span", { text: n ? `${t.total}장 중에서 골랐어요. 나머지 ${n}장은 어떻게 할까요?` : "비교할 그림이 한 장뿐이에요." }),
-        el("div", { class: "cmp-result-actions" }, [
-          el("button", { class: "btn", type: "button", "data-finish": "hold", text: n ? `채택 · 나머지 ${n}장은 B컷` : "채택하기" }),
-          n ? el("button", { class: "btn secondary", type: "button", "data-finish": "reject", text: `채택 · 나머지는 탈락` }) : null,
-          n ? el("button", { class: "btn secondary", type: "button", "data-finish": "", text: "베스트만 채택" }) : null,
-        ]),
-        el("div", { class: "cmp-result-actions" }, [
-          t.history.length ? el("button", { class: "btn plain small", type: "button", "data-undo": "1", text: "↶ 한 단계 되돌리기" }) : null,
-          el("button", { class: "btn plain small", type: "button", "data-restart": "1", text: "처음부터 다시" }),
-          cmp.group && groupsInView().length > 1 ? el("button", { class: "btn plain small", type: "button", "data-next-group": "1", text: "다음 묶음 ›" }) : null,
-        ]),
-      ]);
-      grid.querySelector(".cmp-cell")?.append(card);
-      $(".cmp-sub").textContent = `${t.total}장 중 베스트`;
-    }
-    void loadCompareOriginals([t.champ, t.queue[0], ...t.queue.slice(1, 3)].filter(Boolean));
+    void loadCompareOriginals([...new Set(preload.filter(Boolean))]);
     syncPairScroll(grid);
   }
   // In 1:1 zoom both pictures scroll together, so the same spot stays side by side.
@@ -1305,7 +1268,6 @@
       const filter = event.target.closest("[data-cmp-filter]");
       if (filter) {
         cmp.filter = filter.dataset.cmpFilter;
-        cmp.t = null;
         renderCompare({ keepImages: true });
         return;
       }
@@ -1313,28 +1275,29 @@
       if (quick) {
         const id = quick.closest(".cmp-cell").dataset.id;
         cmp.focus = compareVisible().indexOf(id);
-        applyCullAction([id], { label: quick.dataset.quick });
+        if (cmp.mode === "pair") cmp.lane.side = quick.closest(".cmp-cell").dataset.side;
+        applyCullAction([id], { label: quick.dataset.quick === "none" ? null : quick.dataset.quick });
+        if (cmp.mode === "pair") { followMark(id); renderCompare({ keepImages: true }); }
         return;
       }
-      const choose = event.target.closest("[data-choose]");
-      if (choose) {
-        chooseSide(choose.dataset.choose);
+      const roll = event.target.closest("[data-roll]");
+      if (roll) {
+        rollLane(roll.closest(".cmp-cell").dataset.side, Number(roll.dataset.roll));
         renderCompare({ keepImages: true });
         return;
       }
-      const finish = event.target.closest("[data-finish]");
-      if (finish) {
-        finishTournament(finish.dataset.finish || null);
-        if (cmp.group && groupsInView().length > 1) stepGroup(1);
-        else renderCompare({ keepImages: true });
+      const right = event.target.closest("[data-lane-right]");
+      if (right) {
+        cmp.lane.right = right.dataset.laneRight;
+        cmp.lane.b = 0;
+        cmp.lane.side = "b";
+        renderCompare({ keepImages: true });
         return;
       }
-      if (event.target.closest("[data-undo]")) { undoChoice(); renderCompare({ keepImages: true }); return; }
-      if (event.target.closest("[data-restart]")) { cmp.t = null; renderCompare({ keepImages: true }); return; }
       if (event.target.closest("[data-next-group]")) { stepGroup(1); return; }
       const cell = event.target.closest(".cmp-cell");
       if (cell && cmp.mode === "pair") {
-        cmp.side = cell.dataset.side;
+        cmp.lane.side = cell.dataset.side;
         box.querySelectorAll(".cmp-cell").forEach((c) => { c.dataset.focus = String(c === cell); });
         return;
       }
@@ -1345,7 +1308,7 @@
     });
     box.addEventListener("dblclick", (event) => {
       const cell = event.target.closest(".cmp-cell");
-      if (!cell) return;
+      if (!cell || !cell.querySelector("img")) return;
       if (cmp.mode === "pair") {
         // zoom both to the spot that was double-clicked
         const img = cell.querySelector("img").getBoundingClientRect();
@@ -1372,21 +1335,13 @@
         return;
       }
       if (cmp.mode === "pair") {
-        const t = tournament();
-        if (action) {
-          stop();
-          const id = cmp.side === "a" || !t.queue.length ? t.champ : t.queue[0]; // right side unless the left was clicked
-          if (id) applyCullAction([id], action);
-          renderCompare({ keepImages: true });
-          return;
-        }
-        if (event.key === "ArrowLeft" && t.queue.length) { stop(); chooseSide("a"); renderCompare({ keepImages: true }); return; }
-        if (event.key === "ArrowRight" && t.queue.length) { stop(); chooseSide("b"); renderCompare({ keepImages: true }); return; }
-        if (event.key === "Backspace" || ((event.metaKey || event.ctrlKey) && event.code === "KeyZ")) { stop(); undoChoice(); renderCompare({ keepImages: true }); return; }
-        if (event.key === "Enter" && !t.queue.length) { stop(); finishTournament("hold"); if (cmp.group && groupsInView().length > 1) stepGroup(1); else renderCompare({ keepImages: true }); return; }
+        if (action) { stop(); markInLane(action); return; }
+        if (event.key === "ArrowLeft" || event.key === "ArrowUp") { stop(); rollLane(cmp.lane.side, -1); renderCompare({ keepImages: true }); return; }
+        if (event.key === "ArrowRight" || event.key === "ArrowDown") { stop(); rollLane(cmp.lane.side, 1); renderCompare({ keepImages: true }); return; }
+        if (event.key === "Tab") { stop(); cmp.lane.side = cmp.lane.side === "a" ? "b" : "a"; renderCompare({ keepImages: true }); return; }
         if (event.code === "KeyZ" && !event.metaKey && !event.ctrlKey) { stop(); togglePairZoom(); return; }
         if (event.key === "Escape" && cmp.actual) { stop(); togglePairZoom(); return; }
-        if (event.key.startsWith("Arrow")) { stop(); return; }
+        if (event.key === " ") { stop(); const id = laneCurrent(cmp.lane.side); if (id) openLightbox(id); return; }
       }
       if (action) {
         event.preventDefault();

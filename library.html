@@ -66,10 +66,10 @@
     <button class="lb-nav lb-next" type="button" aria-label="다음 그림">›</button>
     <div class="lb-note" hidden>작은 미리보기라 흐릿해요. 왼쪽 아래에서 NovelAI 폴더를 연결하면 원본 화질로 보여요.</div>
     <div class="lb-actions" role="group" aria-label="셀렉">
+      <button type="button" data-lb-label="none" title="안 고름 (R)">안 고름 <kbd>R</kbd></button>
       <button type="button" data-lb-label="pick" title="채택 (Q)">채택 <kbd>Q</kbd></button>
       <button type="button" data-lb-label="hold" title="B컷 (W)">B컷 <kbd>W</kbd></button>
       <button type="button" data-lb-label="reject" title="탈락 (E)">탈락 <kbd>E</kbd></button>
-      <span class="lb-stars"><button type="button" data-lb-star="1">★</button><button type="button" data-lb-star="2">★</button><button type="button" data-lb-star="3">★</button><button type="button" data-lb-star="4">★</button><button type="button" data-lb-star="5">★</button></span>
     </div>
     <div class="lb-hint">←/→ 넘기기 · 채택·B컷·탈락을 고르면 다음 장으로 · 그림 누르면 실제 크기 · Esc 닫기</div>
   </div>
@@ -82,9 +82,9 @@
       <span class="grow"></span>
       <div class="cmp-seg" role="radiogroup" aria-label="보는 방법">
         <button type="button" role="radio" data-cmp-mode="grid" title="모두 한 화면에">한눈에</button>
-        <button type="button" role="radio" data-cmp-mode="pair" title="기준 한 장과 후보 한 장을 크게 (M)">1:1</button>
+        <button type="button" role="radio" data-cmp-mode="pair" title="왼쪽 안 고름 · 오른쪽 채택을 나란히 (M)">나란히</button>
       </div>
-      <div class="cmp-seg" role="radiogroup" aria-label="보이는 그림">
+      <div class="cmp-seg cmp-filter" role="radiogroup" aria-label="보이는 그림">
         <button type="button" role="radio" data-cmp-filter="all">전체</button>
         <button type="button" role="radio" data-cmp-filter="keep" title="탈락은 빼고 봐요">탈락 빼기</button>
         <button type="button" role="radio" data-cmp-filter="pick">채택만</button>
