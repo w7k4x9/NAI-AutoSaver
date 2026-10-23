@@ -1045,13 +1045,14 @@
   function groupKeyOf(entry) {
     return LibDB.stripCounter(entry.name).trim();
   }
+  // What tells pictures of one name apart: "(3)", or "(3) (1)" after Chrome
+  // renamed a second "(3)".
   function counterOf(entry) {
-    const m = String(entry.name).match(/\((\d+)\)\s*$/);
-    return m ? Number(m[1]) : 0;
+    return String(entry.name).slice(groupKeyOf(entry).length).trim();
   }
   function groupMembers(entry) {
     const key = groupKeyOf(entry);
-    return allEntries().filter((e) => groupKeyOf(e) === key).sort((a, b) => counterOf(a) - counterOf(b) || a.savedAt - b.savedAt);
+    return allEntries().filter((e) => groupKeyOf(e) === key).sort((a, b) => a.savedAt - b.savedAt || a.name.localeCompare(b.name, "ko", { numeric: true }));
   }
   function groupsInView() {
     const seen = new Map();
@@ -1119,7 +1120,7 @@
     $(".cmp-title").textContent = cmp.group || `고른 ${cmp.ids.length}장`;
     const groups = cmp.group ? groupsInView() : [];
     const at = groups.findIndex(([key]) => key === cmp.group);
-    $(".cmp-sub").textContent = [cmp.mode === "pair" ? `${cmp.ids.length}장` : `${visible.length} / ${cmp.ids.length}장`, `채택 ${counts.pick}`, `B컷 ${counts.hold}`, `탈락 ${counts.reject}`, `${NONE_LABEL} ${counts.none}`, groups.length > 1 && at >= 0 ? `묶음 ${at + 1} / ${groups.length}` : ""].filter(Boolean).join(" · ");
+    $(".cmp-sub").textContent = [cmp.mode === "pair" ? `${cmp.ids.length}장` : `${visible.length} / ${cmp.ids.length}장`, `채택 ${counts.pick}`, `B컷 ${counts.hold}`, `탈락 ${counts.reject}`, `${NONE_LABEL} ${counts.none}`, groups.length > 1 && at >= 0 ? `이름 ${at + 1} / ${groups.length}` : ""].filter(Boolean).join(" · ");
     box.querySelectorAll(".cmp-nav").forEach((b) => { b.hidden = !(groups.length > 1); });
     box.querySelectorAll("[data-cmp-filter]").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.cmpFilter === cmp.filter)));
     box.querySelectorAll("[data-cmp-mode]").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.cmpMode === cmp.mode)));
@@ -1151,7 +1152,7 @@
       const cell = el("div", { class: "cmp-cell", "data-id": id, "data-focus": String(i === cmp.focus), "data-cull": label || null });
       const img = old.get(id) || el("img", { src: cmp.urls.get(id) || thumbUrl(entry), alt: entry.name, draggable: "false" });
       cell.append(img, el("div", { class: "cmp-cap" }, [
-        el("span", { class: "cmp-name", text: counterOf(entry) ? `(${counterOf(entry)})` : entry.name }),
+        el("span", { class: "cmp-name", text: counterOf(entry) || entry.name }),
         el("span", { class: "tile-cull", html: tileCullHtml(id) }),
       ]));
       const quick = el("div", { class: "cmp-quick", role: "group", "aria-label": "셀렉" });
@@ -1187,7 +1188,7 @@
       if (entry) {
         const img = old.get(id) || el("img", { src: cmp.urls.get(id) || thumbUrl(entry), alt: entry.name, draggable: "false" });
         cell.append(el("div", { class: "cmp-scroll" }, [img]), el("div", { class: "cmp-cap" }, [
-          el("span", { class: "cmp-name", text: counterOf(entry) ? `(${counterOf(entry)})` : entry.name }),
+          el("span", { class: "cmp-name", text: counterOf(entry) || entry.name }),
           el("span", { class: "tile-cull", html: tileCullHtml(id) }),
         ]));
         const quick = el("div", { class: "cmp-quick", role: "group", "aria-label": "셀렉" });
@@ -1201,7 +1202,9 @@
           : `<p>아직 ${LABELS[cmp.lane.right]}이 없어요.<br>왼쪽에서 <b>${cmp.lane.right === "pick" ? "Q" : "W"}</b>를 누르면 여기로 와요.</p>`;
         cell.append(el("div", { class: "cmp-lane-empty", html: msg }));
         if (side === "a" && cmp.group && groupsInView().length > 1) {
-          cell.querySelector(".cmp-lane-empty").append(el("button", { class: "btn small", type: "button", "data-next-group": "1", text: "다음 묶음 ›" }));
+          const all = groupsInView();
+          const next = all[(all.findIndex(([key]) => key === cmp.group) + 1) % all.length]?.[0];
+          cell.querySelector(".cmp-lane-empty").append(el("button", { class: "btn small", type: "button", "data-next-group": "1", text: `다음 이름: ${next} ›` }));
         }
       }
       grid.append(cell);

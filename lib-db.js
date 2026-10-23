@@ -46,8 +46,10 @@
   });
 
   // --- helpers shared by the worker and the page -----------------------------
+  // "이름 (3)" → "이름". Chrome adds its own " (1)" when a file with that name
+  // already exists, so "이름 (3) (1)" is the same picture name too.
   function stripCounter(name) {
-    return String(name || "").replace(/\s*\(\d+\)$/, "");
+    return String(name || "").replace(/(\s*\(\d+\))+$/, "");
   }
   // Same rule as the save folders: the text before the first "_" is the character.
   function characterOf(name) {

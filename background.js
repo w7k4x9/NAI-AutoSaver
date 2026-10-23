@@ -333,6 +333,33 @@ async function retireIfDevCopy() {
   }
 }
 
+// The panel numbers a run from (1) again. If "이름 (1)" is already in that
+// folder, keep counting after the highest number there ("이름 (6)") instead of
+// letting Chrome make "이름 (1) (1)". Looks only at files Chrome still knows
+// about; if it misses one, Chrome's own renaming is the fallback.
+async function freeCounterName(folder, base) {
+  const m = String(base).match(/^(.*?) \((\d+)\)$/);
+  if (!m) return base;
+  const stem = m[1];
+  try {
+    const items = await chrome.downloads.search({ query: [stem], exists: true, limit: 1000 });
+    const tail = `/${folder}/`.replace(/\/+/g, "/");
+    const used = new Set();
+    for (const item of items) {
+      const path = String(item.filename || "").replace(/\\/g, "/");
+      const at = path.lastIndexOf("/");
+      if (at < 0 || !path.slice(0, at + 1).endsWith(tail)) continue;
+      const name = path.slice(at + 1).replace(/\.(png|webp)$/i, "");
+      const hit = name.match(/^(.*?) \((\d+)\)(?: \(\d+\))*$/);
+      if (hit && hit[1] === stem) used.add(Number(hit[2]));
+    }
+    if (!used.has(Number(m[2]))) return base;
+    return `${stem} (${Math.max(...used) + 1})`;
+  } catch (error) {
+    return base;
+  }
+}
+
 async function saveGeneratedImage(request) {
   if ((await chrome.storage.local.get(RETIRED_KEY))[RETIRED_KEY]) {
     return { ok: false, error: "스토어 버전으로 옮겨서 이 버전은 저장하지 않아요." };
@@ -355,6 +382,7 @@ async function saveGeneratedImage(request) {
     ].join("");
     base = `${stamp}_${sanitizeFilenamePart(request.promptText)}`;
   }
+  base = await freeCounterName(folder, base);
   const filename = `${folder}/${base}.${converted.ext}`;
   const downloadId = await new Promise((resolve, reject) => {
     chrome.downloads.download({ url: converted.url, filename, saveAs: false }, (id) => {
