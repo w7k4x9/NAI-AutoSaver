@@ -173,8 +173,18 @@
         globalBaseNegative: normalizePrompt(options.globalBaseNegative),
         namePattern: typeof options.namePattern === "string" ? options.namePattern.slice(0, 80) : "",
         groupFirst: options.groupFirst === "bg" ? "bg" : "char",
+        resume: normalizeResume(options.resume),
       },
     };
+  }
+
+  // Where a stopped queue run left off: the item (by id) and how many of its
+  // pictures were already saved. null = nothing to continue.
+  function normalizeResume(value) {
+    if (!value || typeof value !== "object") return null;
+    const itemId = typeof value.itemId === "string" ? value.itemId : "";
+    if (!itemId) return null;
+    return { itemId, done: Math.max(0, Math.floor(Number(value.done) || 0)), at: Number(value.at) || 0 };
   }
 
   function createExportEnvelope(state, options = {}) {

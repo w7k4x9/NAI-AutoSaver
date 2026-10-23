@@ -46,8 +46,14 @@
   const today = () => LibDB.dateKey(Date.now());
 
   // ------------------------------------------------------------------ data ---
+  // Character from the save folder (see LibDB.characterOf), worked out again
+  // on load so older entries and a changed 저장 폴더 follow along.
+  function fixChar(entry) {
+    if (entry && entry.source !== "dropped") entry.char = LibDB.characterOf(entry.name, entry.path, state.saveFolder);
+    return entry;
+  }
   async function loadEntries() {
-    const all = await LibDB.all();
+    const all = (await LibDB.all()).map(fixChar);
     all.sort((a, b) => b.savedAt - a.savedAt);
     state.entries = all;
   }
@@ -96,6 +102,7 @@
     return url;
   }
   function upsert(entry) {
+    fixChar(entry);
     const list = entry.source === "dropped" ? state.dropped : state.entries;
     const i = list.findIndex((e) => e.id === entry.id);
     if (i >= 0) {
@@ -2583,8 +2590,14 @@
     }, { root: $(".gallery"), rootMargin: "600px" }).observe($(".sentinel"));
 
     let dragDepth = 0;
+    // Dragging a picture inside this page (a tile, the big view) is not
+    // "opening a file": Chrome hands it over as a file named after the
+    // thumbnail (6af0df3b-….webp), which used to land in 불러온 파일.
+    let draggingFromPage = false;
+    document.addEventListener("dragstart", () => { draggingFromPage = true; });
+    document.addEventListener("dragend", () => { draggingFromPage = false; });
     window.addEventListener("dragenter", (event) => {
-      if (![...(event.dataTransfer?.types || [])].includes("Files")) return;
+      if (draggingFromPage || ![...(event.dataTransfer?.types || [])].includes("Files")) return;
       dragDepth += 1;
       $(".drop-overlay").hidden = false;
     });
@@ -2597,6 +2610,10 @@
       event.preventDefault();
       dragDepth = 0;
       $(".drop-overlay").hidden = true;
+      if (draggingFromPage) {
+        draggingFromPage = false;
+        return;
+      }
       if (event.dataTransfer?.files?.length) void importFiles(event.dataTransfer.files);
     });
     document.addEventListener("click", (event) => {

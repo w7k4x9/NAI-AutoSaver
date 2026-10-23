@@ -51,8 +51,20 @@
   function stripCounter(name) {
     return String(name || "").replace(/(\s*\(\d+\))+$/, "");
   }
-  // Same rule as the save folders: the text before the first "_" is the character.
-  function characterOf(name) {
+  // The character is the folder the picture was saved in (조합 saves into
+  // NovelAI/날짜/<캐릭터>/, whatever the file name looks like, e.g.
+  // "루페르타 실내_분노" lives in 루페르타/). Pictures not in a character
+  // folder fall back to the old rule: the text before the first "_".
+  const DATE_DIR = /^\d{4}-\d{2}-\d{2}$/;
+  const LABEL_DIRS = new Set(["채택", "B컷", "탈락", "보류"]);
+  function characterOf(name, path = "", saveFolder = "NovelAI") {
+    const dirs = String(path || "").split("/").filter(Boolean);
+    dirs.pop();
+    const parent = dirs[dirs.length - 1] || "";
+    const roots = new Set([dirs[0], ...String(saveFolder || "").split("/")].filter(Boolean).map((d) => d.toLowerCase()));
+    if (dirs.length >= 2 && parent && !DATE_DIR.test(parent) && !parent.startsWith("_") && !LABEL_DIRS.has(parent) && !roots.has(parent.toLowerCase())) {
+      return parent;
+    }
     const base = stripCounter(name).trim();
     const i = base.indexOf("_");
     return i > 0 ? base.slice(0, i).trim() : "";
@@ -112,7 +124,7 @@
       id: path,
       path,
       name,
-      char: characterOf(name),
+      char: characterOf(name, path),
       date: dateKey(savedAt),
       savedAt,
       downloadId,

@@ -3214,6 +3214,16 @@
 
     saveContext.lastSavedSrc = image.src;
     saveContext.counter += 1;
+    if (queueRun.active) {
+      const running = queueRun.items[queueRun.index];
+      if (running) {
+        void saveResume(running.id, (queueRun.doneOffset || 0) + saveContext.counter);
+        // keep the running row's "n/N장" current
+        const index = getItemIndexById(running.id);
+        const sub = ui.queueList?.querySelector(`.ias-qcard[data-id="${CSS.escape(running.id)}"] .ias-row-sub`);
+        if (sub && index >= 0) sub.textContent = queueRowSub(queueState.items[index], index);
+      }
+    }
     const base = Store.sanitizeFileName(saveContext.baseName || defaultSaveName());
     const folder = currentSaveFolder(saveContext.baseName, saveContext.folderName);
     const fileName = `${base} (${saveContext.counter})`;
@@ -3546,6 +3556,31 @@
     renderControls();
   }
 
+  // --- 이어서 생성: where a stopped (or interrupted) queue run left off --------
+  // Saved after every picture, so stopping, an error, an extension update or a
+  // closed tab all leave a point to continue from.
+  function resumePoint() {
+    const r = queueState.options?.resume;
+    if (!r) return null;
+    let index = getItemIndexById(r.itemId);
+    if (index < 0) return null;
+    let done = r.done;
+    if (done >= (queueState.items[index].count || 0)) {
+      index += 1;
+      done = 0;
+    }
+    if (index >= queueState.items.length || (index === 0 && done === 0)) return null;
+    return { index, done, item: queueState.items[index] };
+  }
+  let resumeWrite = Promise.resolve();
+  function saveResume(itemId, done = 0) {
+    queueState.options.resume = itemId ? { itemId, done, at: Date.now() } : null;
+    resumeWrite = resumeWrite
+      .then(() => storageSet("local", { [QUEUE_STORAGE_KEY]: Store.normalizeState(queueState) }))
+      .catch(() => {});
+    return resumeWrite;
+  }
+
   function getItemIndexById(id) {
     return queueState.items.findIndex((item) => item.id === id);
   }
@@ -3747,7 +3782,7 @@
     }
   }
 
-  function runQueueItemAt(index, runToken) {
+  function runQueueItemAt(index, runToken, skip = 0) {
     return new Promise((resolve) => {
       const item = queueRun.items[index];
       if (!item) {
@@ -3786,7 +3821,7 @@
         const applyStartedAt = Date.now();
         const startResult = await startAutoGenerate({
           shouldContinue: () => queueRun.active && runToken === queueRun.token,
-          target: item.count,
+          target: Math.max(1, item.count - skip),
           saveName: item.title,
           folderName: item.folderName || "",
           applyBasePrompt: itemBase && itemBase.trim() ? itemBase : null,
@@ -3822,11 +3857,12 @@
     });
   }
 
-  async function startQueueRun() {
+  async function startQueueRun({ resume = false } = {}) {
     if (queueRun.active) {
       return { ok: false };
     }
     await loadQueueState();
+    const start = resume ? resumePoint() : null;
     if (!queueState.items.length) {
       setStatus("대기열이 비어 있어요.", "warn");
       return { ok: false };
@@ -3844,7 +3880,13 @@
     logEvent("info", `대기열 실행 시작 · ${queueRun.items.length}개 항목 · 반복 ${queueRun.loop ? "켜짐" : "꺼짐"}`,
       queueRun.items.map((item, i) => `${i + 1}. ${item.title} · ${item.count}장 · 캐릭터 ${splitCharacterBlocks(item.characterPrompt).length}명`).join("\n"));
     queueRun.index = 0;
-    queueRun.totalGenerated = 0;
+    queueRun.doneOffset = 0;
+    queueRun.totalGenerated = start
+      ? queueRun.items.slice(0, start.index).reduce((n, it) => n + (it.count || 0), 0) + start.done
+      : 0;
+    if (start) {
+      logEvent("info", `이어서 생성 · ${start.index + 1}번째 「${start.item.title}」 ${start.done}/${start.item.count}장부터`);
+    }
     resetEtaTracker();
     renderControls();
     renderQueue();
@@ -3855,8 +3897,9 @@
 
     let interrupted = false;
     let interruptionError = "";
+    let firstPass = true;
     do {
-      for (let i = 0; i < queueRun.items.length; i += 1) {
+      for (let i = firstPass && start ? start.index : 0; i < queueRun.items.length; i += 1) {
         if (!queueRun.active || runToken !== queueRun.token) {
           interrupted = true;
           break;
@@ -3870,7 +3913,10 @@
           ? Math.min(100, Math.round((queueRun.totalGenerated / totalAll) * 100))
           : 0;
         noteProgress(`대기열 ${i + 1}/${queueRun.items.length} · ${item.title} · 항목 0/${item.count || 0}장 (0%) · 전체 ${overallAtStart}%`);
-        const result = await runQueueItemAt(i, runToken);
+        const skip = firstPass && start && i === start.index ? start.done : 0;
+        queueRun.doneOffset = skip;
+        await saveResume(item.id, skip);
+        const result = await runQueueItemAt(i, runToken, skip);
         if (result?.cancelled || !queueRun.active || runToken !== queueRun.token) {
           interrupted = true;
           break;
@@ -3881,8 +3927,9 @@
           setStatus(`대기열 중단: ${interruptionError}`, "warn");
           break;
         }
-        queueRun.totalGenerated += item.count;
+        queueRun.totalGenerated += item.count - skip;
       }
+      firstPass = false;
     } while (!interrupted && queueRun.active && runToken === queueRun.token && queueRun.loop);
 
     await finishQueueRun({ completedNormally: !interrupted, error: interruptionError });
@@ -3902,6 +3949,9 @@
     renderQueue();
     renderControls();
     if (completedNormally) {
+      await saveResume(null);
+      renderQueue();
+      renderControls();
       await playSound("stop.mp3");
       chrome.runtime.sendMessage({ action: "showCompletionNotification", count: total }, () => {
         void chrome.runtime.lastError;
@@ -3910,7 +3960,7 @@
     } else if (error) {
       setStatus(`대기열 중단: ${error}`, "warn");
     } else {
-      setStatus("대기열 실행을 중지했어요.", "warn");
+      setStatus(resumePoint() ? "멈췄어요. 「이어서 생성」을 누르면 멈춘 데서부터 해요." : "대기열 실행을 중지했어요.", "warn");
     }
   }
 
@@ -6397,7 +6447,7 @@
       }
       const current = items[queueRun.index];
       const currentTarget = current ? current.count || 0 : 0;
-      remain += Math.max(0, currentTarget - autoRun.count);
+      remain += Math.max(0, currentTarget - (queueRun.doneOffset || 0) - autoRun.count);
       return remain;
     }
     if (autoRun.active && autoRun.target > 0) {
@@ -6963,7 +7013,8 @@
 
   function renderControls() {
     const running = autoRun.active || queueRun.active;
-    const completed = Math.max(0, Number.parseInt(autoRun.completedCount, 10) || 0);
+    // pictures actually saved in this run (completedCount is only set when a run ends)
+    const completed = running ? saveContext.counter : Math.max(0, Number.parseInt(autoRun.completedCount, 10) || 0);
     const targetLabel = autoRun.target > 0 ? String(autoRun.target) : "∞";
 
     if (ui.autoButton) {
@@ -6977,9 +7028,12 @@
     }
     if (ui.queueRunButton) {
       const label = ui.queueRunButton.querySelector("span");
+      const rp = queueRun.active ? null : resumePoint();
       if (label) {
-        label.textContent = queueRun.active ? "멈추기" : "생성 시작";
+        label.textContent = queueRun.active ? "멈추기" : rp ? "이어서 생성" : "생성 시작";
       }
+      ui.queueRunButton.title = rp ? `${rp.index + 1}번째 「${rp.item.title}」 ${rp.done}/${rp.item.count}장부터 이어서 해요` : "";
+      if (ui.queueRestartButton) ui.queueRestartButton.hidden = !rp;
       ui.queueRunButton.dataset.active = queueRun.active ? "true" : "false";
       swapButtonIcon(ui.queueRunButton, queueRun.active ? "stop" : "play_arrow");
       ui.queueRunButton.disabled = !queueRun.active && queueState.items.length === 0;
@@ -7007,14 +7061,17 @@
       const item = queueRun.items[queueRun.index];
       const next = queueRun.items[queueRun.index + 1];
       const percent = overallPercent();
+      // a resumed item counts the pictures made before the stop too
+      const itemDone = completed + (queueRun.doneOffset || 0);
+      const itemTotal = item?.count || targetLabel;
       return {
         running: true,
         title: item ? item.title : "대기열",
-        sub: [`${completed}/${targetLabel}장`, `대기열 ${queueRun.index + 1}/${queueRun.items.length}`, eta ? `약 ${eta}` : ""].filter(Boolean).join(" · "),
+        sub: [`${itemDone}/${itemTotal}장`, `대기열 ${queueRun.index + 1}/${queueRun.items.length}`, eta ? `약 ${eta}` : ""].filter(Boolean).join(" · "),
         percent,
         details: [
           ["지금", item ? item.title : "대기열"],
-          ["이 항목", `${completed} / ${targetLabel}장`],
+          ["이 항목", `${itemDone} / ${itemTotal}장`],
           ["대기열", `${queueRun.index + 1} / ${queueRun.items.length}번째${percent != null ? ` · 전체 ${Math.round(percent)}%` : ""}`],
           ["다음", next ? next.title : "없음 (마지막)"],
           ["남은 시간", etaText],
@@ -7237,14 +7294,22 @@
     if (queueRun.active && index < queueRun.index) {
       return "done";
     }
+    if (!queueRun.active) {
+      const rp = resumePoint();
+      if (rp && index < rp.index) return "done";
+      if (rp && index === rp.index) return "paused";
+    }
     return "wait";
   }
 
   function queueRowSub(item, index) {
     const status = queueItemStatus(index);
     if (status === "running") {
-      const done = Math.max(0, Number.parseInt(autoRun.completedCount, 10) || 0);
+      const done = saveContext.counter + (queueRun.doneOffset || 0);
       return `만드는 중 · ${done}/${item.count}장`;
+    }
+    if (status === "paused") {
+      return `${resumePoint()?.done || 0}/${item.count}장에서 멈춤 · 여기서부터 이어서 해요`;
     }
     if (status === "done") {
       return `${item.count}장 끝남`;
@@ -7310,7 +7375,7 @@
       const mark = document.createElement("span");
       mark.className = "ias-row-mark";
       mark.dataset.kind = status;
-      mark.textContent = status === "done" ? "✓" : status === "running" ? "●" : String(index + 1);
+      mark.textContent = status === "done" ? "✓" : status === "running" ? "●" : status === "paused" ? "⏸" : String(index + 1);
       if (queueSelect.on) {
         mark.dataset.kind = "check";
         mark.dataset.checked = String(queueSelect.ids.has(item.id));
@@ -8896,6 +8961,7 @@
       .ias-row-mark { display: flex; justify-content: center; font-size: 11.5px; color: var(--text3); font-variant-numeric: tabular-nums; }
       .ias-row-mark[data-kind="done"] { color: var(--success); font-weight: 800; }
       .ias-row-mark[data-kind="running"] { color: var(--accent); }
+      .ias-row-mark[data-kind="paused"] { color: var(--accent); font-size: 10px; }
       .ias-row-mark[data-kind="check"] { color: var(--accent); align-items: center; }
       .ias-check-ring { width: 16px; height: 16px; border-radius: 8px; box-shadow: inset 0 0 0 1.5px var(--text3); display: block; }
       .ias-order-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
@@ -9114,6 +9180,7 @@
                   </div>
                   <input class="ias-queue-import-file" type="file" accept="application/json,.json" hidden>
                 </div>
+                <button class="ias-btn secondary small ias-queue-restart" type="button" hidden title="멈춘 곳은 잊고 1번째부터 다시 해요">처음부터</button>
                 <button class="ias-btn ias-tb-primary ias-queue-run" type="button" disabled data-tour="queue-run">${icon("play_arrow", 14)}<span>생성 시작</span></button>
               </div>
 
@@ -9481,8 +9548,11 @@
       if (queueRun.active) {
         void stopQueueRun();
       } else {
-        void startQueueRun();
+        void startQueueRun({ resume: Boolean(resumePoint()) });
       }
+    });
+    ui.queueRestartButton?.addEventListener("click", () => {
+      if (!queueRun.active) void startQueueRun({ resume: false });
     });
     ui.queueAddButton.addEventListener("click", () => void addQueueItem());
     ui.queueSelectButton?.addEventListener("click", () => setQueueSelectMode(!queueSelect.on));
@@ -9773,6 +9843,7 @@
       queueList: panelShadow.querySelector(".ias-queue-list"),
       queueEditor: panelShadow.querySelector(".ias-qeditor"),
       queueRunButton: panelShadow.querySelector(".ias-queue-run"),
+      queueRestartButton: panelShadow.querySelector(".ias-queue-restart"),
       queueBulkButton: panelShadow.querySelector('[data-queue-view="bulk"]'),
       loopToggle: panelShadow.querySelector(".ias-loop"),
       queueExportButton: panelShadow.querySelector(".ias-queue-export"),
