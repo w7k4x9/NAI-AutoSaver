@@ -4443,7 +4443,10 @@
     const emotions = owner ? charEmotionEntries(owner) : [];
     const emoChips = emotions.map((entry, i) => `<button type="button" class="ias-chip" data-kind="emo" data-index="${i}" data-selected="${isSelected("emo", i)}">${escapeHtml(emoDisplayName(entry, i))}</button>`).join("");
 
+    const basePreview = String(genState.base || "").replace(/\s+/g, " ").trim();
     ui.comboPickers.innerHTML = `
+      <span class="ias-picker-label">베이스</span>
+      <div class="ias-chips"><button type="button" class="ias-chip ias-base-chip" data-common="1" data-selected="${!genSelection.type}" title="베이스 프롬프트 · 네거티브 · 장수를 오른쪽에서 고쳐요"><b>공통 베이스</b><span class="ias-base-preview">${escapeHtml(basePreview || "비어 있어요 · 눌러서 쓰기")}</span></button></div>
       <span class="ias-picker-label">캐릭터</span>
       <div class="ias-chips">${charChips}<button type="button" class="ias-chip-add ias-chip-round" data-add="char" data-tour="combo-add-char" aria-label="캐릭터 추가">+</button></div>
       <span class="ias-picker-label">배경</span>
@@ -4543,7 +4546,7 @@
           ${inspectorField("네거티브", `data-mfield="negative" data-mindex="${mi}"`, m.negative, { rows: 1 })}
         </div>`).join("");
       html = `
-        <div class="ias-insp-head"><button type="button" class="ias-insp-back" data-insp-back="1">${icon("chevron", 14)}<span>공통 설정</span></button><span class="ias-insp-kicker">캐릭터</span><span class="ias-insp-title">${escapeHtml(charDisplayName(ch, index))}</span></div>
+        <div class="ias-insp-head"><button type="button" class="ias-insp-back" data-insp-back="1">${icon("chevron", 14)}<span>공통 베이스</span></button><span class="ias-insp-kicker">캐릭터</span><span class="ias-insp-title">${escapeHtml(charDisplayName(ch, index))}</span></div>
         ${inspectorField("이름 (파일 이름 · 폴더에 들어가요)", 'data-cfield="code" data-autofocus="true"', ch.code, { placeholder: "예: 김춘자" })}
         ${inspectorField("외형 태그", 'data-cfield="appearance"', ch.appearance, { rows: 3, placeholder: "예: girl, black hair, long hair" })}
         ${inspectorField("캐릭터 네거티브", 'data-cfield="negative"', ch.negative, { rows: 2, placeholder: "비우면 없음" })}
@@ -4556,7 +4559,7 @@
       const bg = bgOwnerList()[index];
       const bgKicker = genState.bgShared !== false ? "배경 · 모든 캐릭터 공통" : `${charDisplayName(genState.chars[genActiveChar], genActiveChar)} · 배경`;
       html = `
-        <div class="ias-insp-head"><button type="button" class="ias-insp-back" data-insp-back="1">${icon("chevron", 14)}<span>공통 설정</span></button><span class="ias-insp-kicker">${escapeHtml(bgKicker)}</span><span class="ias-insp-title">${escapeHtml(bgDisplayName(bg, index))}</span></div>
+        <div class="ias-insp-head"><button type="button" class="ias-insp-back" data-insp-back="1">${icon("chevron", 14)}<span>공통 베이스</span></button><span class="ias-insp-kicker">${escapeHtml(bgKicker)}</span><span class="ias-insp-title">${escapeHtml(bgDisplayName(bg, index))}</span></div>
         ${inspectorField("이름", 'data-bfield="code" data-autofocus="true"', bg.code, { placeholder: "예: 교실" })}
         ${inspectorField("태그", 'data-bfield="tags"', bg.tags, { rows: 3, placeholder: "예: classroom, window" })}
         ${inspectorField("네거티브", 'data-bfield="negative"', bg.negative, { rows: 2, placeholder: "비우면 없음" })}
@@ -4568,7 +4571,7 @@
       if (entry) {
         const kicker = genState.emoShared ? "표정 · 모든 캐릭터 공통" : `${charDisplayName(genState.chars[genActiveChar], genActiveChar)} · 표정`;
         html = `
-          <div class="ias-insp-head"><button type="button" class="ias-insp-back" data-insp-back="1">${icon("chevron", 14)}<span>공통 설정</span></button><span class="ias-insp-kicker">${escapeHtml(kicker)}</span><span class="ias-insp-title">${escapeHtml(emoDisplayName(entry, index))}</span></div>
+          <div class="ias-insp-head"><button type="button" class="ias-insp-back" data-insp-back="1">${icon("chevron", 14)}<span>공통 베이스</span></button><span class="ias-insp-kicker">${escapeHtml(kicker)}</span><span class="ias-insp-title">${escapeHtml(emoDisplayName(entry, index))}</span></div>
           ${inspectorField("이름 (파일 이름에 들어가요)", 'data-efield="name" data-autofocus="true"', entry.name, { placeholder: `비우면 ${index + 1}` })}
           ${inspectorField("태그", 'data-efield="tags"', entry.tags, { rows: 3, placeholder: "예: smiling, open mouth" })}
           ${genState.emoShared ? "" : copyFromSelect("emo")}
@@ -4579,7 +4582,7 @@
     if (!html) {
       genSelection = { type: null, index: -1 };
       html = `
-        <div class="ias-insp-head"><span class="ias-insp-kicker">조합 전체</span><span class="ias-insp-title">공통 설정</span></div>
+        <div class="ias-insp-head"><span class="ias-insp-kicker">조합 전체</span><span class="ias-insp-title">공통 베이스</span></div>
         <p class="ias-hint" style="margin-bottom:12px;">칩을 누르면 여기서 태그를 고쳐요.</p>
         ${inspectorField("베이스 프롬프트", 'data-gfield="base"', genState.base, { rows: 3, placeholder: "모든 조합 공통" })}
         ${inspectorField("베이스 네거티브", 'data-gfield="baseNeg"', genState.baseNeg, { rows: 2, placeholder: "비우면 없음" })}
@@ -4621,7 +4624,7 @@
       input.dispatchEvent(new Event("input", { bubbles: true }));
       return;
     }
-    if (target.closest("[data-insp-back]")) {
+    if (target.closest("[data-insp-back], [data-common]")) {
       genSelection = { type: null, index: -1 };
       renderCombo();
       return;
@@ -7423,7 +7426,7 @@
 
     const item = getSelectedQueueItem();
     if (!item) {
-      body.innerHTML = '<div class="ias-list-empty">대기열이 비어 있어요.<br>위의 ＋를 누르면 지금 NovelAI 프롬프트가 한 줄 들어가요.<br>조합에서 한꺼번에 만들 수도 있어요.</div>';
+      body.innerHTML = '<div class="ias-list-empty">대기열이 비어 있어요.<br>위의 ＋를 누르면 지금 NovelAI 프롬프트가 한 줄 들어가요.<br>조합에서 한꺼번에 만들 수도 있어요.<br><br>모든 항목에 같이 넣을 베이스는 왼쪽 맨 위 <b>공통 베이스</b>를 눌러 고쳐요.</div>';
       return;
     }
     const disabled = queueRun.active;
@@ -7469,8 +7472,14 @@
     const charEl = queueTextarea("characterPrompt", item.characterPrompt);
     const charNegEl = queueTextarea("negativePrompt", item.negativePrompt);
     host.append(baseEl, baseNegEl, charEl, charNegEl);
-    body.append(head, meta, host);
     const commonActive = Boolean(queueState.options.useGlobalBase) && String(queueState.options.globalBase || "").trim();
+    // Where the shared base lives, one tap away from every item.
+    const toCommon = document.createElement("button");
+    toCommon.type = "button";
+    toCommon.className = "ias-to-common";
+    toCommon.innerHTML = `<span>${commonActive ? "공통 베이스를 쓰는 중" : "공통 베이스 꺼짐"}</span><b>공통 베이스 고치기</b>${icon("chevron", 12)}`;
+    toCommon.addEventListener("click", () => selectQueueView("common"));
+    body.append(head, meta, toCommon, host);
     const editor = attachPromptEditor({ base: baseEl, baseNeg: baseNegEl, char: charEl, charNeg: charNegEl }, {
       basePlaceholder: commonActive ? "공통 베이스를 쓰는 중이라 이 칸은 안 들어가요" : "비우면 NovelAI에 있는 값을 그대로 써요",
       baseNote: () => (commonActive ? "공통 베이스 사용 중" : ""),
@@ -8657,6 +8666,13 @@
       .ias-insp-kicker { font-size: 11.5px; color: var(--text3); }
       .ias-insp-back { align-self: flex-start; display: inline-flex; align-items: center; gap: 2px; margin: -2px 0 6px -4px; padding: 2px 8px 2px 2px; border: none; border-radius: 7px; background: transparent; color: var(--accent); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
       .ias-insp-back svg { transform: rotate(180deg); }
+      .ias-base-chip { max-width: 100%; min-width: 0; }
+      .ias-to-common { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; margin: 2px 0 8px; padding: 3px 6px 3px 8px; border: none; border-radius: 7px; background: var(--elev2); color: var(--text2); font: inherit; font-size: 12px; cursor: pointer; }
+      .ias-to-common b { color: var(--accent); font-weight: 600; }
+      .ias-to-common svg { color: var(--accent); }
+      .ias-to-common:hover { background: var(--hover); }
+      .ias-base-chip b { font-weight: 650; flex: 0 0 auto; }
+      .ias-base-preview { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text3); font-size: 12px; }
       .ias-insp-back:hover { background: var(--accent-soft, rgba(0,122,255,0.1)); }
       .ias-insp-title { font-size: 16px; font-weight: 750; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .ias-insp-member { border-radius: 8px; background: var(--group); border: 0.5px solid var(--border); padding: 8px; margin-bottom: 10px; }
