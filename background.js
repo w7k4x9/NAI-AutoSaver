@@ -2,7 +2,7 @@
 
 // 보관함: metadata reader + library database (classic worker scripts).
 try {
-  importScripts("nai-meta.js", "lib-db.js", "notion.js");
+  importScripts("nai-meta.js", "lib-db.js", "notion.js", "update-check.js");
 } catch (error) {
   console.warn("library scripts failed to load", error);
 }
@@ -160,6 +160,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return false;
   }
 
+  if (request?.action === "updateStatus") {
+    const run = globalThis.NAIUpdate ? NAIUpdate.check({ force: Boolean(request.force) }) : Promise.resolve({ eligible: false });
+    void run.then(sendResponse, (error) => sendResponse({ eligible: false, error: String(error?.message || error) }));
+    return true;
+  }
+
+  if (request?.action === "openUpdatePage") {
+    void openUpdatePage().then(() => sendResponse({ ok: true }));
+    return true;
+  }
+
   if (request?.action === "devCopyState") {
     void chrome.storage.local.get(RETIRED_KEY).then((r) => sendResponse({ retired: Boolean(r[RETIRED_KEY]) }));
     return true;
@@ -278,6 +289,33 @@ chrome.downloads.onChanged.addListener((delta) => {
   const format = formatFromName(delta.filename.current, null);
   if (format) rememberNaiFormat(format, "download");
   naiDownloads.delete(delta.id);
+});
+
+// GitHub copies: check for a new version now and then (see update-check.js),
+// and after an in-place update (update.html) say that it worked.
+const UPDATE_APPLIED_KEY = "naiAutoSaver.updateApplied";
+async function openUpdatePage(hash = "") {
+  const url = chrome.runtime.getURL("update.html");
+  const [open] = await chrome.tabs.query({ url }).catch(() => []);
+  if (open) {
+    await chrome.tabs.update(open.id, { active: true, url: url + hash });
+  } else {
+    await chrome.tabs.create({ url: url + hash });
+  }
+}
+chrome.runtime.onStartup?.addListener(() => {
+  void globalThis.NAIUpdate?.check().catch(() => {});
+});
+chrome.runtime.onInstalled?.addListener(async (details) => {
+  if (details.reason !== "update") return;
+  try {
+    const applied = (await chrome.storage.local.get(UPDATE_APPLIED_KEY))[UPDATE_APPLIED_KEY];
+    if (applied && Date.now() - (applied.at || 0) < 10 * 60 * 1000) {
+      await openUpdatePage("#done");
+    }
+  } catch (error) {
+    void error;
+  }
 });
 
 // A copy loaded unpacked hands over to the Web Store copy (see content.js).

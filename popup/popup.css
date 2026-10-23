@@ -44,3 +44,5 @@ button.row:active { background: var(--press); }
 .switch input:focus-visible + .slider { box-shadow: 0 0 0 3px rgba(0,122,255,0.35); }
 .hint { margin: -4px 16px 0; color: var(--text2); font-size: 12px; line-height: 1.45; }
 html:has(body[data-theme="dark"]) { background: #1C1C1E; }
+.update-group .row { min-height: 52px; }
+.dot { width: 8px; height: 8px; border-radius: 4px; background: var(--accent); flex: 0 0 auto; }

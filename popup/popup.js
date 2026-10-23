@@ -40,6 +40,7 @@ async function init() {
   const { appearance = "auto" } = await storageGet(["appearance"]);
   const dark = appearance === "dark" || (appearance !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
   document.body.dataset.theme = dark ? "dark" : "light";
+  void showUpdate();
   const ping = await runtimeSend({ action: "ping" });
   const onNai = Boolean(ping?.ok);
   if (!onNai) {
@@ -61,6 +62,19 @@ async function init() {
 
   $("autoSaveCheckbox").addEventListener("change", (event) => {
     void storageSet({ autoSaveEnabled: event.target.checked });
+  });
+}
+
+// GitHub copies only: Chrome doesn't update those, so say when a new one is out.
+async function showUpdate() {
+  const info = await runtimeSend({ action: "updateStatus" });
+  if (!info?.available) return;
+  $("updateTitle").textContent = `새 버전 ${info.latest}`;
+  $("updateSub").textContent = `지금 ${info.current} · 눌러서 업데이트`;
+  $("updateGroup").hidden = false;
+  $("updateBtn").addEventListener("click", async () => {
+    await runtimeSend({ action: "openUpdatePage" });
+    window.close();
   });
 }
 

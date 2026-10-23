@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NAI 자동저장 · 업데이트</title>
+  <style>
+    :root {
+      --bg: #F2F2F7; --card: #FFFFFF; --text: #1D1D1F; --text2: #6E6E73; --text3: rgba(60,60,67,0.3);
+      --sep: rgba(60,60,67,0.14); --accent: #007AFF; --accent-soft: rgba(0,122,255,0.1); --fill: rgba(120,120,128,0.12);
+      color-scheme: light;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #000000; --card: #1C1C1E; --text: #F5F5F7; --text2: #A1A1A6; --text3: rgba(235,235,245,0.3);
+        --sep: rgba(84,84,88,0.5); --accent: #0A84FF; --accent-soft: rgba(10,132,255,0.16); --fill: rgba(120,120,128,0.24);
+        color-scheme: dark;
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body { background: var(--bg); }
+    body {
+      margin: 0; min-height: 100vh; display: flex; justify-content: center; align-items: flex-start; padding: 8vh 16px 40px;
+      color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+      font-size: 14.5px; line-height: 1.5; word-break: keep-all; -webkit-font-smoothing: antialiased; letter-spacing: -0.01em;
+    }
+    main { width: min(460px, 100%); }
+    .card { padding: 28px 26px 22px; border-radius: 20px; background: var(--card); box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
+    .badge { width: 56px; height: 56px; margin: 0 auto 12px; color: var(--accent); display: flex; align-items: center; justify-content: center; }
+    .badge svg { display: block; }
+    h1 { margin: 0; text-align: center; font-size: 22px; font-weight: 700; letter-spacing: -0.02em; }
+    .sub { margin: 6px 0 0; text-align: center; color: var(--text2); font-size: 13.5px; }
+    .notes { margin: 20px 0 0; padding: 14px 16px; border-radius: 14px; background: var(--fill); max-height: 300px; overflow: auto; }
+    .notes:empty { display: none; }
+    .notes h2 { margin: 0 0 4px; font-size: 13px; font-weight: 650; }
+    .notes h2 span { color: var(--text2); font-weight: 500; }
+    .notes h2 + ul { margin-top: 0; }
+    .notes section + section { margin-top: 12px; }
+    .notes ul { margin: 0; padding-left: 18px; color: var(--text2); font-size: 13px; }
+    .notes li + li { margin-top: 2px; }
+    button, .btn {
+      display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; height: 46px; margin-top: 18px; border: none; border-radius: 12px;
+      font: inherit; font-size: 15.5px; font-weight: 600; cursor: pointer; text-decoration: none;
+    }
+    .primary { background: var(--accent); color: #fff; }
+    .primary:disabled { opacity: 0.45; cursor: default; }
+    .plain { height: 40px; margin-top: 6px; background: transparent; color: var(--accent); font-weight: 500; font-size: 14.5px; }
+    .tip { margin: 10px 2px 0; color: var(--text2); font-size: 12.5px; text-align: center; }
+    .progress { margin-top: 20px; }
+    .bar { height: 6px; border-radius: 3px; background: var(--fill); overflow: hidden; }
+    .bar i { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 3px; transition: width 0.2s; }
+    .progress p { margin: 8px 0 0; color: var(--text2); font-size: 13px; text-align: center; }
+    .msg { margin: 16px 0 0; padding: 12px 14px; border-radius: 12px; background: var(--fill); color: var(--text); font-size: 13.5px; }
+    .msg b { font-weight: 650; }
+    .msg a { color: var(--accent); }
+    .manual { margin-top: 14px; border-top: 0.5px solid var(--sep); padding-top: 4px; }
+    .manual summary { list-style: none; cursor: pointer; color: var(--accent); font-size: 14px; text-align: center; padding: 10px 0 4px; }
+    .manual summary::-webkit-details-marker { display: none; }
+    .manual ol { margin: 8px 0 0; padding-left: 20px; color: var(--text2); font-size: 13px; }
+    .manual li + li { margin-top: 6px; }
+    .manual a { color: var(--accent); }
+    .manual b { color: var(--text); font-weight: 600; }
+    code { font: 12.5px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--fill); padding: 1px 5px; border-radius: 5px; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="card">
+      <div class="badge" id="badge" data-icon="download_circle" data-size="56"></div>
+      <h1 id="title">확인하는 중…</h1>
+      <p class="sub" id="sub"></p>
+      <div class="notes" id="notes"></div>
+
+      <div class="progress" id="progress" hidden>
+        <div class="bar"><i id="barFill"></i></div>
+        <p id="progressText">준비하는 중…</p>
+      </div>
+      <div class="msg" id="msg" hidden></div>
+
+      <button class="primary" id="primary" type="button" hidden></button>
+      <p class="tip" id="tip" hidden></p>
+      <button class="plain" id="secondary" type="button" hidden></button>
+
+      <details class="manual" id="manual" hidden>
+        <summary>직접 바꾸고 싶어요</summary>
+        <ol>
+          <li><a id="zipLink" href="#">새 버전 zip</a>을 받아서 압축을 풀어요.</li>
+          <li>풀린 폴더 안의 파일을 <b>전부</b> 골라 복사한 뒤, <b>지금 쓰는 확장 프로그램 폴더</b>에 붙여 넣고 「덮어쓰기」를 골라요. 폴더 위치는 <a href="#" id="extLink">확장 프로그램 페이지</a>의 NAI 자동저장 → 세부정보 → 「소스」에 적혀 있어요.</li>
+          <li>확장 프로그램 페이지에서 NAI 자동저장의 새로고침(↻) 버튼을 눌러요.</li>
+        </ol>
+        <p class="tip">새 폴더를 따로 「로드」하면 다른 확장으로 잡혀서 메모·대기열·보관함이 비어 보여요. 꼭 지금 폴더에 덮어써 주세요.</p>
+      </details>
+    </div>
+  </main>
+  <script src="icons.js"></script>
+  <script src="lib-db.js"></script>
+  <script src="update-check.js"></script>
+  <script src="update.js"></script>
+</body>
+</html>

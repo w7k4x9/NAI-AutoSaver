@@ -8928,6 +8928,7 @@
       .ias-form-group { border-radius: 10px; background: var(--group); border: 0.5px solid var(--hair); }
       .ias-form-row { min-height: 44px; display: flex; align-items: center; gap: 12px; padding: 6px 12px; }
       .ias-form-row + .ias-form-row { border-top: 0.5px solid var(--hair); }
+      .ias-form-row[hidden] { display: none; }
       .ias-form-row > label:first-child, .ias-form-row > span:first-child { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; font-size: 13px; color: var(--text); }
       .ias-form-row small { font-size: 11.5px; color: var(--text3); }
       .ias-form-row > input.ias-input { width: min(240px, 55%); flex: 0 1 auto; }
@@ -9276,6 +9277,10 @@
                   <div class="ias-form-row">
                     <span>노션 연결<small>그림·프롬프트를 노션 데이터베이스로</small></span>
                     <button class="ias-btn secondary small ias-notion-open" type="button"><span>보관함에서 설정 ↗</span></button>
+                  </div>
+                  <div class="ias-form-row ias-update-row" hidden>
+                    <span>업데이트<small class="ias-update-sub">확인하는 중…</small></span>
+                    <button class="ias-btn secondary small ias-update-open" type="button"><span>확인</span></button>
                   </div>
                   <div class="ias-form-row">
                     <span>오류 로그<small>문제가 생기면 내보내서 보내 주세요</small></span>
@@ -9651,6 +9656,9 @@
       helpProgress: panelShadow.querySelector(".ias-help-progress"),
       appearanceButtons: Array.from(panelShadow.querySelectorAll("[data-appearance]")),
       versionLine: panelShadow.querySelector(".ias-version-line"),
+      updateRow: panelShadow.querySelector(".ias-update-row"),
+      updateSub: panelShadow.querySelector(".ias-update-sub"),
+      updateButton: panelShadow.querySelector(".ias-update-open"),
       badgeQueue: panelShadow.querySelector('[data-badge="queue"]'),
       badgeMemo: panelShadow.querySelector('[data-badge="memo"]'),
       saveNameInput: panelShadow.querySelector(".ias-save-name"),
@@ -9749,6 +9757,7 @@
     if (ui.versionLine) {
       ui.versionLine.textContent = `NAI 자동저장 ${extensionVersion() || ""}`.trim();
     }
+    initUpdateRow();
 
     ui.autoPromptEditor = attachPromptEditor({
       base: ui.autoBaseInput, baseNeg: ui.autoBaseNegInput, char: ui.autoCharInput, charNeg: ui.autoCharNegInput,
@@ -9906,6 +9915,51 @@
     } catch (error) {
       void error;
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // GitHub copies don't update by themselves: settings shows a row, and a new
+  // version gets one toast. Web Store copies never see any of this.
+  // ---------------------------------------------------------------------------
+  const UPDATE_TOAST_KEY = "naiAutoSaver.updateToasted";
+  function applyUpdateInfo(info) {
+    if (!ui.updateRow || !info?.eligible) return;
+    ui.updateRow.hidden = false;
+    ui.updateRow.dataset.available = info.available ? "true" : "false";
+    const label = ui.updateButton.querySelector("span");
+    if (info.available) {
+      ui.updateSub.textContent = `새 버전 ${info.latest} · 지금 ${info.current}`;
+      label.textContent = "업데이트…";
+      ui.updateButton.classList.remove("secondary");
+    } else {
+      ui.updateSub.textContent = info.error ? "확인하지 못했어요 · 인터넷을 확인해 주세요" : `최신 버전이에요 · ${info.current}`;
+      label.textContent = "확인";
+      ui.updateButton.classList.add("secondary");
+    }
+  }
+  function initUpdateRow() {
+    if (!ui.updateButton) return;
+    ui.updateButton.addEventListener("click", () => {
+      if (ui.updateRow.dataset.available === "true") {
+        chrome.runtime.sendMessage({ action: "openUpdatePage" }, () => void chrome.runtime.lastError);
+        return;
+      }
+      ui.updateSub.textContent = "확인하는 중…";
+      chrome.runtime.sendMessage({ action: "updateStatus", force: true }, (info) => {
+        void chrome.runtime.lastError;
+        applyUpdateInfo(info);
+      });
+    });
+    chrome.runtime.sendMessage({ action: "updateStatus" }, (info) => {
+      void chrome.runtime.lastError;
+      applyUpdateInfo(info);
+      if (!info?.available) return;
+      chrome.storage.local.get(UPDATE_TOAST_KEY, (r) => {
+        if (chrome.runtime.lastError || r?.[UPDATE_TOAST_KEY] === info.latest) return;
+        chrome.storage.local.set({ [UPDATE_TOAST_KEY]: info.latest });
+        showToast(`새 버전이 나왔어요 (${info.latest}) · 설정 맨 아래에서 업데이트할 수 있어요`);
+      });
+    });
   }
 
   // ---------------------------------------------------------------------------
