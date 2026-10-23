@@ -231,7 +231,8 @@
       box.append(connRow({
         iconName: "folder", title: `${state.root.name} 폴더`,
         meta: `<i class="dot"></i>${state.entries.length.toLocaleString("ko-KR")}장`,
-        extra: el("button", { class: "conn-act", type: "button", title: "폴더 다시 훑기", "aria-label": "폴더 다시 훑기", html: icon("refresh", 14), onclick: () => void scanFolder() }),
+        sub: state.pendingGone?.length ? `폴더에 없는 그림 ${state.pendingGone.length.toLocaleString("ko-KR")}장 · ↻로 정리` : null,
+        extra: el("button", { class: "conn-act", type: "button", title: "폴더와 맞추기 (새 그림 넣고, 없어진 그림 빼기)", "aria-label": "폴더와 맞추기", html: icon("refresh", 14), onclick: () => void syncFolder({ quiet: false }) }),
       }));
       return;
     }
@@ -1958,16 +1959,23 @@
         render();
       };
       const massive = gone.length > 30 && gone.length > coveredCount * 0.3;
-      if (!massive) await drop();
-      if (moved || (!massive && gone.length)) {
+      let dropped = 0;
+      if (gone.length && (!massive || (!quiet && await confirmDialog(`폴더에 없는 그림 ${gone.length.toLocaleString("ko-KR")}장`, "보관함에는 있는데 연결한 폴더에서 파일을 찾을 수 없어요 (지웠거나, 이름이 바뀌었거나, 옮겼어요). 목록에서 뺄까요? 파일은 건드리지 않아요.", "목록에서 빼기")))) {
+        await drop();
+        dropped = gone.length;
+      }
+      // a big "missing" batch found in the background waits on the folder row
+      state.pendingGone = massive && !dropped ? gone : null;
+      renderFolderBox();
+      if (moved && !dropped) {
         saveCull();
         render();
       }
       const parts = [];
       if (moved) parts.push(`옮겨진 ${moved}장 따라감`);
-      if (gone.length && !massive) parts.push(`없어진 ${gone.length}장 뺌`);
-      if (parts.length) toast(`폴더에 맞췄어요 · ${parts.join(" · ")}`);
-      if (massive) toast(`폴더에서 ${gone.length}장이 한꺼번에 안 보여요. 드라이브나 폴더가 바뀐 거면 목록은 그대로 둘게요.`, "warn", { label: "목록에서 빼기", run: () => void drop() });
+      if (dropped) parts.push(`폴더에 없는 ${dropped.toLocaleString("ko-KR")}장 뺌`);
+      if (parts.length) toast(`폴더에 맞췄어요 · ${parts.join(" · ")}`, "ok");
+      else if (!quiet && !rest.length) toast("보관함이 폴더와 이미 맞아요.", "ok");
       syncing = false;
       if (rest.length) await scanFolder({ quiet: true }); // new files: the usual import (with progress)
     } catch (error) {

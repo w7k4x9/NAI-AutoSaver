@@ -61,10 +61,17 @@
     const dirs = String(path || "").split("/").filter(Boolean);
     dirs.pop();
     const parent = dirs[dirs.length - 1] || "";
-    const roots = new Set([dirs[0], ...String(saveFolder || "").split("/")].filter(Boolean).map((d) => d.toLowerCase()));
-    if (dirs.length >= 2 && parent && !DATE_DIR.test(parent) && !parent.startsWith("_") && !LABEL_DIRS.has(parent) && !roots.has(parent.toLowerCase())) {
+    const grand = dirs[dirs.length - 2] || "";
+    const saveLeaf = String(saveFolder || "NovelAI").split("/").filter(Boolean).pop() || "NovelAI";
+    // Only folders this extension makes count: 날짜/<캐릭터>, <저장 폴더>/<캐릭터>
+    // (without date folders) and _셀렉/<라벨>/<캐릭터>. Any other folder of
+    // pictures (e.g. "2", "1_selected" next to NovelAI) is not a character.
+    const madeByUs = DATE_DIR.test(grand) || LABEL_DIRS.has(grand) || grand.toLowerCase() === saveLeaf.toLowerCase();
+    if (madeByUs && parent && !DATE_DIR.test(parent) && !parent.startsWith("_") && !LABEL_DIRS.has(parent)) {
       return parent;
     }
+    // Pictures outside the save folder (other picture folders in 다운로드) have no character.
+    if (dirs.length && !dirs.some((d) => d.toLowerCase() === saveLeaf.toLowerCase())) return "";
     const base = stripCounter(name).trim();
     const i = base.indexOf("_");
     return i > 0 ? base.slice(0, i).trim() : "";
