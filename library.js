@@ -51,6 +51,35 @@
     all.sort((a, b) => b.savedAt - a.savedAt);
     state.entries = all;
   }
+  // One picture file = one entry. The same file could get in twice: once when
+  // it was saved ("NovelAI/…") and once from the linked folder under another
+  // path (e.g. the 다운로드 folder was linked: "Downloads/NovelAI/…"). Same file
+  // name + same size is the same picture; keep one and carry its 셀렉 over.
+  const pictureSig = (name, size) => `${String(name).toLowerCase()}|${size}`;
+  const SOURCE_RANK = { saved: 0, folder: 1, clean: 2, censored: 3 };
+  async function dropDuplicateEntries() {
+    const keep = new Map();
+    const drop = [];
+    const sorted = state.entries.slice().sort((a, b) => (SOURCE_RANK[a.source] ?? 9) - (SOURCE_RANK[b.source] ?? 9) || a.id.length - b.id.length);
+    for (const e of sorted) {
+      if (!e.bytes) continue;
+      const sig = pictureSig(e.name, e.bytes);
+      const first = keep.get(sig);
+      if (!first) {
+        keep.set(sig, e);
+        continue;
+      }
+      drop.push(e);
+      const label = cullOf(e.id).label;
+      if (label && !cullOf(first.id).label) state.cull.set(first.id, { label });
+      state.cull.delete(e.id);
+    }
+    if (!drop.length) return;
+    const gone = new Set(drop.map((e) => e.id));
+    state.entries = state.entries.filter((e) => !gone.has(e.id));
+    for (const e of drop) await LibDB.remove(e.id).catch(() => {});
+    saveCull();
+  }
   function allEntries() {
     return state.dropped.concat(state.entries);
   }
@@ -1531,6 +1560,7 @@
   async function scanFolder() {
     if (!state.root || state.scan) return;
     const known = new Set(await LibDB.keys());
+    const knownSig = new Set(state.entries.filter((e) => e.bytes).map((e) => pictureSig(e.name, e.bytes)));
     const found = [];
     state.scan = { done: 0, total: 0, added: 0 };
     renderFolderBox();
@@ -1547,6 +1577,8 @@
         if (known.has(item.path)) continue;
         try {
           const file = await item.handle.getFile();
+          const name = item.path.split("/").pop().replace(/\.(png|webp)$/i, "");
+          if (knownSig.has(pictureSig(name, file.size))) continue; // already here under another path
           const bytes = new Uint8Array(await file.arrayBuffer());
           const entry = await LibDB.buildEntry({
             path: item.path, bytes, savedAt: file.lastModified || Date.now(),
@@ -2488,6 +2520,7 @@
       $(".search-input").value = q;
     }
     await Promise.all([loadEntries(), restoreFolder(), loadNotion(), loadCull()]);
+    await dropDuplicateEntries();
     // nothing selected at first: the first click shows that picture
     render();
 
