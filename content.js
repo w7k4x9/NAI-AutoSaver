@@ -86,38 +86,11 @@
     return v;
   }
 
-  // Google Material Symbols Rounded (FILL=1, wght=400, opsz=24). Font coords (y-up), flipped in icon().
-  const ICON_PATHS = {
-    play_arrow: "M320 273V687Q320 704 332.0 715.5Q344 727 360 727Q365 727 370.5 725.5Q376 724 381 721L707 514Q716 508 720.5 499.0Q725 490 725.0 480.0Q725 470 720.5 461.0Q716 452 707 446L381 239Q376 236 370.5 234.5Q365 233 360 233Q344 233 332.0 244.5Q320 256 320 273ZM400 614 610 480 400 346ZM400 346 610 480 400 614Z",
-    pause: "M640 200Q607 200 583.5 223.5Q560 247 560 280V680Q560 713 583.5 736.5Q607 760 640 760Q673 760 696.5 736.5Q720 713 720 680V280Q720 247 696.5 223.5Q673 200 640 200ZM320 200Q287 200 263.5 223.5Q240 247 240 280V680Q240 713 263.5 736.5Q287 760 320 760Q353 760 376.5 736.5Q400 713 400 680V280Q400 247 376.5 223.5Q353 200 320 200ZM640 280V680ZM320 280V680ZM320 680V280ZM640 680V280Z",
-    stop: "M240 320V640Q240 673 263.5 696.5Q287 720 320 720H640Q673 720 696.5 696.5Q720 673 720 640V320Q720 287 696.5 263.5Q673 240 640 240H320Q287 240 263.5 263.5Q240 287 240 320ZM320 320H640Q640 320 640.0 320.0Q640 320 640 320V640Q640 640 640.0 640.0Q640 640 640 640H320Q320 640 320.0 640.0Q320 640 320 640V320Q320 320 320.0 320.0Q320 320 320 320ZM320 320Q320 320 320.0 320.0Q320 320 320 320V640Q320 640 320.0 640.0Q320 640 320 640H640Q640 640 640.0 640.0Q640 640 640 640V320Q640 320 640.0 320.0Q640 320 640 320Z",
-    lists: "M400 160Q367 160 343.5 183.5Q320 207 320.0 240.0Q320 273 343.5 296.5Q367 320 400 320H800Q833 320 856.5 296.5Q880 273 880.0 240.0Q880 207 856.5 183.5Q833 160 800 160ZM400 400Q367 400 343.5 423.5Q320 447 320.0 480.0Q320 513 343.5 536.5Q367 560 400 560H800Q833 560 856.5 536.5Q880 513 880.0 480.0Q880 447 856.5 423.5Q833 400 800 400ZM400 640Q367 640 343.5 663.5Q320 687 320.0 720.0Q320 753 343.5 776.5Q367 800 400 800H800Q833 800 856.5 776.5Q880 753 880.0 720.0Q880 687 856.5 663.5Q833 640 800 640ZM160.0 640.0Q127 640 103.5 663.5Q80 687 80.0 720.0Q80 753 103.5 776.5Q127 800 160.0 800.0Q193 800 216.5 776.5Q240 753 240.0 720.0Q240 687 216.5 663.5Q193 640 160.0 640.0ZM160 400Q127 400 103.5 423.5Q80 447 80.0 480.0Q80 513 103.5 536.5Q127 560 160 560Q193 560 216.5 536.5Q240 513 240.0 480.0Q240 447 216.5 423.5Q193 400 160 400ZM160 160Q127 160 103.5 183.5Q80 207 80.0 240.0Q80 273 103.5 296.5Q127 320 160 320Q193 320 216.5 296.5Q240 273 240.0 240.0Q240 207 216.5 183.5Q193 160 160 160Z",
-    settings: "M433 80Q406 80 386.5 98.0Q367 116 363 142L354 208Q341 213 329.5 220.0Q318 227 307 235L245 209Q220 198 195.0 207.0Q170 216 156 239L109 321Q95 344 101.0 370.0Q107 396 128 413L181 453Q180 460 180.0 466.5Q180 473 180 480Q180 487 180.0 493.5Q180 500 181 507L128 547Q107 564 101.0 590.0Q95 616 109 639L156 721Q170 744 195.0 753.0Q220 762 245 751L307 725Q318 733 330.0 740.0Q342 747 354 752L363 818Q367 844 386.5 862.0Q406 880 433 880H527Q554 880 573.5 862.0Q593 844 597 818L606 752Q619 747 630.5 740.0Q642 733 653 725L715 751Q740 762 765.0 753.0Q790 744 804 721L851 639Q865 616 859.0 590.0Q853 564 832 547L779 507Q780 500 780.0 493.5Q780 487 780 480Q780 473 780.0 466.5Q780 460 778 453L831 413Q852 396 858.0 370.0Q864 344 850 321L802 239Q788 216 763.0 207.0Q738 198 713 209L653 235Q642 227 630.0 220.0Q618 213 606 208L597 142Q593 116 573.5 98.0Q554 80 527 80ZM440 160H519L533 266Q564 274 590.5 289.5Q617 305 639 327L738 286L777 354L691 419Q696 433 698.0 448.5Q700 464 700 480Q700 496 698.0 511.5Q696 527 691 541L777 606L738 674L639 632Q617 655 590.5 670.5Q564 686 533 694L520 800H441L427 694Q396 686 369.5 670.5Q343 655 321 633L222 674L183 606L269 542Q264 527 262.0 512.0Q260 497 260 480Q260 464 262.0 449.0Q264 434 269 419L183 354L222 286L321 328Q343 305 369.5 289.5Q396 274 427 266ZM482 340Q540 340 581.0 381.0Q622 422 622.0 480.0Q622 538 581.0 579.0Q540 620 482 620Q423 620 382.5 579.0Q342 538 342.0 480.0Q342 422 382.5 381.0Q423 340 482 340ZM440 160 427 266Q396 274 369.5 289.5Q343 305 321 328L222 286L183 354L269 419Q264 434 262.0 449.0Q260 464 260 480Q260 497 262.0 512.0Q264 527 269 542L183 606L222 674L321 633Q343 655 369.5 670.5Q396 686 427 694L441 800H520L533 694Q564 686 590.5 670.5Q617 655 639 632L738 674L777 606L691 541Q696 527 698.0 511.5Q700 496 700 480Q700 464 698.0 448.5Q696 433 691 419L777 354L738 286L639 327Q617 305 590.5 289.5Q564 274 533 266L519 160Z",
-    add: "M440 440H240Q223 440 211.5 451.5Q200 463 200.0 480.0Q200 497 211.5 508.5Q223 520 240 520H440V720Q440 737 451.5 748.5Q463 760 480.0 760.0Q497 760 508.5 748.5Q520 737 520 720V520H720Q737 520 748.5 508.5Q760 497 760.0 480.0Q760 463 748.5 451.5Q737 440 720 440H520V240Q520 223 508.5 211.5Q497 200 480.0 200.0Q463 200 451.5 211.5Q440 223 440 240Z",
-    close: "M480 424 284 228Q273 217 256.0 217.0Q239 217 228 228Q217 239 217.0 256.0Q217 273 228 284L424 480L228 676Q217 687 217.0 704.0Q217 721 228 732Q239 743 256.0 743.0Q273 743 284 732L480 536L676 732Q687 743 704.0 743.0Q721 743 732 732Q743 721 743.0 704.0Q743 687 732 676L536 480L732 284Q743 273 743.0 256.0Q743 239 732 228Q721 217 704.0 217.0Q687 217 676 228Z",
-    download: "M452 348 308 492Q296 504 296.5 520.0Q297 536 308 548Q320 560 336.5 560.5Q353 561 365 549L440 474V760Q440 777 451.5 788.5Q463 800 480.0 800.0Q497 800 508.5 788.5Q520 777 520 760V474L595 549Q607 561 623.5 560.5Q640 560 652 548Q663 536 663.5 520.0Q664 504 652 492L508 348Q502 342 495.0 339.5Q488 337 480.0 337.0Q472 337 465.0 339.5Q458 342 452 348ZM240 160Q207 160 183.5 183.5Q160 207 160 240V320Q160 337 171.5 348.5Q183 360 200.0 360.0Q217 360 228.5 348.5Q240 337 240 320V240Q240 240 240.0 240.0Q240 240 240 240H720Q720 240 720.0 240.0Q720 240 720 240V320Q720 337 731.5 348.5Q743 360 760.0 360.0Q777 360 788.5 348.5Q800 337 800 320V240Q800 207 776.5 183.5Q753 160 720 160Z",
-    upload: "M240 160Q207 160 183.5 183.5Q160 207 160 240V320Q160 337 171.5 348.5Q183 360 200.0 360.0Q217 360 228.5 348.5Q240 337 240 320V240Q240 240 240.0 240.0Q240 240 240 240H720Q720 240 720.0 240.0Q720 240 720 240V320Q720 337 731.5 348.5Q743 360 760.0 360.0Q777 360 788.5 348.5Q800 337 800 320V240Q800 207 776.5 183.5Q753 160 720 160ZM440 646 365 571Q353 559 336.5 559.5Q320 560 308 572Q297 584 296.5 600.0Q296 616 308 628L452 772Q458 778 465.0 780.5Q472 783 480.0 783.0Q488 783 495.0 780.5Q502 778 508 772L652 628Q664 616 663.5 600.0Q663 584 652 572Q640 560 623.5 559.5Q607 559 595 571L520 646V360Q520 343 508.5 331.5Q497 320 480.0 320.0Q463 320 451.5 331.5Q440 343 440 360Z",
-    delete: "M280 120Q247 120 223.5 143.5Q200 167 200 200V720Q183 720 171.5 731.5Q160 743 160.0 760.0Q160 777 171.5 788.5Q183 800 200 800H360Q360 817 371.5 828.5Q383 840 400 840H560Q577 840 588.5 828.5Q600 817 600 800H760Q777 800 788.5 788.5Q800 777 800.0 760.0Q800 743 788.5 731.5Q777 720 760 720V200Q760 167 736.5 143.5Q713 120 680 120ZM680 720H280V200Q280 200 280.0 200.0Q280 200 280 200H680Q680 200 680.0 200.0Q680 200 680 200ZM440 320V600Q440 617 428.5 628.5Q417 640 400.0 640.0Q383 640 371.5 628.5Q360 617 360 600V320Q360 303 371.5 291.5Q383 280 400.0 280.0Q417 280 428.5 291.5Q440 303 440 320ZM600 320V600Q600 617 588.5 628.5Q577 640 560.0 640.0Q543 640 531.5 628.5Q520 617 520 600V320Q520 303 531.5 291.5Q543 280 560.0 280.0Q577 280 588.5 291.5Q600 303 600 320ZM280 720H680V200Q680 200 680.0 200.0Q680 200 680 200H280Q280 200 280.0 200.0Q280 200 280 200Z",
-    keyboard_arrow_up: "M480 528 324 372Q313 361 296.0 361.0Q279 361 268.0 372.0Q257 383 257.0 400.0Q257 417 268 428L452 612Q464 624 480.0 624.0Q496 624 508 612L692 428Q703 417 703.0 400.0Q703 383 692.0 372.0Q681 361 664.0 361.0Q647 361 636 372Z",
-    keyboard_arrow_down: "M452 372 268 556Q257 567 257.0 584.0Q257 601 268.0 612.0Q279 623 296.0 623.0Q313 623 324 612L480 456L636 612Q647 623 664.0 623.0Q681 623 692.0 612.0Q703 601 703.0 584.0Q703 567 692 556L508 372Q502 366 495.0 363.5Q488 361 480.0 361.0Q472 361 465.0 363.5Q458 366 452 372Z",
-    image: "M200 120Q167 120 143.5 143.5Q120 167 120 200V760Q120 793 143.5 816.5Q167 840 200 840H760Q793 840 816.5 816.5Q840 793 840 760V200Q840 167 816.5 143.5Q793 120 760 120ZM200 200H760Q760 200 760.0 200.0Q760 200 760 200V760Q760 760 760.0 760.0Q760 760 760 760H200Q200 760 200.0 760.0Q200 760 200 760V200Q200 200 200.0 200.0Q200 200 200 200ZM200 200Q200 200 200.0 200.0Q200 200 200 200V760Q200 760 200.0 760.0Q200 760 200 760H760Q760 760 760.0 760.0Q760 760 760 760V200Q760 200 760.0 200.0Q760 200 760 200ZM280 280H680Q692 280 698.0 291.0Q704 302 696 312L586 459Q580 467 570.0 467.0Q560 467 554 459L450 320L376 419Q370 427 360.0 427.0Q350 427 344 419L264 312Q256 302 262.0 291.0Q268 280 280 280Z",
-    auto_awesome: "M706 706 636 738Q630 741 627.5 746.0Q625 751 625.0 756.0Q625 761 627.5 766.0Q630 771 636 774L706 806L738 876Q741 882 746.0 885.0Q751 888 756.0 888.0Q761 888 766.0 885.0Q771 882 774 876L806 806L876 774Q882 771 885.0 766.0Q888 761 888.0 756.0Q888 751 885.0 746.0Q882 741 876 738L806 706L774 636Q771 630 766.0 627.5Q761 625 756.0 625.0Q751 625 746.0 627.5Q741 630 738 636ZM260 380 100 453Q91 457 87.0 464.5Q83 472 83.0 480.0Q83 488 87.0 495.5Q91 503 100 507L260 580L333 740Q337 749 344.5 753.0Q352 757 360.0 757.0Q368 757 375.5 753.0Q383 749 387 740L460 580L620 507Q629 503 633.0 495.5Q637 488 637.0 480.0Q637 472 633.0 464.5Q629 457 620 453L460 380L387 220Q383 211 375.5 207.0Q368 203 360.0 203.0Q352 203 344.5 207.0Q337 211 333 220ZM360 354 400 440 486 480 400 520 360 606 320 520 234 480 320 440ZM710 150 640 182Q634 185 631.0 190.0Q628 195 628.0 200.0Q628 205 631.0 210.0Q634 215 640 218L710 250L742 320Q745 326 750.0 329.0Q755 332 760.0 332.0Q765 332 770.0 329.0Q775 326 778 320L810 250L880 218Q886 215 889.0 210.0Q892 205 892.0 200.0Q892 195 889.0 190.0Q886 185 880 182L810 150L778 80Q775 74 770.0 71.0Q765 68 760.0 68.0Q755 68 750.0 71.0Q745 74 742 80ZM360 354 320 440 234 480 320 520 360 606 400 520 486 480 400 440Z",
-    playlist_add: "M160 320Q143 320 131.5 331.5Q120 343 120.0 360.0Q120 377 131.5 388.5Q143 400 160 400H360Q377 400 388.5 388.5Q400 377 400.0 360.0Q400 343 388.5 331.5Q377 320 360 320ZM160 480Q143 480 131.5 491.5Q120 503 120.0 520.0Q120 537 131.5 548.5Q143 560 160 560H520Q537 560 548.5 548.5Q560 537 560.0 520.0Q560 503 548.5 491.5Q537 480 520 480ZM160 640Q143 640 131.5 651.5Q120 663 120.0 680.0Q120 697 131.5 708.5Q143 720 160 720H520Q537 720 548.5 708.5Q560 697 560.0 680.0Q560 663 548.5 651.5Q537 640 520 640ZM640 200V320H520Q503 320 491.5 331.5Q480 343 480.0 360.0Q480 377 491.5 388.5Q503 400 520 400H640V520Q640 537 651.5 548.5Q663 560 680.0 560.0Q697 560 708.5 548.5Q720 537 720 520V400H840Q857 400 868.5 388.5Q880 377 880.0 360.0Q880 343 868.5 331.5Q857 320 840 320H720V200Q720 183 708.5 171.5Q697 160 680.0 160.0Q663 160 651.5 171.5Q640 183 640 200Z",
-    bolt: "M422 232 629 480H469L498 707L313 440H452ZM360 360H236Q212 360 200.5 381.5Q189 403 203 423L502 853Q512 867 528.0 872.5Q544 878 561.0 872.0Q578 866 586.0 851.0Q594 836 592 819L560 560H715Q741 560 751.5 537.0Q762 514 745 494L416 100Q405 87 389.0 83.0Q373 79 358.0 86.0Q343 93 334.5 107.5Q326 122 328 139ZM422 232 452 440H313L498 707L469 480H629Z",
-    tune: "M440 160V320Q440 337 451.5 348.5Q463 360 480.0 360.0Q497 360 508.5 348.5Q520 337 520 320V280H800Q817 280 828.5 268.5Q840 257 840.0 240.0Q840 223 828.5 211.5Q817 200 800 200H520V160Q520 143 508.5 131.5Q497 120 480.0 120.0Q463 120 451.5 131.5Q440 143 440 160ZM160 200Q143 200 131.5 211.5Q120 223 120.0 240.0Q120 257 131.5 268.5Q143 280 160 280H320Q337 280 348.5 268.5Q360 257 360.0 240.0Q360 223 348.5 211.5Q337 200 320 200ZM280 400V440H160Q143 440 131.5 451.5Q120 463 120.0 480.0Q120 497 131.5 508.5Q143 520 160 520H280V560Q280 577 291.5 588.5Q303 600 320.0 600.0Q337 600 348.5 588.5Q360 577 360 560V400Q360 383 348.5 371.5Q337 360 320.0 360.0Q303 360 291.5 371.5Q280 383 280 400ZM480 440Q463 440 451.5 451.5Q440 463 440.0 480.0Q440 497 451.5 508.5Q463 520 480 520H800Q817 520 828.5 508.5Q840 497 840.0 480.0Q840 463 828.5 451.5Q817 440 800 440ZM600 640V800Q600 817 611.5 828.5Q623 840 640.0 840.0Q657 840 668.5 828.5Q680 817 680 800V760H800Q817 760 828.5 748.5Q840 737 840.0 720.0Q840 703 828.5 691.5Q817 680 800 680H680V640Q680 623 668.5 611.5Q657 600 640.0 600.0Q623 600 611.5 611.5Q600 623 600 640ZM160 680Q143 680 131.5 691.5Q120 703 120.0 720.0Q120 737 131.5 748.5Q143 760 160 760H480Q497 760 508.5 748.5Q520 737 520.0 720.0Q520 703 508.5 691.5Q497 680 480 680Z",
-    movie: "M160 800 225 670Q232 656 245.0 648.0Q258 640 273 640Q303 640 319.0 665.5Q335 691 321 718L280 800H360L425 670Q432 656 445.0 648.0Q458 640 473 640Q503 640 519.0 665.5Q535 691 521 718L480 800H560L625 670Q632 656 645.0 648.0Q658 640 673 640Q703 640 719.0 665.5Q735 691 721 718L680 800H800Q833 800 856.5 776.5Q880 753 880 720V240Q880 207 856.5 183.5Q833 160 800 160H160Q127 160 103.5 183.5Q80 207 80 240V720Q80 753 103.5 776.5Q127 800 160 800ZM160 560V240Q160 240 160.0 240.0Q160 240 160 240H800Q800 240 800.0 240.0Q800 240 800 240V560ZM160 560H800V240Q800 240 800.0 240.0Q800 240 800 240H160Q160 240 160.0 240.0Q160 240 160 240Z",
-    content_copy: "M360 240Q327 240 303.5 263.5Q280 287 280 320V800Q280 833 303.5 856.5Q327 880 360 880H720Q753 880 776.5 856.5Q800 833 800 800V320Q800 287 776.5 263.5Q753 240 720 240ZM360 320H720Q720 320 720.0 320.0Q720 320 720 320V800Q720 800 720.0 800.0Q720 800 720 800H360Q360 800 360.0 800.0Q360 800 360 800V320Q360 320 360.0 320.0Q360 320 360 320ZM200 80Q167 80 143.5 103.5Q120 127 120 160V680Q120 697 131.5 708.5Q143 720 160.0 720.0Q177 720 188.5 708.5Q200 697 200 680V160Q200 160 200.0 160.0Q200 160 200 160H600Q617 160 628.5 148.5Q640 137 640 120Q640 103 628.5 91.5Q617 80 600 80ZM360 320Q360 320 360.0 320.0Q360 320 360 320V800Q360 800 360.0 800.0Q360 800 360 800H720Q720 800 720.0 800.0Q720 800 720 800V320Q720 320 720.0 320.0Q720 320 720 320Z",
-    fullscreen: "M200 200H280Q297 200 308.5 188.5Q320 177 320.0 160.0Q320 143 308.5 131.5Q297 120 280 120H160Q143 120 131.5 131.5Q120 143 120 160V280Q120 297 131.5 308.5Q143 320 160.0 320.0Q177 320 188.5 308.5Q200 297 200 280ZM760 200V280Q760 297 771.5 308.5Q783 320 800.0 320.0Q817 320 828.5 308.5Q840 297 840 280V160Q840 143 828.5 131.5Q817 120 800 120H680Q663 120 651.5 131.5Q640 143 640.0 160.0Q640 177 651.5 188.5Q663 200 680 200ZM200 760V680Q200 663 188.5 651.5Q177 640 160.0 640.0Q143 640 131.5 651.5Q120 663 120 680V800Q120 817 131.5 828.5Q143 840 160 840H280Q297 840 308.5 828.5Q320 817 320.0 800.0Q320 783 308.5 771.5Q297 760 280 760ZM760 760H680Q663 760 651.5 771.5Q640 783 640.0 800.0Q640 817 651.5 828.5Q663 840 680 840H800Q817 840 828.5 828.5Q840 817 840 800V680Q840 663 828.5 651.5Q817 640 800.0 640.0Q783 640 771.5 651.5Q760 663 760 680Z",
-    fullscreen_exit: "M240 240H160Q143 240 131.5 251.5Q120 263 120.0 280.0Q120 297 131.5 308.5Q143 320 160 320H280Q297 320 308.5 308.5Q320 297 320 280V160Q320 143 308.5 131.5Q297 120 280.0 120.0Q263 120 251.5 131.5Q240 143 240 160ZM720 240V160Q720 143 708.5 131.5Q697 120 680.0 120.0Q663 120 651.5 131.5Q640 143 640 160V280Q640 297 651.5 308.5Q663 320 680 320H800Q817 320 828.5 308.5Q840 297 840.0 280.0Q840 263 828.5 251.5Q817 240 800 240ZM240 720V800Q240 817 251.5 828.5Q263 840 280.0 840.0Q297 840 308.5 828.5Q320 817 320 800V680Q320 663 308.5 651.5Q297 640 280 640H160Q143 640 131.5 651.5Q120 663 120.0 680.0Q120 697 131.5 708.5Q143 720 160 720ZM720 720H800Q817 720 828.5 708.5Q840 697 840.0 680.0Q840 663 828.5 651.5Q817 640 800 640H680Q663 640 651.5 651.5Q640 663 640 680V800Q640 817 651.5 828.5Q663 840 680.0 840.0Q697 840 708.5 828.5Q720 817 720 800Z",
-    label: "M160 160Q127 160 103.5 183.5Q80 207 80 240V720Q80 753 103.5 776.5Q127 800 160 800H600Q619 800 636.0 791.5Q653 783 664 768L844 528Q860 507 860.0 480.0Q860 453 844 432L664 192Q653 177 636.0 168.5Q619 160 600 160ZM160 240H600Q600 240 600.0 240.0Q600 240 600 240L780 480Q780 480 780.0 480.0Q780 480 780 480L600 720Q600 720 600.0 720.0Q600 720 600 720H160Q160 720 160.0 720.0Q160 720 160 720V240Q160 240 160.0 240.0Q160 240 160 240ZM160 240Q160 240 160.0 240.0Q160 240 160 240V720Q160 720 160.0 720.0Q160 720 160 720H600Q600 720 600.0 720.0Q600 720 600 720L780 480Q780 480 780.0 480.0Q780 480 780 480L600 240Q600 240 600.0 240.0Q600 240 600 240Z",
-    drag_indicator: "M360 160Q327 160 303.5 183.5Q280 207 280 240Q280 273 303.5 296.5Q327 320 360 320Q393 320 416.5 296.5Q440 273 440 240Q440 207 416.5 183.5Q393 160 360 160ZM600 160Q567 160 543.5 183.5Q520 207 520 240Q520 273 543.5 296.5Q567 320 600 320Q633 320 656.5 296.5Q680 273 680 240Q680 207 656.5 183.5Q633 160 600 160ZM360 400Q327 400 303.5 423.5Q280 447 280 480Q280 513 303.5 536.5Q327 560 360 560Q393 560 416.5 536.5Q440 513 440 480Q440 447 416.5 423.5Q393 400 360 400ZM600 400Q567 400 543.5 423.5Q520 447 520 480Q520 513 543.5 536.5Q567 560 600 560Q633 560 656.5 536.5Q680 513 680 480Q680 447 656.5 423.5Q633 400 600 400ZM360 640Q327 640 303.5 663.5Q280 687 280 720Q280 753 303.5 776.5Q327 800 360 800Q393 800 416.5 776.5Q440 753 440 720Q440 687 416.5 663.5Q393 640 360 640ZM600 640Q567 640 543.5 663.5Q520 687 520 720Q520 753 543.5 776.5Q567 800 600 800Q633 800 656.5 776.5Q680 753 680 720Q680 687 656.5 663.5Q633 640 600 640Z",
-  };
-
+  // One filled icon family everywhere (icons.js, loaded before this script).
+  const ICON_ALIASES = { play_arrow: "play", keyboard_arrow_up: "up", keyboard_arrow_down: "down" };
   function icon(name, size = 22) {
-    const d = ICON_PATHS[name];
-    if (!d) return "";
-    // Glyph coords are font-space (y-up, 0..960). Flip Y into SVG space.
-    return `<svg class="ias-ic" width="${size}" height="${size}" viewBox="0 0 960 960" aria-hidden="true" focusable="false"><g transform="translate(0,960) scale(1,-1)"><path d="${d}" fill="currentColor"/></g></svg>`;
+    const lib = globalThis.NAIIcons;
+    return lib ? lib.svg(ICON_ALIASES[name] || name, size, "ias-ic") : "";
   }
 
   const SYNC_KEYS = [
@@ -157,7 +130,6 @@
   let activeTab = "auto";
   let editorExpanded = false;
   let panelFullscreen = false;
-  let panelCompact = false;
   let panelPosition = null;
   let panelSize = null;
   let statusTimer = null;
@@ -2982,12 +2954,72 @@
     return "";
   }
 
+  // iOS-style alert in the panel's shadow root (replaces the browser's own
+  // alert/confirm boxes). Resolves with the chosen button's value; Esc and a
+  // click outside pick the cancel button.
+  let iosAlertKeyHandler = null;
+  function iosAlert({ title, message = "", buttons = [{ label: "확인", value: true, primary: true }] }) {
+    return new Promise((resolve) => {
+      const shell = ui.shell || panelShadow?.querySelector(".ias-shell");
+      if (!shell) {
+        resolve(buttons.find((b) => b.primary)?.value ?? true);
+        return;
+      }
+      const layer = document.createElement("div");
+      layer.className = "ias-ios-layer";
+      layer.innerHTML = `<div class="ias-ios-alert" role="alertdialog" aria-modal="true"><div class="ias-ios-body"><strong></strong><p></p></div><div class="ias-ios-buttons" data-count="${buttons.length}"></div></div>`;
+      layer.querySelector("strong").textContent = title;
+      const p = layer.querySelector("p");
+      p.textContent = message;
+      p.hidden = !message;
+      const row = layer.querySelector(".ias-ios-buttons");
+      const cancel = buttons.find((b) => b.cancel) || buttons[0];
+      const finish = (value) => {
+        layer.remove();
+        if (iosAlertKeyHandler === onKey) iosAlertKeyHandler = null;
+        resolve(value);
+      };
+      for (const b of buttons) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.textContent = b.label;
+        if (b.primary) btn.dataset.primary = "true";
+        if (b.destructive) btn.dataset.destructive = "true";
+        btn.addEventListener("click", () => finish(b.value));
+        row.append(btn);
+      }
+      const onKey = (event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          finish(cancel.value);
+        } else if (event.key === "Enter") {
+          event.preventDefault();
+          event.stopPropagation();
+          finish((buttons.find((b) => b.primary) || cancel).value);
+        }
+      };
+      // Keys from inside the panel come through the key shield's hook
+      // (handlePanelKeydown); the layer listener covers the no-shield case.
+      iosAlertKeyHandler = onKey;
+      layer.addEventListener("keydown", (event) => {
+        if (iosAlertKeyHandler === onKey && !event.defaultPrevented) onKey(event);
+      });
+      layer.addEventListener("pointerdown", (event) => {
+        if (event.target === layer) finish(cancel.value);
+      });
+      // Centred on the panel window when it is open, on the page otherwise.
+      (!panelCollapsed && ui.card ? ui.card : shell).append(layer);
+      (row.querySelector('[data-primary="true"]') || row.lastElementChild)?.focus();
+    });
+  }
+
   function runSafetyChecks({ alertUser = true } = {}) {
     if (!location.href.startsWith("https://novelai.net/image")) {
       const message = "NovelAI 이미지 페이지에서만 사용할 수 있어요.";
       setStatus(message, "warn");
       if (alertUser) {
-        alert(message);
+        void iosAlert({ title: "여기서는 시작할 수 없어요", message });
       }
       return false;
     }
@@ -2995,7 +3027,7 @@
     if (warning) {
       setStatus(warning, "warn");
       if (alertUser) {
-        alert(warning);
+        void iosAlert({ title: "생성을 시작하지 않았어요", message: warning });
       }
       return false;
     }
@@ -4063,7 +4095,7 @@
   }
 
   function emptyGenState() {
-    return { base: "", baseNeg: "", count: "1", split: "0", chars: [], bgs: [], naming: presetNaming(NAME_PRESETS[0]), excluded: [] };
+    return { base: "", baseNeg: "", count: "1", split: "0", chars: [], bgs: [], emoShared: false, sharedExpressions: "", naming: presetNaming(NAME_PRESETS[0]), excluded: [] };
   }
 
   function normalizeGenState(stored) {
@@ -4093,6 +4125,9 @@
       split: str(s.split || "0"),
       chars,
       bgs,
+      // 표정 can be one list for every character, the way 배경 always is.
+      emoShared: Boolean(s.emoShared),
+      sharedExpressions: str(s.sharedExpressions),
       // Old saves had no naming field and used character_background_emotion.
       naming: s.naming ? Store.normalizeComboNaming(s.naming) : (hadData ? Store.normalizeComboNaming() : presetNaming(NAME_PRESETS[0])),
       excluded: Array.isArray(s.excluded) ? s.excluded.map(String) : [],
@@ -4111,6 +4146,37 @@
     return parseExpressionEntries(ch ? ch.expressions : "");
   }
 
+  // Where the 표정 row reads and writes: the shared list, or the active character.
+  const sharedEmoOwner = {
+    get expressions() { return genState.sharedExpressions; },
+    set expressions(value) { genState.sharedExpressions = value; },
+  };
+  function emoOwner() {
+    return genState.emoShared ? sharedEmoOwner : genState.chars[genActiveChar] || null;
+  }
+
+  // With shared 표정, every character's person 1 uses the shared list.
+  function effectiveChars(raw) {
+    return raw.emoShared ? raw.chars.map((ch) => ({ ...ch, expressions: raw.sharedExpressions || "" })) : raw.chars;
+  }
+
+  function setSharedEmotions(on) {
+    on = Boolean(on);
+    if (on === genState.emoShared) return;
+    if (on && !genState.sharedExpressions.trim()) {
+      const seed = genState.chars[genActiveChar]?.expressions.trim() ? genState.chars[genActiveChar] : genState.chars.find((ch) => ch.expressions.trim());
+      genState.sharedExpressions = seed ? seed.expressions : "";
+    }
+    if (!on) {
+      // Keep what was built: characters without their own list take the shared one.
+      for (const ch of genState.chars) {
+        if (!ch.expressions.trim()) ch.expressions = genState.sharedExpressions;
+      }
+    }
+    genState.emoShared = on;
+    if (genSelection.type === "emo") genSelection = { type: null, index: -1 };
+  }
+
   function setCharEmotionEntries(ch, entries) {
     ch.expressions = entries.map((e, i) => {
       const name = String(e.name || "").trim();
@@ -4127,7 +4193,7 @@
 
   // Every combination (with its file name) in generation order.
   function genPlan(raw = collectGenRaw()) {
-    const chars = raw.chars.map((ch) => ({
+    const chars = effectiveChars(raw).map((ch) => ({
       name: Store.sanitizeFileName(ch.code, "").trim(),
       emotionNames: genEmotionNames(ch),
       emotionCount: genEmotionCount(genCharacterMembers(ch)),
@@ -4160,7 +4226,7 @@
     const base = raw.base;
     const baseNeg = String(raw.baseNeg || "").trim();
     const count = Math.max(1, Number.parseInt(raw.count, 10) || 1);
-    const membersByChar = raw.chars.map((ch) => genCharacterMembers(ch));
+    const membersByChar = effectiveChars(raw).map((ch) => genCharacterMembers(ch));
     const items = [];
     for (const entry of genPlan(raw)) {
       if (entry.excluded) {
@@ -4224,7 +4290,11 @@
       return;
     }
     await loadQueueState();
-    if (queueState.items.length && !window.confirm(`지금 대기열 ${queueState.items.length}개를 지우고 새 조합 ${items.length}개로 바꿀까요?`)) {
+    if (queueState.items.length && !(await iosAlert({
+      title: "대기열을 바꿀까요?",
+      message: `지금 대기열 ${queueState.items.length}개를 지우고 새 조합 ${items.length}개로 채워요.`,
+      buttons: [{ label: "취소", value: false, cancel: true }, { label: "바꾸기", value: true, primary: true }],
+    }))) {
       return;
     }
     queueState = Store.normalizeState({ items, options: genBaseOptions(base, baseNeg) });
@@ -4318,7 +4388,8 @@
     const charChips = genState.chars.map((ch, i) => `<button type="button" class="ias-chip ias-chip-round" data-kind="char" data-index="${i}" data-active="${i === genActiveChar}" data-selected="${isSelected("char", i)}">${escapeHtml(charDisplayName(ch, i))}<span class="ias-chip-count">${perChar[i]}</span></button>`).join("");
     const bgChips = genState.bgs.map((bg, i) => `<button type="button" class="ias-chip ias-chip-round" data-kind="bg" data-index="${i}" data-selected="${isSelected("bg", i)}">${escapeHtml(bgDisplayName(bg, i))}</button>`).join("");
     const activeChar = genState.chars[genActiveChar];
-    const emotions = activeChar ? charEmotionEntries(activeChar) : [];
+    const owner = emoOwner();
+    const emotions = owner ? charEmotionEntries(owner) : [];
     const emoChips = emotions.map((entry, i) => `<button type="button" class="ias-chip" data-kind="emo" data-index="${i}" data-selected="${isSelected("emo", i)}">${escapeHtml(emoDisplayName(entry, i))}</button>`).join("");
 
     ui.comboPickers.innerHTML = `
@@ -4327,7 +4398,7 @@
       <span class="ias-picker-label">배경</span>
       <div class="ias-chips">${bgChips}<button type="button" class="ias-chip-add ias-chip-round" data-add="bg" data-tour="combo-add-bg" aria-label="배경 추가">+</button>${genState.bgs.length ? '<span class="ias-picker-note">모든 캐릭터 공통</span>' : ""}</div>
       <span class="ias-picker-label">표정</span>
-      <div class="ias-chips">${activeChar ? `${emoChips}<button type="button" class="ias-chip-add" data-add="emo" data-tour="combo-add-emo" aria-label="표정 추가">+</button>` : '<span class="ias-picker-note">캐릭터를 먼저 넣어 주세요</span>'}</div>
+      <div class="ias-chips">${owner ? `${emoChips}<button type="button" class="ias-chip-add" data-add="emo" data-tour="combo-add-emo" aria-label="표정 추가">+</button>` : '<span class="ias-picker-note">캐릭터를 먼저 넣어 주세요</span>'}<label class="ias-picker-check" title="켜면 표정 목록 하나를 모든 캐릭터가 같이 써요"><input type="checkbox" data-shared-emo ${genState.emoShared ? "checked" : ""}>모든 캐릭터 공통</label></div>
     `;
 
     // Result cards for the active character.
@@ -4426,15 +4497,16 @@
         ${inspectorField("네거티브", 'data-bfield="negative"', bg.negative, { rows: 2, placeholder: "비우면 없음" })}
         <div class="ias-insp-spacer"></div>
         <button type="button" class="ias-insp-delete" data-delete="bg">이 배경 지우기</button>`;
-    } else if (type === "emo" && genState.chars[genActiveChar]) {
-      const entries = charEmotionEntries(genState.chars[genActiveChar]);
+    } else if (type === "emo" && emoOwner()) {
+      const entries = charEmotionEntries(emoOwner());
       const entry = entries[index];
       if (entry) {
+        const kicker = genState.emoShared ? "표정 · 모든 캐릭터 공통" : `${charDisplayName(genState.chars[genActiveChar], genActiveChar)} · 표정`;
         html = `
-          <div class="ias-insp-head"><span class="ias-insp-kicker">${escapeHtml(charDisplayName(genState.chars[genActiveChar], genActiveChar))} · 표정</span><span class="ias-insp-title">${escapeHtml(emoDisplayName(entry, index))}</span></div>
+          <div class="ias-insp-head"><span class="ias-insp-kicker">${escapeHtml(kicker)}</span><span class="ias-insp-title">${escapeHtml(emoDisplayName(entry, index))}</span></div>
           ${inspectorField("이름 (파일 이름에 들어가요)", 'data-efield="name" data-autofocus="true"', entry.name, { placeholder: `비우면 ${index + 1}` })}
           ${inspectorField("태그", 'data-efield="tags"', entry.tags, { rows: 3, placeholder: "예: smiling, open mouth" })}
-          ${copyFromSelect("emo")}
+          ${genState.emoShared ? "" : copyFromSelect("emo")}
           <div class="ias-insp-spacer"></div>
           <button type="button" class="ias-insp-delete" data-delete="emo">이 표정 삭제</button>`;
       }
@@ -4493,8 +4565,8 @@
       } else if (kind === "bg") {
         genState.bgs.push({ code: "", tags: "", negative: "" });
         genSelection = { type: "bg", index: genState.bgs.length - 1 };
-      } else if (kind === "emo" && genState.chars[genActiveChar]) {
-        const ch = genState.chars[genActiveChar];
+      } else if (kind === "emo" && emoOwner()) {
+        const ch = emoOwner();
         const entries = charEmotionEntries(ch);
         entries.push({ name: `표정${entries.length + 1}`, tags: "" });
         setCharEmotionEntries(ch, entries);
@@ -4526,8 +4598,8 @@
         genActiveChar = Math.max(0, Math.min(genActiveChar, genState.chars.length - 1));
       } else if (type === "bg") {
         genState.bgs.splice(index, 1);
-      } else if (type === "emo" && genState.chars[genActiveChar]) {
-        const ch = genState.chars[genActiveChar];
+      } else if (type === "emo" && emoOwner()) {
+        const ch = emoOwner();
         const entries = charEmotionEntries(ch);
         entries.splice(index, 1);
         setCharEmotionEntries(ch, entries);
@@ -4578,8 +4650,8 @@
       if (el.dataset.bfield === "code" && value.trim()) {
         tourEvent("combo-bg-added");
       }
-    } else if (el.dataset.efield && type === "emo" && genState.chars[genActiveChar]) {
-      const ch = genState.chars[genActiveChar];
+    } else if (el.dataset.efield && type === "emo" && emoOwner()) {
+      const ch = emoOwner();
       const entries = charEmotionEntries(ch);
       if (entries[index]) {
         entries[index][el.dataset.efield] = value.replace(/[=\n]/g, el.dataset.efield === "name" ? "" : " ");
@@ -4611,6 +4683,12 @@
         genState.naming = presetNaming(preset);
         comboChanged();
       }
+      return;
+    }
+    if (el.matches("[data-shared-emo]")) {
+      setSharedEmotions(el.checked);
+      setStatus(el.checked ? "표정을 모든 캐릭터가 같이 써요." : "이제 캐릭터마다 표정을 따로 정해요.", "ok");
+      comboChanged({ inspector: true });
       return;
     }
     if (el.classList.contains("ias-copy-emos") && el.value !== "") {
@@ -6026,7 +6104,11 @@
     const incomingMemos = parsed.local[MEMO_STORAGE_KEY];
     const memoCount = incomingMemos?.items?.length || 0;
     const queueCount = parsed.local[QUEUE_STORAGE_KEY]?.items?.length || 0;
-    if (!window.confirm(`백업을 가져올까요?\n\n메모 ${memoCount}개는 지금 메모와 합쳐지고, 대기열(${queueCount}개)과 설정은 백업 내용으로 바뀌어요. 끝나면 페이지를 새로고침해요.`)) {
+    if (!(await iosAlert({
+      title: "백업을 가져올까요?",
+      message: `메모 ${memoCount}개는 지금 메모와 합쳐지고, 대기열(${queueCount}개)과 설정은 백업 내용으로 바뀌어요. 끝나면 페이지를 새로고침해요.`,
+      buttons: [{ label: "취소", value: false, cancel: true }, { label: "가져오기", value: true, primary: true }],
+    }))) {
       return;
     }
     const local = { ...parsed.local };
@@ -6548,7 +6630,7 @@
         ui.fab.innerHTML = `${progressRingSvg(info.percent)}<span class="ias-pill-text"><span class="ias-pill-title">${escapeHtml(info.title)}</span><span class="ias-pill-sub">${escapeHtml(info.sub)}</span></span>`;
         ui.fab.title = `${info.title} · ${info.sub} · 눌러서 열기`;
       } else {
-        ui.fab.innerHTML = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round" aria-hidden="true"><path d="M11 3l1.9 5.1L18 10l-5.1 1.9L11 17l-1.9-5.1L4 10l5.1-1.9z"/><path d="M18 15l.8 2.2L21 18l-2.2.8L18 21l-.8-2.2L15 18l2.2-.8z"/></svg>`;
+        ui.fab.innerHTML = icon("sparkle", 24);
         ui.fab.title = "NAI 자동저장 · 눌러서 열기";
       }
     }
@@ -6820,7 +6902,7 @@
     const r = size / 2 - 3;
     const c = 2 * Math.PI * r;
     const pct = percent == null ? 0.12 : Math.max(0.02, Math.min(1, percent / 100));
-    return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" aria-hidden="true" style="flex:0 0 auto;transform:rotate(-90deg)"><circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="#3A3A3C" stroke-width="3.5"/><circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="#30D158" stroke-width="3.5" stroke-linecap="round" stroke-dasharray="${(c * pct).toFixed(1)} ${c.toFixed(1)}"/></svg>`;
+    return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" aria-hidden="true" style="flex:0 0 auto;transform:rotate(-90deg)"><circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="currentColor" stroke-opacity="0.16" stroke-width="3.5"/><circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="var(--accent)" stroke-width="3.5" stroke-linecap="round" stroke-dasharray="${(c * pct).toFixed(1)} ${c.toFixed(1)}"/></svg>`;
   }
 
 
@@ -6851,9 +6933,23 @@
     }
     return darkQuery && !darkQuery.matches ? "light" : "dark";
   }
+  // The floating button sits on NovelAI's page, so its glass is tinted for
+  // what is behind it (NovelAI's own theme), not for the panel's theme.
+  function pageSurface() {
+    const parse = (value) => (String(value).match(/[\d.]+/g) || []).map(Number);
+    for (const node of [document.body, document.documentElement]) {
+      if (!node) continue;
+      const [r, g, b, a = 1] = parse(getComputedStyle(node).backgroundColor);
+      if (r == null || a < 0.5) continue;
+      return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 > 0.6 ? "light" : "dark";
+    }
+    return "dark";
+  }
+
   function applyAppearance() {
     if (ui.shell) {
       ui.shell.dataset.theme = resolvedTheme();
+      ui.shell.dataset.surface = pageSurface();
     }
     for (const button of ui.appearanceButtons || []) {
       button.dataset.active = String(button.dataset.appearance === appearance);
@@ -7428,6 +7524,7 @@
     keyShield?.setPanelOpen(!panelCollapsed);
     if (ui.shell) {
       ui.shell.dataset.collapsed = panelCollapsed ? "true" : "false";
+      ui.shell.dataset.surface = pageSurface();
     }
     // Collapsing while fullscreen would leave the shell stretched to inset:0,
     // an invisible full-screen overlay that swallows every click (the X then
@@ -7447,37 +7544,8 @@
     persistUiState();
   }
 
-  function toggleCompact() {
-    panelCompact = !panelCompact;
-    if (panelCompact && panelFullscreen) {
-      panelFullscreen = false;
-      applyFullscreen();
-    }
-    if (panelCollapsed) {
-      setPanelCollapsed(false);
-    }
-    applyCompact();
-    persistUiState();
-  }
-
-  function applyCompact() {
-    if (!ui.shell) {
-      return;
-    }
-    ui.shell.dataset.compact = panelCompact ? "true" : "false";
-    if (ui.sideMin) {
-      ui.sideMin.title = panelCompact ? "원래 크기로" : "작게";
-      ui.sideMin.setAttribute("aria-label", ui.sideMin.title);
-    }
-    requestAnimationFrame(clampPanelIntoView);
-  }
-
   function toggleFullscreen() {
     panelFullscreen = !panelFullscreen;
-    if (panelFullscreen && panelCompact) {
-      panelCompact = false;
-      applyCompact();
-    }
     if (panelFullscreen && panelCollapsed) {
       setPanelCollapsed(false);
     }
@@ -7490,11 +7558,6 @@
       return;
     }
     ui.shell.dataset.fullscreen = panelFullscreen ? "true" : "false";
-    if (ui.sideFs) {
-      ui.sideFs.innerHTML = icon(panelFullscreen ? "fullscreen_exit" : "fullscreen", 10);
-      ui.sideFs.setAttribute("aria-label", panelFullscreen ? "전체화면 해제" : "전체화면");
-      ui.sideFs.title = panelFullscreen ? "전체화면 해제" : "전체화면";
-    }
     if (panelFullscreen) {
       // Let the fullscreen CSS drive the size; drop any manual width/height.
       if (ui.card) {
@@ -7509,7 +7572,7 @@
 
   function persistUiState() {
     void storageSet("local", {
-      [UI_STORAGE_KEY]: { collapsed: panelCollapsed, position: panelPosition, size: panelSize, fullscreen: panelFullscreen, compact: panelCompact },
+      [UI_STORAGE_KEY]: { collapsed: panelCollapsed, position: panelPosition, size: panelSize, fullscreen: panelFullscreen },
     });
   }
 
@@ -7606,57 +7669,81 @@
     handle.addEventListener("pointercancel", endDrag);
   }
 
-  function enableResize(handle) {
-    if (!handle) {
-      return;
+  // Desktop-window resizing: every edge and corner of the card is a handle.
+  // Dragging the left/top edges moves the window so the opposite edge stays put.
+  const PANEL_MIN_W = 380;
+  const PANEL_MIN_H = 320;
+  function enableEdgeResize(handles) {
+    for (const handle of handles || []) {
+      const dir = handle.dataset.edge || "";
+      let start = null;
+      handle.addEventListener("pointerdown", (event) => {
+        if (panelFullscreen || event.button !== 0) {
+          return;
+        }
+        const rect = ui.card.getBoundingClientRect();
+        panelPosition = { left: rect.left, top: rect.top };
+        applyPanelPosition();
+        start = { x: event.clientX, y: event.clientY, left: rect.left, top: rect.top, w: rect.width, h: rect.height };
+        ui.shell.dataset.resizing = "true";
+        try {
+          handle.setPointerCapture(event.pointerId);
+        } catch (error) {
+          void error;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+      });
+      handle.addEventListener("pointermove", (event) => {
+        if (!start) {
+          return;
+        }
+        const dx = event.clientX - start.x;
+        const dy = event.clientY - start.y;
+        let { left, top, w, h } = start;
+        if (dir.includes("e")) {
+          w = Math.max(PANEL_MIN_W, Math.min(window.innerWidth - start.left - 4, start.w + dx));
+        }
+        if (dir.includes("w")) {
+          w = Math.max(PANEL_MIN_W, Math.min(start.left + start.w - 4, start.w - dx));
+          left = start.left + start.w - w;
+        }
+        if (dir.includes("s")) {
+          h = Math.max(PANEL_MIN_H, Math.min(window.innerHeight - start.top - 4, start.h + dy));
+        }
+        if (dir.includes("n")) {
+          h = Math.max(PANEL_MIN_H, Math.min(start.top + start.h - 4, start.h - dy));
+          top = start.top + start.h - h;
+        }
+        panelSize = { width: Math.round(w), height: Math.round(h) };
+        panelPosition = { left: Math.round(left), top: Math.round(top) };
+        applyPanelSize();
+        applyPanelPosition();
+      });
+      const end = (event) => {
+        if (!start) {
+          return;
+        }
+        start = null;
+        delete ui.shell.dataset.resizing;
+        try {
+          handle.releasePointerCapture(event.pointerId);
+        } catch (error) {
+          void error;
+        }
+        persistUiState();
+      };
+      handle.addEventListener("pointerup", end);
+      handle.addEventListener("pointercancel", end);
+      // Double-click a corner or edge: back to the default size.
+      handle.addEventListener("dblclick", () => {
+        panelSize = null;
+        ui.card.style.width = "";
+        ui.card.style.height = "";
+        requestAnimationFrame(clampPanelIntoView);
+        persistUiState();
+      });
     }
-    let startX = 0;
-    let startY = 0;
-    let startW = 0;
-    let startH = 0;
-    let resizing = false;
-
-    handle.addEventListener("pointerdown", (event) => {
-      resizing = true;
-      const rect = ui.card.getBoundingClientRect();
-      startW = rect.width;
-      startH = rect.height;
-      startX = event.clientX;
-      startY = event.clientY;
-      try {
-        handle.setPointerCapture(event.pointerId);
-      } catch (error) {
-        void error;
-      }
-      event.preventDefault();
-      event.stopPropagation();
-    });
-    handle.addEventListener("pointermove", (event) => {
-      if (!resizing) {
-        return;
-      }
-      const rect = ui.card.getBoundingClientRect();
-      const maxW = Math.max(380, window.innerWidth - rect.left - 8);
-      const maxH = Math.max(320, window.innerHeight - rect.top - 8);
-      const width = Math.max(380, Math.min(maxW, startW + (event.clientX - startX)));
-      const height = Math.max(320, Math.min(maxH, startH + (event.clientY - startY)));
-      panelSize = { width: Math.round(width), height: Math.round(height) };
-      applyPanelSize();
-    });
-    const endResize = (event) => {
-      if (!resizing) {
-        return;
-      }
-      resizing = false;
-      try {
-        handle.releasePointerCapture(event.pointerId);
-      } catch (error) {
-        void error;
-      }
-      persistUiState();
-    };
-    handle.addEventListener("pointerup", endResize);
-    handle.addEventListener("pointercancel", endResize);
   }
 
   function clampPanelIntoView() {
@@ -7689,7 +7776,7 @@
         --accent: #0A84FF; --accent-text: #4DA3FF; --accent-fill: #0071E3; --accent-soft: rgba(10,132,255,0.16); --accent-ring: rgba(10,132,255,0.45);
         --danger: #FF6961; --danger-soft: rgba(255,69,58,0.16); --success: #30D158; --success-text: #4ADE80; --warn: #FF9F0A;
         --sel: rgba(255,255,255,0.12); --hover: rgba(255,255,255,0.06); --switch-off: #39393D; --scroll: rgba(255,255,255,0.2);
-        --pill-bg: #000000; --pill-ring: rgba(255,255,255,0.14);
+        --pill-bg: rgba(58,58,64,0.42); --pill-ring: rgba(255,255,255,0.22); --pill-text: #FFFFFF; --pill-sub: rgba(235,235,245,0.62); --pill-shine: rgba(255,255,255,0.16);
         --shadow: 0 24px 64px rgba(0,0,0,0.55), 0 0 0 0.5px rgba(255,255,255,0.14);
         --menu-bg: #2C2C2E; --menu-shadow: 0 0 0 0.5px rgba(255,255,255,0.16), 0 18px 44px rgba(0,0,0,0.6);
         --inspector: #232325; --card: #2C2C2E; --help-dot: #636366;
@@ -7703,7 +7790,7 @@
         --accent: #007AFF; --accent-text: #0066CC; --accent-fill: #0064D2; --accent-soft: rgba(0,122,255,0.12); --accent-ring: rgba(0,122,255,0.35);
         --danger: #D70015; --danger-soft: rgba(255,59,48,0.10); --success: #34C759; --success-text: #1A7F37; --warn: #C93400;
         --sel: rgba(0,0,0,0.08); --hover: rgba(0,0,0,0.04); --switch-off: #E3E3E8; --scroll: rgba(0,0,0,0.22);
-        --pill-bg: #1D1D1F; --pill-ring: rgba(255,255,255,0.18);
+        --pill-bg: rgba(255,255,255,0.52); --pill-ring: rgba(255,255,255,0.7); --pill-text: #1D1D1F; --pill-sub: rgba(60,60,67,0.65); --pill-shine: rgba(255,255,255,0.6);
         --shadow: 0 24px 64px rgba(0,0,0,0.22), 0 0 0 0.5px rgba(0,0,0,0.14);
         --menu-bg: #FFFFFF; --menu-shadow: 0 0 0 0.5px rgba(0,0,0,0.14), 0 18px 44px rgba(0,0,0,0.18);
         --inspector: #FAFAFA; --card: #F2F2F7; --help-dot: #8E8E93;
@@ -7724,64 +7811,62 @@
       .ias-fab {
         display: flex; align-items: center; gap: 10px;
         min-width: 52px; height: 52px; padding: 0 14px 0 14px; border-radius: 26px;
-        background: var(--pill-bg); color: #FFFFFF; cursor: grab; border: none;
-        box-shadow: 0 0 0 0.5px var(--pill-ring), 0 10px 28px rgba(0,0,0,0.5);
+        /* frosted glass: blur what is behind, thin bright rim, soft drop shadow */
+        background: var(--pill-bg); color: var(--pill-text); cursor: grab; border: none;
+        -webkit-backdrop-filter: blur(22px) saturate(180%); backdrop-filter: blur(22px) saturate(180%);
+        box-shadow: inset 0 1px 0 var(--pill-shine), 0 0 0 0.5px var(--pill-ring), 0 10px 30px rgba(0,0,0,0.28);
         touch-action: none; user-select: none; font-size: 13px;
         transition: transform 0.12s ease;
       }
       .ias-fab[data-running="false"] { width: 52px; padding: 0; justify-content: center; }
       .ias-fab:active { cursor: grabbing; transform: scale(0.97); }
       .ias-fab[data-dragging="true"] { transform: scale(1.04); }
-      .ias-fab[data-alert="true"] { box-shadow: 0 0 0 1px rgba(255,159,10,0.6), 0 10px 28px rgba(0,0,0,0.5); }
+      .ias-fab[data-alert="true"] { box-shadow: inset 0 1px 0 var(--pill-shine), 0 0 0 1px rgba(255,159,10,0.7), 0 10px 30px rgba(0,0,0,0.28); }
+      .ias-fab .ias-ic { color: var(--pill-icon, var(--accent)); }
+      .ias-shell[data-surface="dark"] { --pill-bg: rgba(255,255,255,0.13); --pill-ring: rgba(255,255,255,0.28); --pill-text: #FFFFFF; --pill-sub: rgba(235,235,245,0.66); --pill-shine: rgba(255,255,255,0.3); --pill-icon: #5AA9FF; }
+      .ias-shell[data-surface="light"] { --pill-bg: rgba(255,255,255,0.55); --pill-ring: rgba(0,0,0,0.08); --pill-text: #1D1D1F; --pill-sub: rgba(60,60,67,0.65); --pill-shine: rgba(255,255,255,0.8); --pill-icon: #007AFF; }
       .ias-pill-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; max-width: 240px; text-align: left; }
       .ias-pill-title { font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      .ias-pill-sub { font-size: 12px; color: #A1A1A6; white-space: nowrap; }
+      .ias-pill-sub { font-size: 12px; color: var(--pill-sub); white-space: nowrap; }
       .ias-shell[data-collapsed="true"] .ias-card { display: none; }
       .ias-shell[data-collapsed="false"] .ias-fab { display: none; }
 
       /* ---- fullscreen ---- */
       .ias-shell[data-fullscreen="true"] { inset: 0 !important; right: auto; bottom: auto; }
       .ias-shell[data-fullscreen="true"] .ias-card { width: calc(100vw - 24px) !important; height: calc(100vh - 24px) !important; margin: 12px; }
-      .ias-shell[data-fullscreen="true"] .ias-resize { display: none; }
+      .ias-shell[data-fullscreen="true"] .ias-edge { display: none; }
       .ias-shell[data-collapsed="true"][data-fullscreen="true"] { inset: auto !important; right: 20px !important; bottom: 20px !important; }
 
-      /* ---- compact ---- */
-      .ias-shell[data-compact="true"] .ias-card { width: min(470px, calc(100vw - 32px)) !important; height: min(430px, calc(100vh - 40px)) !important; }
-      .ias-shell[data-compact="true"] .ias-resize { display: none; }
 
       /* ---- window ---- */
       .ias-card {
         position: relative; display: grid; grid-template-columns: 200px minmax(0, 1fr);
         width: min(760px, calc(100vw - 32px)); height: min(600px, calc(100vh - 40px));
-        min-width: 420px; min-height: 360px;
+        min-width: 380px; min-height: 320px;
         background: var(--bg); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden;
         container-type: inline-size; container-name: iaswin;
       }
-      .ias-resize {
-        position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; z-index: 5;
-        cursor: nwse-resize; touch-action: none; color: var(--text3); opacity: 0.6;
-        display: flex; align-items: flex-end; justify-content: flex-end; padding: 2px;
-      }
-      .ias-resize:hover { opacity: 1; color: var(--accent); }
-      .ias-resize .ias-ic { transform: rotate(45deg); }
+      /* window edges: drag any side or corner to resize, like a desktop window */
+      .ias-edge { position: absolute; z-index: 6; touch-action: none; }
+      .ias-edge[data-edge="n"], .ias-edge[data-edge="s"] { left: 10px; right: 10px; height: 6px; cursor: ns-resize; }
+      .ias-edge[data-edge="e"], .ias-edge[data-edge="w"] { top: 10px; bottom: 10px; width: 6px; cursor: ew-resize; }
+      .ias-edge[data-edge="n"] { top: 0; } .ias-edge[data-edge="s"] { bottom: 0; }
+      .ias-edge[data-edge="e"] { right: 0; } .ias-edge[data-edge="w"] { left: 0; }
+      .ias-edge[data-edge$="e"][data-edge^="n"], .ias-edge[data-edge$="e"][data-edge^="s"],
+      .ias-edge[data-edge$="w"][data-edge^="n"], .ias-edge[data-edge$="w"][data-edge^="s"] { width: 14px; height: 14px; }
+      .ias-edge[data-edge="ne"] { top: 0; right: 0; cursor: nesw-resize; }
+      .ias-edge[data-edge="sw"] { bottom: 0; left: 0; cursor: nesw-resize; }
+      .ias-edge[data-edge="nw"] { top: 0; left: 0; cursor: nwse-resize; }
+      .ias-edge[data-edge="se"] { bottom: 0; right: 0; cursor: nwse-resize; }
+      .ias-shell[data-resizing="true"] { user-select: none; }
 
       /* ---- sidebar ---- */
       .ias-side {
         display: flex; flex-direction: column; min-height: 0;
-        padding: 16px 10px 12px; background: var(--side); border-right: 0.5px solid var(--border);
+        padding: 14px 10px 12px; background: var(--side); border-right: 0.5px solid var(--border);
         cursor: grab; touch-action: none; user-select: none; overflow: hidden;
       }
       .ias-side:active { cursor: grabbing; }
-      .ias-lights { display: flex; gap: 8px; padding: 0 8px 20px; }
-      .ias-light { width: 12px; height: 12px; border-radius: 6px; border: none; padding: 0; cursor: pointer; position: relative; }
-      .ias-light .ias-ic { position: absolute; inset: 1px; opacity: 0.55; color: rgba(0,0,0,0.6); }
-      .ias-lights:hover .ias-light .ias-ic { opacity: 1; }
-      .ias-light[data-c="red"] { background: #FF5F57; }
-      .ias-light[data-c="yellow"] { background: #FEBC2E; }
-      .ias-light[data-c="green"] { background: #28C840; }
-      .ias-shell[data-theme="light"] .ias-light { box-shadow: inset 0 0 0 0.5px rgba(0,0,0,0.15); }
-      
-      
       .ias-tabs { display: flex; flex-direction: column; gap: 1px; }
       .ias-tab, .ias-side-btn {
         width: 100%; height: 28px; display: flex; align-items: center; gap: 8px; padding: 0 10px;
@@ -7798,7 +7883,6 @@
       .ias-side-foot { margin-top: auto; display: flex; flex-direction: column; gap: 1px; }
       @container iaswin (max-width: 600px) {
         .ias-side.ias-side { width: 56px; padding-left: 8px; padding-right: 8px; }
-        .ias-lights { gap: 5px; justify-content: center; padding: 0 0 16px; }
         .ias-side-label { display: none; }
         .ias-tab, .ias-side-btn { justify-content: center; padding: 0; height: 34px; }
         .ias-tab-label, .ias-tab-badge { display: none; }
@@ -7811,6 +7895,14 @@
         border-bottom: 0.5px solid var(--border); cursor: grab; touch-action: none; user-select: none;
       }
       .ias-toolbar:active { cursor: grabbing; }
+      /* iOS-style close: a soft grey disc with the mark, same in both themes */
+      .ias-tb-close {
+        width: 26px; height: 26px; flex: 0 0 26px; margin-left: 2px; margin-right: -4px; border: none; border-radius: 13px; padding: 0;
+        display: flex; align-items: center; justify-content: center; cursor: pointer;
+        background: var(--elev2); color: var(--text2);
+      }
+      .ias-tb-close:hover { color: var(--text); }
+      .ias-tb-close:active { transform: scale(0.94); }
       .ias-toolbar-title { font-size: 15px; font-weight: 700; white-space: nowrap; }
       .ias-activity {
         flex: 1; display: flex; justify-content: center; min-width: 0;
@@ -7831,6 +7923,28 @@
 
       /* ---- toasts: one-off messages, never truncated ---- */
       .ias-main { position: relative; }
+      /* iOS alert: frosted card, centred text, hairline button bar */
+      .ias-ios-layer { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.22); animation: ias-fade 0.14s ease-out; }
+      .ias-ios-alert {
+        width: 280px; border-radius: 14px; overflow: hidden; text-align: center; color: var(--text);
+        background: var(--glass); border: 0.5px solid var(--glass-border);
+        -webkit-backdrop-filter: blur(30px) saturate(180%); backdrop-filter: blur(30px) saturate(180%);
+        box-shadow: 0 20px 60px rgba(0,0,0,0.3); animation: ias-pop 0.18s cubic-bezier(0.2,0.9,0.3,1.2);
+      }
+      .ias-ios-body { padding: 19px 16px 15px; display: flex; flex-direction: column; gap: 5px; }
+      .ias-ios-body strong { font-size: 15px; font-weight: 650; line-height: 1.3; }
+      .ias-ios-body p { margin: 0; font-size: 12.5px; line-height: 1.45; white-space: pre-line; word-break: keep-all; }
+      .ias-ios-buttons { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; border-top: 0.5px solid var(--border); }
+      .ias-ios-buttons[data-count="3"] { grid-auto-flow: row; }
+      .ias-ios-buttons button { height: 44px; border: none; background: transparent; color: var(--accent-text); font: inherit; font-size: 15px; cursor: pointer; }
+      .ias-ios-buttons button + button { border-left: 0.5px solid var(--border); }
+      .ias-ios-buttons[data-count="3"] button + button { border-left: none; border-top: 0.5px solid var(--border); }
+      .ias-ios-buttons button[data-primary="true"] { font-weight: 650; }
+      .ias-ios-buttons button[data-destructive="true"] { color: var(--danger); }
+      .ias-ios-buttons button:hover, .ias-ios-buttons button:focus-visible { background: var(--hover); outline: none; }
+      .ias-card > .ias-ios-layer { position: absolute; }
+      @keyframes ias-fade { from { opacity: 0; } }
+      @keyframes ias-pop { from { opacity: 0; transform: scale(1.08); } }
       .ias-toasts { position: absolute; left: 50%; bottom: 62px; transform: translateX(-50%); z-index: 30; display: flex; flex-direction: column-reverse; align-items: center; gap: 6px; width: min(420px, calc(100% - 32px)); pointer-events: none; }
       .ias-toast {
         pointer-events: auto; display: flex; align-items: flex-start; gap: 8px; max-width: 100%;
@@ -8114,6 +8228,8 @@
       .ias-chip-add.ias-chip-round { border-radius: 13px; }
       .ias-chip-add:hover { color: var(--accent-text); border-color: var(--accent); }
       .ias-picker-note { font-size: 11.5px; color: var(--text3); }
+      .ias-picker-check { display: inline-flex; align-items: center; gap: 5px; margin-left: 4px; font-size: 12px; color: var(--text2); cursor: pointer; white-space: nowrap; user-select: none; }
+      .ias-picker-check input { margin: 0; width: 14px; height: 14px; accent-color: var(--accent); cursor: pointer; }
       .ias-combo-divider { height: 0.5px; background: var(--border); flex: 0 0 auto; }
       .ias-combo-result-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
       .ias-combo-result-title { font-weight: 700; }
@@ -8227,10 +8343,11 @@
       .ias-tsheet-auto { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12.5px; color: var(--text2); padding-top: 4px; cursor: pointer; }
 
       /* ---- storage health banner ---- */
-      .ias-alert { display: flex; align-items: center; gap: 10px; margin: 10px 16px 0; padding: 8px 10px 8px 12px; border-radius: 8px; background: var(--danger-soft); color: var(--danger); font-size: 12.5px; line-height: 1.45; }
+      .ias-alert { display: flex; align-items: center; gap: 10px; margin: 10px 16px 0; padding: 9px 10px 9px 12px; border-radius: 12px; background: var(--card); color: var(--text); font-size: 12.5px; line-height: 1.45; box-shadow: inset 0 0 0 0.5px var(--border); }
+      .ias-alert > .ias-ic { color: var(--warn-icon); }
       .ias-alert[hidden] { display: none; }
       .ias-alert-text { flex: 1; }
-      .ias-alert-action { flex: 0 0 auto; border: none; border-radius: 6px; height: 26px; padding: 0 12px; cursor: pointer; background: #D70015; color: #FFFFFF; font-weight: 600; font-size: 12.5px; }
+      .ias-alert-action { flex: 0 0 auto; border: none; border-radius: 6px; height: 26px; padding: 0 12px; cursor: pointer; background: var(--accent-fill); color: #FFFFFF; font-weight: 600; font-size: 12.5px; }
       .ias-alert-action[hidden] { display: none; }
       /* ======================================================================
          v1.3 layout: list | detail, toolbar actions, one prompt editor
@@ -8447,19 +8564,10 @@
     `;
   }
 
-  // Sidebar / toolbar icons: thin stroke glyphs in the macOS sidebar style.
-  const SIDE_ICON_PATHS = {
-    auto: '<path d="M11 3l1.9 5.1L18 10l-5.1 1.9L11 17l-1.9-5.1L4 10l5.1-1.9z"/>',
-    gen: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
-    queue: '<path d="M9 6h11"/><path d="M9 12h11"/><path d="M9 18h11"/><circle cx="4.5" cy="6" r="1"/><circle cx="4.5" cy="12" r="1"/><circle cx="4.5" cy="18" r="1"/>',
-    memo: '<path d="M7 3.5h10a1 1 0 0 1 1 1V21l-6-4-6 4V4.5a1 1 0 0 1 1-1z"/>',
-    library: '<rect x="3" y="5" width="18" height="14" rx="2.5"/><circle cx="9" cy="10" r="1.6"/><path d="M21 16l-5-5-8 8"/>',
-    help: '<circle cx="12" cy="12" r="9.5"/><path d="M9.4 9.5a2.7 2.7 0 0 1 5.2.9c0 1.8-2.6 2.2-2.6 3.8"/><path d="M12 17.3h.01"/>',
-    settings: '<path d="M4 7h10"/><path d="M18 7h2"/><circle cx="16" cy="7" r="2"/><path d="M4 17h4"/><path d="M12 17h8"/><circle cx="10" cy="17" r="2"/>',
-  };
-
-  function sideIcon(name, size = 16) {
-    return `<svg class="ias-tab-ic" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${SIDE_ICON_PATHS[name] || ""}</svg>`;
+  // Sidebar icons: filled glyphs, tinted with the accent like a macOS sidebar.
+  const SIDE_ICONS = { auto: "sparkle", gen: "grid", queue: "list", memo: "bookmark", library: "photos", help: "help", settings: "settings" };
+  function sideIcon(name, size = 17) {
+    return globalThis.NAIIcons ? NAIIcons.svg(SIDE_ICONS[name] || name, size, "ias-tab-ic") : "";
   }
 
   const TAB_TITLES = { auto: "바로 생성", gen: "조합", queue: "대기열", memo: "메모", settings: "설정" };
@@ -8468,12 +8576,11 @@
     return `<button class="ias-tab" type="button" data-tab="${name}" data-active="${active}">${sideIcon(name)}<span class="ias-tab-label">${TAB_TITLES[name]}</span><span class="ias-tab-badge" data-badge="${name}">${badge}</span></button>`;
   }
 
-  const MORE_ICON = '<svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5.5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="18.5" cy="12" r="1.7"/></svg>';
-  const PLUS_ICON = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>';
-  const NEW_ICON = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6"/><path d="M17.5 3.5l3 3L12 15l-4 1 1-4z"/></svg>';
-  const SEARCH_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>';
+  const MORE_ICON = icon("more", 18);
+  const PLUS_ICON = icon("add", 18);
+  const NEW_ICON = icon("compose", 17);
+  const SEARCH_ICON = icon("search", 14);
 
-  const MINUS_GLYPH = '<svg class="ias-ic" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2.2 5h5.6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
 
   function getTemplate() {
     return `
@@ -8482,11 +8589,6 @@
         <button class="ias-fab" type="button" data-running="false" title="NAI 자동저장"></button>
         <div class="ias-card">
           <aside class="ias-side" title="빈 곳이나 위쪽 막대를 잡고 끌면 창을 옮길 수 있어요">
-            <div class="ias-lights">
-              <button class="ias-light ias-side-close" data-c="red" type="button" aria-label="접기" title="접기">${icon("close", 10)}</button>
-              <button class="ias-light ias-side-min" data-c="yellow" type="button" aria-label="작게" title="작게">${MINUS_GLYPH}</button>
-              <button class="ias-light ias-side-fs" data-c="green" type="button" aria-label="전체화면" title="전체화면">${icon("fullscreen", 10)}</button>
-            </div>
             <div class="ias-tabs">
               ${sideTab("auto", { active: true })}
               ${sideTab("gen")}
@@ -8557,8 +8659,10 @@
                   <input class="ias-memo-import-file" type="file" accept="application/json,.json" hidden>
                 </div>
               </div>
+              <button class="ias-tb-close" type="button" aria-label="패널 접기" title="접기 · 오른쪽 아래 버튼으로 다시 열어요">${icon("close", 13)}</button>
             </div>
             <div class="ias-alert" role="alert" hidden>
+              ${icon("warning", 17)}
               <div class="ias-alert-text"></div>
               <button class="ias-alert-action" type="button">새로고침</button>
             </div>
@@ -8777,24 +8881,20 @@
             <div class="ias-status" data-tone="neutral"></div>
             <div class="ias-toasts" aria-live="polite"></div>
           </div>
-          <div class="ias-resize" title="크기 조절">${icon("drag_indicator", 14)}</div>
+          ${["n", "s", "e", "w", "ne", "nw", "se", "sw"].map((d) => `<div class="ias-edge" data-edge="${d}" aria-hidden="true"></div>`).join("")}
         </div>
       </div>
     `;
   }
 
   function bindEvents() {
-    ui.sideClose.addEventListener("click", () => setPanelCollapsed(true));
-    ui.sideMin?.addEventListener("click", toggleCompact);
+    ui.tbClose.addEventListener("click", () => setPanelCollapsed(true));
     for (const button of ui.appearanceButtons || []) {
       button.addEventListener("click", () => {
         appearance = normalizeAppearance(button.dataset.appearance);
         applyAppearance();
         void storageSet("sync", { appearance });
       });
-    }
-    if (ui.sideFs) {
-      ui.sideFs.addEventListener("click", toggleFullscreen);
     }
 
     for (const tab of ui.tabs) {
@@ -9049,7 +9149,14 @@
 
     enableDrag(ui.sidebar);
     enableDrag(ui.toolbar);
-    enableResize(ui.resizeHandle);
+    enableEdgeResize(ui.edges);
+    // macOS: double-clicking the title bar zooms the window to fill the screen and back.
+    ui.toolbar?.addEventListener("dblclick", (event) => {
+      if (event.target.closest("button, input, textarea, label, select, .ias-menu")) {
+        return;
+      }
+      toggleFullscreen();
+    });
     enableDrag(ui.fab, { tapToOpen: true });
   }
 
@@ -9061,6 +9168,11 @@
   // shadow root when the shield never installed.
   function handlePanelKeydown(event, target) {
     if (!event || event.type !== "keydown") {
+      return;
+    }
+    // An open alert owns Esc / Enter (the key shield routes panel keys here).
+    if (iosAlertKeyHandler) {
+      iosAlertKeyHandler(event);
       return;
     }
     if (event.key === "Escape") {
@@ -9109,11 +9221,9 @@
       sidebar: panelShadow.querySelector(".ias-side"),
       tabs: Array.from(panelShadow.querySelectorAll(".ias-tab")),
       panes: Array.from(panelShadow.querySelectorAll(".ias-pane")),
-      sideClose: panelShadow.querySelector(".ias-side-close"),
-      sideFs: panelShadow.querySelector(".ias-side-fs"),
+      tbClose: panelShadow.querySelector(".ias-tb-close"),
       card: panelShadow.querySelector(".ias-card"),
-      resizeHandle: panelShadow.querySelector(".ias-resize"),
-      sideMin: panelShadow.querySelector(".ias-side-min"),
+      edges: Array.from(panelShadow.querySelectorAll(".ias-edge")),
       toolbar: panelShadow.querySelector(".ias-toolbar"),
       toolbarTitle: panelShadow.querySelector(".ias-toolbar-title"),
       activityBox: panelShadow.querySelector(".ias-activity-box"),
@@ -9236,10 +9346,8 @@
     const startCollapsed = stored.collapsed !== false;
     // Collapsed + fullscreen is the click-swallowing combo; never restore into it.
     panelFullscreen = Boolean(stored.fullscreen) && !startCollapsed;
-    panelCompact = Boolean(stored.compact) && !panelFullscreen;
     setPanelCollapsed(startCollapsed);
     applyFullscreen();
-    applyCompact();
 
     let recoveryMessage = "";
     try {

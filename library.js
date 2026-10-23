@@ -19,25 +19,10 @@
     }
     return node;
   };
-  const ICONS = {
-    all: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
-    today: '<rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M3.5 10h17"/><path d="M8 3v4"/><path d="M16 3v4"/>',
-    shield: '<path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"/><path d="M9 12l2 2 4-4"/>',
-    alert: '<path d="M12 3l9 16H3z"/><path d="M12 10v4"/><path d="M12 17.2v.1"/>',
-    tag: '<path d="M3.5 12.2V5a1.5 1.5 0 0 1 1.5-1.5h7.2l8.3 8.3a1.5 1.5 0 0 1 0 2.1l-6.3 6.3a1.5 1.5 0 0 1-2.1 0z"/><circle cx="8" cy="8" r="1.4"/>',
-    person: '<circle cx="12" cy="8" r="3.5"/><path d="M5 20c.8-3.6 3.6-5.5 7-5.5s6.2 1.9 7 5.5"/>',
-    folder: '<path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/>',
-    drop: '<path d="M12 15V3"/><path d="M7 10l5 5 5-5"/><path d="M5 15v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/>',
-    copy: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>',
-    eraser: '<path d="M7 20h13"/><path d="M14.5 4.5l5 5L10 19H5.5l-2-2 11-12.5z"/>',
-    more: null,
-    check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
-    refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4.5V11h-6.5"/>',
-    notion: '<rect x="4" y="3.5" width="16" height="17" rx="2.5"/><path d="M9 8.5v7"/><path d="M9 8.5l6 7"/><path d="M15 8.5v7"/>',
-  };
-  const icon = (name, size = 16, width = 2) => name === "more"
-    ? `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5.5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="18.5" cy="12" r="1.7"/></svg>`
-    : `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${width}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
+  NAIIcons.hydrate();
+  // Filled icons from icons.js; local names map onto the shared set.
+  const ICON_ALIASES = { all: "grid", alert: "warning", drop: "download_circle" };
+  const icon = (name, size = 16) => NAIIcons.svg(ICON_ALIASES[name] || name, size);
 
   const state = {
     entries: [],        // stored pictures, newest first
@@ -276,9 +261,9 @@
       const img = el("button", { class: "tile-img", type: "button", "aria-label": entry.name, title: entry.path });
       const url = thumbUrl(entry);
       if (url) img.append(el("img", { src: url, alt: "", loading: "lazy", decoding: "async" }));
-      if (entry.source === "censored") img.append(el("span", { class: "tile-badge censored", html: `${icon("shield", 11, 2.4)}검열`, title: "검열 사본" }));
-      else if (!entry.hasMeta) img.append(el("span", { class: "tile-badge", html: `${icon("shield", 11, 2.4)}사본`, title: "메타데이터 없음" }));
-      const check = el("button", { class: "tile-check", type: "button", "aria-label": `여러 장 고르기: ${entry.name}`, "aria-pressed": String(on), html: icon("check", 12, 3.4).replace('stroke="currentColor"', 'stroke="#fff"') });
+      if (entry.source === "censored") img.append(el("span", { class: "tile-badge censored", html: `${icon("shield", 12)}검열`, title: "검열 사본" }));
+      else if (!entry.hasMeta) img.append(el("span", { class: "tile-badge", html: `${icon("shield", 12)}사본`, title: "메타데이터 없음" }));
+      const check = el("button", { class: "tile-check", type: "button", "aria-label": `여러 장 고르기: ${entry.name}`, "aria-pressed": String(on), html: icon("check", 15) });
       box.append(img, check);
       tile.append(box, el("span", { class: "tile-name", text: entry.name }));
       frag.append(tile);
@@ -1359,19 +1344,25 @@
     }
   }
 
-  function notionDialogShell(title) {
+  // iOS form sheet: 취소 · title · action in a bar on top, content below.
+  function notionDialogShell(title, { leftLabel = "취소", rightLabel = "" } = {}) {
     const dialog = $(".dialog");
     dialog.classList.remove("alert");
+    dialog.classList.add("sheet");
+    dialog.addEventListener("close", () => dialog.classList.remove("sheet"), { once: true });
     dialog.innerHTML = "";
-    const body = el("div", { class: "dialog-body" }, [el("strong", { text: title })]);
-    const foot = el("div", { class: "dialog-foot" });
-    dialog.append(body, foot);
+    const left = el("button", { class: "bar-btn", type: "button", text: leftLabel, onclick: () => dialog.close() });
+    const right = el("button", { class: "bar-btn primary", type: "button", text: rightLabel });
+    right.hidden = !rightLabel;
+    const bar = el("div", { class: "sheet-bar" }, [left, el("strong", { class: "sheet-title", text: title }), right]);
+    const body = el("div", { class: "dialog-body" });
+    dialog.append(bar, body);
     if (!dialog.open) dialog.showModal();
-    return { dialog, body, foot };
+    return { dialog, body, right };
   }
 
   async function openNotionConnect() {
-    const { dialog, body, foot } = notionDialogShell("노션 연결 (1/2)");
+    const { body, right: next } = notionDialogShell("노션 연결 1/2", { rightLabel: "다음" });
     const input = el("input", { class: "text-input", type: "password", placeholder: "ntn_… 또는 secret_…", autocomplete: "off", "aria-label": "노션 연결 토큰" });
     body.append(
       el("p", { html: "① 아래 버튼으로 노션 <b>연결(통합)</b> 페이지를 열고 <b>새 연결 → 내부</b>로 하나 만들어요. 이름은 아무거나 (예: NAI 자동저장)." }),
@@ -1381,8 +1372,6 @@
     );
     const status = el("p", { class: "dialog-status" });
     body.append(status);
-    const next = el("button", { class: "btn", type: "button", text: "다음" });
-    foot.append(el("button", { class: "btn secondary", type: "button", text: "취소", onclick: () => dialog.close() }), next);
     input.focus();
     next.addEventListener("click", async () => {
       const token = input.value.trim();
@@ -1410,13 +1399,11 @@
   }
 
   async function openNotionPick(token, maxUploadBytes, workspace) {
-    const { dialog, body, foot } = notionDialogShell("노션 연결 (2/2) · 그림을 넣을 곳");
+    const { dialog, body, right: refresh } = notionDialogShell("그림을 넣을 곳 2/2", { rightLabel: "다시 찾기" });
     body.append(el("p", { html: `③ 노션에서 그림을 모아 둘 <b>페이지</b>를 열고, 오른쪽 위 <b>•••</b> → <b>연결</b> → 방금 만든 연결을 추가해요. 그다음 아래 「다시 찾기」를 눌러요.${workspace ? `<br><small>워크스페이스: ${escapeHtml(workspace)}</small>` : ""}` }));
     const list = el("div", { class: "pick-list" });
     const status = el("p", { class: "dialog-status" });
     body.append(list, status);
-    const refresh = el("button", { class: "btn secondary", type: "button", text: "다시 찾기" });
-    foot.append(el("button", { class: "btn secondary", type: "button", text: "취소", onclick: () => dialog.close() }), refresh);
     const load = async () => {
       list.innerHTML = "";
       status.textContent = "찾는 중…";
@@ -1462,24 +1449,25 @@
   }
 
   async function openNotionSettings() {
-    const { dialog, body, foot } = notionDialogShell("노션 설정");
+    const { dialog, body, right: save } = notionDialogShell("노션 설정", { leftLabel: "닫기", rightLabel: "저장" });
     const auto = el("input", { type: "checkbox", id: "nt-auto", checked: Boolean(notionCfg.autoSend) });
     const clean = el("input", { type: "radio", name: "nt-up", id: "nt-clean", checked: notionCfg.upload !== "original" });
     const orig = el("input", { type: "radio", name: "nt-up", id: "nt-orig", checked: notionCfg.upload === "original" });
+    auto.classList.add("ios-switch");
+    clean.classList.add("ios-check");
+    orig.classList.add("ios-check");
     body.append(
-      el("p", { text: `연결된 곳: ${notionCfg.title || ""}` }),
-      el("label", { class: "cz-row", for: "nt-auto" }, [el("span", { class: "grow", text: "새로 저장되는 그림을 자동으로 보내기" }), auto]),
-      el("div", { class: "side-label", style: "padding: 8px 0 2px", text: "노션에 올릴 그림" }),
-      el("label", { class: "cz-row", for: "nt-clean" }, [clean, el("span", { class: "grow", text: "메타데이터 지운 사본 (추천 · 프롬프트는 칸에 따로 들어가요)" })]),
-      el("label", { class: "cz-row", for: "nt-orig" }, [orig, el("span", { class: "grow", text: "원본 그대로" })]),
+      el("p", { class: "sheet-note", text: `연결된 곳: ${notionCfg.title || ""}` }),
+      el("div", { class: "ios-group" }, [
+        el("label", { class: "ios-row", for: "nt-auto" }, [el("span", { class: "grow", text: "새로 저장되는 그림 자동으로 보내기" }), auto]),
+      ]),
+      el("div", { class: "ios-group-label", text: "노션에 올릴 그림" }),
+      el("div", { class: "ios-group" }, [
+        el("label", { class: "ios-row", for: "nt-clean" }, [el("span", { class: "grow" }, [document.createTextNode("메타데이터 지운 사본"), el("small", { text: "추천 · 프롬프트는 칸에 따로 들어가요" })]), clean]),
+        el("label", { class: "ios-row", for: "nt-orig" }, [el("span", { class: "grow", text: "원본 그대로" }), orig]),
+      ]),
     );
-    const save = el("button", { class: "btn", type: "button", text: "저장" });
-    foot.append(
-      el("button", { class: "btn plain", type: "button", text: "연결 끊기", onclick: async () => { await NotionSync.clearConfig(); notionCfg = await NotionSync.getConfig(); dialog.close(); render(); toast("노션 연결을 끊었어요. 노션에 올라간 페이지는 그대로 있어요."); } }),
-      el("span", { class: "grow" }),
-      el("button", { class: "btn secondary", type: "button", text: "닫기", onclick: () => dialog.close() }),
-      save,
-    );
+    body.append(el("button", { class: "sheet-danger", type: "button", text: "노션 연결 끊기", onclick: async () => { await NotionSync.clearConfig(); notionCfg = await NotionSync.getConfig(); dialog.close(); render(); toast("노션 연결을 끊었어요. 노션에 올라간 페이지는 그대로 있어요."); } }));
     save.addEventListener("click", async () => {
       notionCfg = await NotionSync.setConfig({ autoSend: auto.checked, upload: orig.checked ? "original" : "clean" });
       dialog.close();

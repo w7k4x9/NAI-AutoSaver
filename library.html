@@ -11,7 +11,7 @@
   <div class="app">
     <aside class="side">
       <div class="brand">
-        <span class="brand-mark" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"><path d="M11 3l1.9 5.1L18 10l-5.1 1.9L11 17l-1.9-5.1L4 10l5.1-1.9z"/></svg></span>
+        <span class="brand-mark" aria-hidden="true"><span data-icon="sparkle" data-size="15"></span></span>
         <span class="brand-name">보관함</span>
       </div>
       <nav class="nav" aria-label="모아 보기"></nav>
@@ -28,16 +28,17 @@
         <div class="tb-left"><h1 class="title">전체</h1><span class="count"></span></div>
         <div class="search-wrap">
           <label class="search">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+            <span data-icon="search" data-size="17"></span>
             <span class="sr">프롬프트로 찾기</span>
             <input class="search-input" type="search" placeholder="프롬프트로 찾기 · 예: 교실 웃음 (빼려면 -hat)" autocomplete="off">
           </label>
         </div>
         <div class="tb-right">
+        <button class="btn plain help-open" type="button" aria-expanded="false" title="보관함에서 할 수 있는 것과 하는 방법"><span data-icon="help" data-size="16"></span>안내</button>
         <button class="btn plain pick-all" type="button" title="보이는 그림 모두 고르기 (⌘/Ctrl+A)">모두 선택</button>
         <button class="btn plain clear-sel" type="button" hidden title="Esc">선택 해제</button>
         <button class="btn plain open-files" type="button" title="다른 폴더에 있는 그림도 열어서 프롬프트를 보거나 사본을 만들어요. 보관함에는 넣지 않아요. 창에 끌어다 놓아도 돼요.">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3.5H7a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8.5z"/><path d="M14 3.5v5h5"/></svg>
+          <span data-icon="file" data-size="16"></span>
           파일 열기…
         </button>
         </div>
@@ -67,7 +68,7 @@
 
   <div class="drop-overlay" hidden>
     <div class="drop-card">
-      <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V3"/><path d="M7 10l5 5 5-5"/><path d="M5 15v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/></svg>
+      <span data-icon="download_circle" data-size="40"></span>
       <strong>여기에 놓으면 그림 정보를 읽어요</strong>
       <span>읽은 뒤 메타데이터 지운 사본도 만들 수 있어요</span>
     </div>
@@ -82,6 +83,8 @@
   <script src="vendor/ort/ort.wasm.min.js"></script>
   <script src="censor.js"></script>
   <script src="notion.js"></script>
+  <script src="icons.js"></script>
   <script src="library.js"></script>
+  <script src="library-tour.js"></script>
 </body>
 </html>

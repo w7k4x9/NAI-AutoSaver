@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "NAI 자동저장",
-  "version": "1.9.4",
+  "version": "1.9.5",
   "description": "NovelAI 이미지 생성 보조(비공식): 자동 생성·대기열·조합 생성, 날짜/캐릭터별 자동 저장, 프롬프트 메모 자동 백업.",
   "permissions": [
     "downloads",
@@ -43,6 +43,7 @@
         "queue-store.js",
         "safe-store.js",
         "tag-ko.js",
+        "icons.js",
         "content.js"
       ],
       "run_at": "document_idle"

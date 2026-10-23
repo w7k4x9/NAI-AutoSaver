@@ -14,23 +14,24 @@
     <main>
       <section class="group" aria-label="열기">
         <button id="openPanelBtn" class="row" type="button">
-          <span class="row-ic" style="background:#007AFF"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M11 3l1.9 5.1L18 10l-5.1 1.9L11 17l-1.9-5.1L4 10l5.1-1.9z"/></svg></span>
-          <span class="row-label">패널 열기</span><span class="chev" aria-hidden="true">›</span>
+          <span class="row-ic" data-icon="sparkle" data-size="20"></span>
+          <span class="row-label">패널 열기</span><span class="chev" data-icon="chevron" data-size="18"></span>
         </button>
         <button id="openLibraryBtn" class="row" type="button">
-          <span class="row-ic" style="background:#5E5CE6"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M4 15l4.5-4.5 4 4 2.5-2.5L20 17"/></svg></span>
-          <span class="row-label">보관함 열기</span><span class="chev" aria-hidden="true">›</span>
+          <span class="row-ic" data-icon="photos" data-size="20"></span>
+          <span class="row-label">보관함 열기</span><span class="chev" data-icon="chevron" data-size="18"></span>
         </button>
       </section>
       <section class="group">
         <label class="row toggle-row" for="autoSaveCheckbox">
-          <span class="row-ic" style="background:#34C759"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/></svg></span>
-          <span class="row-label">다 된 그림 자동 저장</span>
+          <span class="row-ic" data-icon="download_circle" data-size="21"></span>
+          <span class="row-label">자동 저장<small>다 된 그림을 바로 내려받아요</small></span>
           <span class="switch"><input id="autoSaveCheckbox" type="checkbox"><span class="slider"></span></span>
         </label>
       </section>
       <p class="hint">생성·대기열·저장 이름은 NovelAI 페이지의 패널에서 정해요.</p>
     </main>
+    <script src="../icons.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

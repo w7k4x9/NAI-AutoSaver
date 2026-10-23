@@ -9,7 +9,7 @@ come from others and keep their own licenses.
 |---|---|---|
 | ONNX Runtime Web 1.30.0 (Microsoft) | `vendor/ort/` | MIT — `vendor/ort/LICENSE` |
 | Pretendard (Kil Hyung-jin) | `fonts/PretendardVariable.woff2` | SIL Open Font License 1.1 — `fonts/Pretendard-LICENSE.txt` |
-| Material Symbols Rounded icon outlines (Google) | icon paths inside `content.js` | Apache License 2.0 — `licenses/Apache-2.0.txt` |
+| Material Symbols Rounded icons, filled (Google, `@material-symbols/svg-400`) | icon paths inside `icons.js` | Apache License 2.0 — `licenses/Apache-2.0.txt` |
 
 ## Downloaded only when the user asks for it (not included)
 

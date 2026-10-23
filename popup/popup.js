@@ -32,6 +32,7 @@ function setStatus(message, tone = "neutral") {
 }
 
 async function init() {
+  globalThis.NAIIcons?.hydrate();
   $("openLibraryBtn")?.addEventListener("click", async () => {
     await runtimeSend({ action: "openLibrary" });
     window.close();
