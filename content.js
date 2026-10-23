@@ -3632,6 +3632,7 @@
       negativePrompt: src.negativePrompt,
       count: src.count,
       folderName: src.folderName,
+      axes: src.axes,
     });
     queueState.items.splice(index + 1, 0, copy);
     selectedQueueId = copy.id;
@@ -4139,6 +4140,7 @@
   }
 
   let genState = emptyGenState();
+  let genTemplateEditing = false;
   let genActiveChar = 0;
   let genSelection = { type: null, index: -1 };
 
@@ -4287,6 +4289,7 @@
         characterPrompt: joinCharacterColumn(prompts),
         negativePrompt: joinCharacterColumn(negatives),
         count,
+        axes: { char: entry.charName, bg: entry.bgName, emo: entry.emoName },
       }));
     }
     return { items, base, baseNeg };
@@ -4469,9 +4472,21 @@
     // Footer: name rule + totals.
     const sample = { char: name || "김춘자", emo: emotions[0] ? emoDisplayName(emotions[0], 0) : "웃음", bg: (bgOwner || [])[0] ? bgDisplayName(bgOwner[0], 0) : "교실" };
     const example = (preset) => preset.order.filter((axis) => preset.on[axis]).map((axis) => sample[axis]).join(preset.sep);
-    const current = NAME_PRESETS.find((preset) => namingMatchesPreset(genState.naming, preset));
-    const customOption = current ? "" : `<option value="custom" selected>${escapeHtml(Store.buildComboPlan([{ name: sample.char, emotionNames: [sample.emo], emotionCount: 1 }], [{ name: sample.bg }], genState.naming)[0]?.title || "직접 만든 규칙")}</option>`;
-    ui.comboNameSelect.innerHTML = customOption + NAME_PRESETS.map((preset) => `<option value="${escapeAttr(preset.id)}" ${current === preset ? "selected" : ""}>${escapeHtml(example(preset))}</option>`).join("");
+    const templateMode = Boolean(genState.naming.template) || genTemplateEditing;
+    const current = templateMode ? null : NAME_PRESETS.find((preset) => namingMatchesPreset(genState.naming, preset));
+    const customOption = current || templateMode ? "" : `<option value="custom" selected>${escapeHtml(Store.buildComboPlan([{ name: sample.char, emotionNames: [sample.emo], emotionCount: 1 }], [{ name: sample.bg }], genState.naming)[0]?.title || "직접 만든 규칙")}</option>`;
+    ui.comboNameSelect.innerHTML = customOption + NAME_PRESETS.map((preset) => `<option value="${escapeAttr(preset.id)}" ${current === preset ? "selected" : ""}>${escapeHtml(example(preset))}</option>`).join("")
+      + `<option value="template" ${templateMode ? "selected" : ""}>직접 쓰기…</option>`;
+    if (ui.nameTemplateRow) {
+      ui.nameTemplateRow.hidden = !templateMode;
+      if (templateMode && ui.nameTemplateInput && panelShadow.activeElement !== ui.nameTemplateInput) {
+        ui.nameTemplateInput.value = genState.naming.template || "";
+      }
+      if (ui.nameTemplatePreview) {
+        const shown = genState.naming.template ? Store.renderNameTemplate(genState.naming.template, sample) : "";
+        ui.nameTemplatePreview.textContent = shown ? `→ ${shown}` : "{캐릭터} {배경} {표정} 사이에 _ 나 띄어쓰기를 마음대로 넣어요";
+      }
+    }
     const parts = genState.chars.map((ch, i) => `${charDisplayName(ch, i)} ${perChar[i]}`).filter((_, i) => perChar[i] > 0);
     ui.comboSummary.textContent = included.length ? `전체 ${included.length}개${parts.length > 1 ? ` · ${parts.join(" + ")}` : ""}` : "아직 만들 조합이 없어요";
     ui.genAppendButton.querySelector("span").textContent = included.length ? `대기열에 ${included.length}개 넣기` : "대기열에 넣기";
@@ -4584,6 +4599,18 @@
     if (!target) {
       return;
     }
+    const token = target.closest("[data-token]");
+    if (token && ui.nameTemplateInput) {
+      const input = ui.nameTemplateInput;
+      const text = `{${token.dataset.token}}`;
+      const at = input.selectionStart ?? input.value.length;
+      const end = input.selectionEnd ?? at;
+      input.value = input.value.slice(0, at) + text + input.value.slice(end);
+      input.focus();
+      input.setSelectionRange(at + text.length, at + text.length);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      return;
+    }
     const chip = target.closest(".ias-chip[data-kind]");
     if (chip) {
       const kind = chip.dataset.kind;
@@ -4673,6 +4700,15 @@
     if (!(el instanceof Element)) {
       return;
     }
+    if (el === ui.nameTemplateInput) {
+      genTemplateEditing = true;
+      const naming = { ...genState.naming };
+      if (el.value.trim()) naming.template = el.value; else delete naming.template;
+      genState.naming = Store.normalizeComboNaming(naming);
+      renderCombo({ inspector: false });
+      scheduleGenSave();
+      return;
+    }
     const value = el.value ?? "";
     const { type, index } = genSelection;
     if (el.dataset.gfield) {
@@ -4720,8 +4756,21 @@
       return;
     }
     if (el === ui.comboNameSelect) {
+      if (el.value === "template") {
+        // Start from the rule in use, written out as a template.
+        if (!genState.naming.template) {
+          const n = Store.normalizeComboNaming(genState.naming);
+          const word = { char: "{캐릭터}", bg: "{배경}", emo: "{표정}" };
+          genState.naming = { ...n, template: n.nameOrder.filter((a) => n.nameOn[a]).map((a) => word[a]).join(n.nameSep) };
+        }
+        genTemplateEditing = true;
+        comboChanged();
+        ui.nameTemplateInput?.focus();
+        return;
+      }
       const preset = NAME_PRESETS.find((p) => p.id === el.value);
       if (preset) {
+        genTemplateEditing = false;
         genState.naming = presetNaming(preset);
         comboChanged();
       }
@@ -7014,7 +7063,101 @@
   }
 
   // Special right-hand views that are not queue items.
-  const QUEUE_VIEWS = new Set(["common", "bulk"]);
+  const QUEUE_VIEWS = new Set(["common", "bulk", "order", "select"]);
+
+  // ---- 선택 mode: check items, then delete them together ----------------------
+  const queueSelect = { on: false, ids: new Set(), anchor: null, back: null };
+
+  function setQueueSelectMode(on) {
+    queueSelect.on = Boolean(on);
+    queueSelect.ids.clear();
+    queueSelect.anchor = null;
+    if (ui.queueSelectButton) {
+      ui.queueSelectButton.textContent = queueSelect.on ? "완료" : "선택";
+      ui.queueSelectButton.setAttribute("aria-pressed", String(queueSelect.on));
+    }
+    if (queueSelect.on) {
+      queueSelect.back = selectedQueueId;
+      selectedQueueId = "select";
+    } else if (selectedQueueId === "select") {
+      selectedQueueId = queueSelect.back && queueSelect.back !== "select" ? queueSelect.back : null;
+    }
+    renderQueue();
+  }
+
+  function toggleQueueChecked(id, { range = false } = {}) {
+    const ids = queueState.items.map((it) => it.id);
+    if (range && queueSelect.anchor && ids.includes(queueSelect.anchor)) {
+      const a = ids.indexOf(queueSelect.anchor);
+      const b = ids.indexOf(id);
+      for (const x of ids.slice(Math.min(a, b), Math.max(a, b) + 1)) queueSelect.ids.add(x);
+    } else if (queueSelect.ids.has(id)) {
+      queueSelect.ids.delete(id);
+    } else {
+      queueSelect.ids.add(id);
+    }
+    queueSelect.anchor = id;
+    renderQueueList();
+    renderQueueEditor();
+  }
+
+  async function deleteCheckedQueueItems() {
+    const n = queueSelect.ids.size;
+    if (!n || queueRun.active) return;
+    const ok = await iosAlert({
+      title: `${n}개를 지울까요?`,
+      message: "대기열에서만 빠지고, 이미 저장한 그림은 그대로예요.",
+      buttons: [{ label: "취소", value: false, cancel: true }, { label: "지우기", value: true, primary: true, destructive: true }],
+    });
+    if (!ok) return;
+    queueState.items = queueState.items.filter((it) => !queueSelect.ids.has(it.id));
+    queueSelect.ids.clear();
+    await persistQueueState();
+    setStatus(`대기열에서 ${n}개를 지웠어요.`, "ok");
+  }
+
+  // ---- grouping: which character / background an item belongs to -------------
+  function knownBackgroundNames() {
+    const names = new Set();
+    for (const bg of genState.bgs || []) if (bg.code.trim()) names.add(bg.code.trim());
+    for (const ch of genState.chars || []) for (const bg of ch.bgs || []) if (bg.code.trim()) names.add(bg.code.trim());
+    return names;
+  }
+  function itemAxes(item, bgNames = knownBackgroundNames()) {
+    if (item.axes) return { char: item.axes.char || item.folderName || "", bg: item.axes.bg || "" };
+    // Older items: the character is the folder (or the name before "_"); the
+    // background is guessed from the combination screen's background names.
+    const parts = String(item.title || "").split(/[_\s-]+/).filter(Boolean);
+    return { char: item.folderName || parts[0] || "", bg: parts.slice(1).find((p) => bgNames.has(p)) || "" };
+  }
+  function queueGroups(axis) {
+    const bgNames = knownBackgroundNames();
+    const map = new Map();
+    for (const item of queueState.items) {
+      const key = itemAxes(item, bgNames)[axis] || "";
+      map.set(key, (map.get(key) || 0) + 1);
+    }
+    return [...map.entries()].map(([name, count]) => ({ name, count }));
+  }
+
+  // Regroup the whole queue: by the chosen order of characters (or backgrounds)
+  // first, then the other axis, keeping the original order inside a group.
+  async function applyQueueGrouping(axis, order) {
+    if (queueRun.active) return;
+    const first = queueState.options.groupFirst === "bg" ? "bg" : "char";
+    const second = first === "char" ? "bg" : "char";
+    const orders = { char: queueGroups("char").map((g) => g.name), bg: queueGroups("bg").map((g) => g.name) };
+    orders[axis] = order;
+    const bgNames = knownBackgroundNames();
+    const rank = (list, key) => { const i = list.indexOf(key); return i < 0 ? list.length : i; };
+    const keyed = queueState.items.map((item, i) => {
+      const ax = itemAxes(item, bgNames);
+      return { item, i, a: rank(orders[first], ax[first] || ""), b: rank(orders[second], ax[second] || "") };
+    });
+    keyed.sort((x, y) => x.a - y.a || x.b - y.b || x.i - y.i);
+    queueState.items = keyed.map((k) => k.item);
+    await persistQueueState();
+  }
 
   function ensureSelection() {
     if (QUEUE_VIEWS.has(selectedQueueId)) {
@@ -7086,6 +7229,16 @@
     common.innerHTML = `<span class="ias-row-mark" aria-hidden="true">≡</span><span class="ias-row-text"><span class="ias-row-title">공통 베이스</span><span class="ias-row-sub" data-role="common-sub"></span></span>`;
     common.querySelector('[data-role="common-sub"]').textContent = commonBaseSub();
     ui.queueList.append(common);
+    if (queueState.items.length > 1 && !queueSelect.on) {
+      const order = document.createElement("button");
+      order.type = "button";
+      order.className = "ias-row ias-qcommon";
+      order.dataset.view = "order";
+      order.setAttribute("role", "option");
+      order.setAttribute("aria-selected", String(selectedQueueId === "order"));
+      order.innerHTML = '<span class="ias-row-mark" aria-hidden="true">⇅</span><span class="ias-row-text"><span class="ias-row-title">캐릭터별 순서</span><span class="ias-row-sub">캐릭터 · 배경 묶어서 바꾸기</span></span>';
+      ui.queueList.append(order);
+    }
     const sep = document.createElement("div");
     sep.className = "ias-row-sep";
     ui.queueList.append(sep);
@@ -7100,9 +7253,9 @@
       row.type = "button";
       row.className = "ias-row ias-qcard";
       row.dataset.id = item.id;
-      row.draggable = !queueRun.active;
+      row.draggable = !queueRun.active && !queueSelect.on;
       row.setAttribute("role", "option");
-      row.setAttribute("aria-selected", String(item.id === selectedQueueId));
+      row.setAttribute("aria-selected", String(queueSelect.on ? queueSelect.ids.has(item.id) : item.id === selectedQueueId));
       if (status === "running") {
         row.dataset.running = "true";
       } else if (status === "done") {
@@ -7112,6 +7265,12 @@
       mark.className = "ias-row-mark";
       mark.dataset.kind = status;
       mark.textContent = status === "done" ? "✓" : status === "running" ? "●" : String(index + 1);
+      if (queueSelect.on) {
+        mark.dataset.kind = "check";
+        mark.dataset.checked = String(queueSelect.ids.has(item.id));
+        mark.textContent = "";
+        mark.innerHTML = queueSelect.ids.has(item.id) ? icon("check_circle", 18) : '<span class="ias-check-ring"></span>';
+      }
       const text = document.createElement("span");
       text.className = "ias-row-text";
       const title = document.createElement("span");
@@ -7180,6 +7339,46 @@
         basePlaceholder: "모든 항목에 들어갈 베이스 · 예: masterpiece, best quality",
       })?.setDisabled(queueRun.active);
       head.querySelector("input").disabled = queueRun.active;
+      return;
+    }
+
+    if (view === "select") {
+      const n = queueSelect.ids.size;
+      const all = queueState.items.length && n === queueState.items.length;
+      const chips = queueGroups("char").filter((g) => g.name).map((g) => {
+        const ids = queueState.items.filter((it) => itemAxes(it).char === g.name).map((it) => it.id);
+        const on = ids.length && ids.every((id) => queueSelect.ids.has(id));
+        return `<button type="button" class="ias-chip ias-chip-round" data-pick-char="${escapeAttr(g.name)}" data-selected="${on}">${escapeHtml(g.name)}<span class="ias-chip-count">${g.count}</span></button>`;
+      }).join("");
+      body.innerHTML = `
+        <span class="ias-detail-title">${n ? `${n}개 골랐어요` : "지울 항목을 골라요"}</span>
+        <span class="ias-detail-meta">왼쪽 목록에서 눌러서 골라요. <b>Shift</b>를 누른 채 누르면 사이에 있는 항목이 다 골라져요.</span>
+        ${chips ? `<span class="ias-field-label">캐릭터로 한꺼번에 고르기</span><div class="ias-chips ias-order-chips">${chips}</div>` : ""}
+        <div class="ias-bulk-row ias-select-actions">
+          <button class="ias-btn secondary" type="button" data-select-all>${all ? "모두 해제" : "모두 고르기"}</button>
+          <button class="ias-btn danger" type="button" data-select-delete ${n && !queueRun.active ? "" : "disabled"}>${icon("delete", 14)}<span>${n ? `${n}개 지우기` : "지우기"}</span></button>
+        </div>
+        ${queueRun.active ? '<span class="ias-detail-meta">생성 중에는 지울 수 없어요. 멈춘 다음 지워 주세요.</span>' : ""}`;
+      return;
+    }
+
+    if (view === "order") {
+      const first = queueState.options.groupFirst === "bg" ? "bg" : "char";
+      const chipRow = (axis) => queueGroups(axis).map((g, i) => `<button type="button" class="ias-chip ias-chip-round ias-order-chip" draggable="${!queueRun.active}" data-axis="${axis}" data-name="${escapeAttr(g.name)}" data-index="${i}" title="끌어서 순서 바꾸기 · 누르면 맨 앞으로">${escapeHtml(g.name || (axis === "bg" ? "배경 모름" : "이름 없음"))}<span class="ias-chip-count">${g.count}</span></button>`).join("");
+      const bgGroups = queueGroups("bg");
+      const hasBg = bgGroups.some((g) => g.name);
+      body.innerHTML = `
+        <span class="ias-detail-title">캐릭터별 순서</span>
+        <span class="ias-detail-meta">칩을 <b>끌어서</b> 순서를 바꾸거나, <b>누르면 맨 앞으로</b> 와요. 대기열 전체가 그 순서로 묶여요. 묶음 안의 순서는 그대로예요.</span>
+        <span class="ias-field-label">캐릭터</span>
+        <div class="ias-chips ias-order-chips" data-axis="char">${chipRow("char")}</div>
+        <span class="ias-field-label">배경</span>
+        ${hasBg ? `<div class="ias-chips ias-order-chips" data-axis="bg">${chipRow("bg")}</div>` : '<span class="ias-detail-meta">조합에서 넣은 항목이면 배경으로도 묶을 수 있어요.</span>'}
+        ${hasBg ? `<span class="ias-field-label">먼저 묶을 것</span>
+        <div class="ias-seg" role="radiogroup" aria-label="먼저 묶을 것"><button type="button" class="ias-seg-btn" data-group-first="char" aria-selected="${first === "char"}">캐릭터별로</button><button type="button" class="ias-seg-btn" data-group-first="bg" aria-selected="${first === "bg"}">배경별로</button></div>
+        <span class="ias-detail-meta">예: 김윤자를 누르고 밤을 누르면, 김윤자 밤 → 김윤자 나머지 → 다른 캐릭터 순서가 돼요.</span>` : ""}
+        ${queueRun.active ? '<span class="ias-detail-meta">생성 중에는 순서를 바꿀 수 없어요.</span>' : ""}`;
+      if (queueRun.active) body.querySelectorAll("button").forEach((b) => { b.disabled = true; });
       return;
     }
 
@@ -7316,6 +7515,10 @@
       return;
     }
     if (row.dataset.id) {
+      if (queueSelect.on) {
+        toggleQueueChecked(row.dataset.id, { range: event.shiftKey });
+        return;
+      }
       selectQueueView(row.dataset.id);
     }
   }
@@ -7323,6 +7526,42 @@
   function handleEditorClick(event) {
     const target = event.target instanceof Element ? event.target : null;
     if (!target) {
+      return;
+    }
+    if (target.closest("[data-select-all]")) {
+      const all = queueSelect.ids.size === queueState.items.length;
+      queueSelect.ids = all ? new Set() : new Set(queueState.items.map((it) => it.id));
+      renderQueueList();
+      renderQueueEditor();
+      return;
+    }
+    if (target.closest("[data-select-delete]")) {
+      void deleteCheckedQueueItems();
+      return;
+    }
+    const pick = target.closest("[data-pick-char]");
+    if (pick) {
+      const name = pick.dataset.pickChar;
+      const ids = queueState.items.filter((it) => itemAxes(it).char === name).map((it) => it.id);
+      const on = ids.every((id) => queueSelect.ids.has(id));
+      for (const id of ids) on ? queueSelect.ids.delete(id) : queueSelect.ids.add(id);
+      renderQueueList();
+      renderQueueEditor();
+      return;
+    }
+    const groupFirst = target.closest("[data-group-first]");
+    if (groupFirst) {
+      queueState.options.groupFirst = groupFirst.dataset.groupFirst;
+      const axis = groupFirst.dataset.groupFirst;
+      void applyQueueGrouping(axis, queueGroups(axis).map((g) => g.name));
+      return;
+    }
+    const orderChip = target.closest(".ias-order-chip");
+    if (orderChip && !queueRun.active) {
+      const axis = orderChip.dataset.axis;
+      const names = queueGroups(axis).map((g) => g.name);
+      const name = orderChip.dataset.name;
+      void applyQueueGrouping(axis, [name, ...names.filter((n) => n !== name)]);
       return;
     }
     const step = target.closest("button[data-step]");
@@ -7442,6 +7681,54 @@
 
 
 
+
+  // Order view: drag a character/background chip before another one.
+  function enableOrderChipDrag() {
+    const host = ui.queueEditor;
+    if (!host) return;
+    let drag = null;
+    host.addEventListener("dragstart", (event) => {
+      const chip = event.target.closest?.(".ias-order-chip");
+      if (!chip || queueRun.active) return;
+      drag = { axis: chip.dataset.axis, name: chip.dataset.name };
+      chip.dataset.dragging = "true";
+      try {
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", drag.name);
+      } catch (error) {
+        void error;
+      }
+    });
+    host.addEventListener("dragover", (event) => {
+      if (!drag) return;
+      const chip = event.target.closest?.(".ias-order-chip");
+      host.querySelectorAll('.ias-order-chip[data-dropbefore="true"]').forEach((el) => delete el.dataset.dropbefore);
+      if (chip && chip.dataset.axis === drag.axis) {
+        event.preventDefault();
+        if (chip.dataset.name !== drag.name) chip.dataset.dropbefore = "true";
+      } else if (event.target.closest?.(`.ias-order-chips[data-axis="${drag.axis}"]`)) {
+        event.preventDefault();
+      }
+    });
+    host.addEventListener("drop", (event) => {
+      if (!drag) return;
+      event.preventDefault();
+      const chip = event.target.closest?.(".ias-order-chip");
+      const names = queueGroups(drag.axis).map((g) => g.name).filter((n) => n !== drag.name);
+      const at = chip && chip.dataset.axis === drag.axis ? names.indexOf(chip.dataset.name) : names.length;
+      names.splice(at < 0 ? names.length : at, 0, drag.name);
+      const axis = drag.axis;
+      drag = null;
+      void applyQueueGrouping(axis, names);
+    });
+    host.addEventListener("dragend", () => {
+      drag = null;
+      host.querySelectorAll(".ias-order-chip[data-dragging], .ias-order-chip[data-dropbefore]").forEach((el) => {
+        delete el.dataset.dragging;
+        delete el.dataset.dropbefore;
+      });
+    });
+  }
 
   function enableQueueDragSort() {
     const list = ui.queueList;
@@ -8358,6 +8645,12 @@
         height: 24px; border-radius: 5px; border: 0.5px solid var(--field-border); background: var(--elev); color: var(--text);
         font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 0 6px; max-width: 200px;
       }
+      .ias-name-template-row { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 16px 0 20px; border-top: 0.5px solid var(--border); }
+      .ias-name-template-row[hidden] { display: none; }
+      .ias-name-template-row .ias-name-template { flex: 1 1 200px; min-width: 160px; font-family: inherit; }
+      .ias-template-tokens { display: flex; gap: 4px; }
+      .ias-template-tokens .ias-chip { height: 26px; font-size: 12px; }
+      .ias-template-preview { flex: 1 0 100%; font-size: 11.5px; color: var(--text3); padding-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .ias-combo-summary { flex: 1; font-size: 12px; color: var(--text2); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .ias-combo-foot .ias-btn { white-space: nowrap; flex: 0 0 auto; }
       .ias-combo-foot .ias-name-select { min-width: 0; flex: 0 1 auto; max-width: 150px; }
@@ -8531,6 +8824,17 @@
       .ias-row-mark { display: flex; justify-content: center; font-size: 11.5px; color: var(--text3); font-variant-numeric: tabular-nums; }
       .ias-row-mark[data-kind="done"] { color: var(--success); font-weight: 800; }
       .ias-row-mark[data-kind="running"] { color: var(--accent); }
+      .ias-row-mark[data-kind="check"] { color: var(--accent); align-items: center; }
+      .ias-check-ring { width: 16px; height: 16px; border-radius: 8px; box-shadow: inset 0 0 0 1.5px var(--text3); display: block; }
+      .ias-order-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
+      .ias-order-chip { cursor: grab; }
+      .ias-order-chip[data-dragging="true"] { opacity: 0.45; }
+      .ias-order-chip[data-dropbefore="true"] { box-shadow: -3px 0 0 0 var(--accent); }
+      .ias-select-actions { margin-top: 10px; }
+      .ias-tb-text { height: 28px; padding: 0 10px; border: none; border-radius: 7px; background: transparent; color: var(--accent-text); font: inherit; font-size: 13px; cursor: pointer; white-space: nowrap; }
+      .ias-tb-text:hover { background: var(--hover); }
+      .ias-tb-text[aria-pressed="true"] { font-weight: 650; }
+      .ias-tb-text:disabled { color: var(--text3); cursor: default; }
       .ias-row-text { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
       .ias-row-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .ias-row-sub { font-size: 11.5px; color: var(--text3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -8720,6 +9024,7 @@
               </div>
 
               <div class="ias-tb-actions" data-for="queue">
+                <button class="ias-tb-text ias-queue-select" type="button" aria-pressed="false" title="여러 항목을 골라서 한꺼번에 지워요">선택</button>
                 <button class="ias-tb-icon ias-queue-add" type="button" data-tour="queue-add" aria-label="지금 NovelAI 프롬프트로 항목 추가" title="지금 NovelAI 프롬프트로 항목 추가">${PLUS_ICON}</button>
                 <div class="ias-menu-wrap">
                   <button class="ias-tb-icon" type="button" data-menu-toggle="queue" aria-haspopup="menu" aria-expanded="false" aria-label="대기열 메뉴" title="더 보기">${MORE_ICON}</button>
@@ -8865,6 +9170,15 @@
                   <div class="ias-combo-cards" data-tour="combo-cards"></div>
                 </div>
                 <aside class="ias-combo-inspector" aria-label="자세히"></aside>
+              </div>
+              <div class="ias-name-template-row" hidden>
+                <input class="ias-input ias-name-template" type="text" maxlength="120" spellcheck="false" placeholder="예: {캐릭터}_{배경} {표정}" aria-label="저장 이름 규칙">
+                <div class="ias-template-tokens" aria-label="넣기">
+                  <button type="button" class="ias-chip ias-chip-round" data-token="캐릭터">+ 캐릭터</button>
+                  <button type="button" class="ias-chip ias-chip-round" data-token="배경">+ 배경</button>
+                  <button type="button" class="ias-chip ias-chip-round" data-token="표정">+ 표정</button>
+                </div>
+                <span class="ias-template-preview"></span>
               </div>
               <div class="ias-combo-foot">
                 <label class="ias-label" for="ias-name-select" title="만들어질 그림의 저장 이름 순서">저장 이름</label>
@@ -9092,6 +9406,7 @@
       }
     });
     ui.queueAddButton.addEventListener("click", () => void addQueueItem());
+    ui.queueSelectButton?.addEventListener("click", () => setQueueSelectMode(!queueSelect.on));
     ui.queueClearButton.addEventListener("click", () => void clearQueue());
     ui.loopToggle.addEventListener("change", () => void toggleQueueLoop());
     ui.queueExportButton.addEventListener("click", exportQueue);
@@ -9104,6 +9419,7 @@
 
     ui.queueList.addEventListener("click", handleQueueListClick);
     enableQueueDragSort();
+    enableOrderChipDrag();
     enableGrabScroll(ui.queueList);
     panelShadow.querySelectorAll(".ias-scroll").forEach((el) => enableGrabScroll(el));
     ui.queueEditor.addEventListener("click", handleEditorClick);
@@ -9370,6 +9686,7 @@
       autoButton: panelShadow.querySelector(".ias-auto"),
       queueCount: panelShadow.querySelector(".ias-queue-count"),
       queueAddButton: panelShadow.querySelector(".ias-queue-add"),
+      queueSelectButton: panelShadow.querySelector(".ias-queue-select"),
       queueList: panelShadow.querySelector(".ias-queue-list"),
       queueEditor: panelShadow.querySelector(".ias-qeditor"),
       queueRunButton: panelShadow.querySelector(".ias-queue-run"),
@@ -9386,6 +9703,9 @@
       comboCards: panelShadow.querySelector(".ias-combo-cards"),
       comboInspector: panelShadow.querySelector(".ias-combo-inspector"),
       comboNameSelect: panelShadow.querySelector(".ias-name-select"),
+      nameTemplateRow: panelShadow.querySelector(".ias-name-template-row"),
+      nameTemplateInput: panelShadow.querySelector(".ias-name-template"),
+      nameTemplatePreview: panelShadow.querySelector(".ias-template-preview"),
       comboSummary: panelShadow.querySelector(".ias-combo-summary"),
       genCount: panelShadow.querySelector(".ias-gen-count"),
       genSplit: panelShadow.querySelector(".ias-gen-split"),

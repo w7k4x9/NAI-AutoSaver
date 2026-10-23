@@ -62,8 +62,22 @@
     return item;
   }
 
+  // Which combination an item came from ({ char, bg, emo }), so the queue can
+  // be regrouped by character or background later. Optional.
+  function normalizeAxes(value) {
+    if (!value || typeof value !== "object") return null;
+    const pick = (v) => String(v == null ? "" : v).trim().slice(0, 80);
+    const axes = { char: pick(value.char), bg: pick(value.bg), emo: pick(value.emo) };
+    return axes.char || axes.bg || axes.emo ? axes : null;
+  }
+  function withAxes(item, value) {
+    const axes = normalizeAxes(value);
+    if (axes) item.axes = axes;
+    return item;
+  }
+
   function createItem(options = {}) {
-    return withFolderName({
+    return withAxes(withFolderName({
       id: generateId(options.id),
       title: normalizeTitle(options.title),
       basePrompt: normalizePrompt(options.basePrompt),
@@ -71,7 +85,7 @@
       characterPrompt: normalizePrompt(options.characterPrompt),
       negativePrompt: normalizePrompt(options.negativePrompt),
       count: normalizeCount(options.count),
-    }, options.folderName);
+    }, options.folderName), options.axes);
   }
 
   // Expand a naming pattern. Tokens: {n} 1-based index, {nn} zero-padded to 2,
@@ -125,7 +139,7 @@
     if (!hasTitle && !hasBase && !hasChar) {
       return null;
     }
-    return withFolderName({
+    return withAxes(withFolderName({
       id: generateId(value.id),
       title: normalizeTitle(value.title),
       basePrompt: normalizePrompt(basePrompt),
@@ -133,7 +147,7 @@
       characterPrompt: normalizePrompt(characterPrompt),
       negativePrompt: normalizePrompt(value.negativePrompt),
       count: normalizeCount(value.count),
-    }, value.folderName);
+    }, value.folderName), value.axes);
   }
 
   function normalizeState(value) {
@@ -158,6 +172,7 @@
         globalBase: normalizePrompt(options.globalBase),
         globalBaseNegative: normalizePrompt(options.globalBaseNegative),
         namePattern: typeof options.namePattern === "string" ? options.namePattern.slice(0, 80) : "",
+        groupFirst: options.groupFirst === "bg" ? "bg" : "char",
       },
     };
   }
@@ -287,12 +302,26 @@
     if (!COMBO_AXES.some((axis) => nameOn[axis])) {
       nameOn.char = true;
     }
-    return {
+    const naming = {
       nameOrder: normalizeAxisOrder(source.nameOrder),
       nameOn,
       nameSep: COMBO_SEPARATORS.includes(source.nameSep) ? source.nameSep : "_",
       loopOrder: normalizeAxisOrder(source.loopOrder),
     };
+    // A free-form name like "{캐릭터}_{배경} {표정}" overrides order/separator.
+    const template = typeof source.template === "string" ? source.template.trim().slice(0, 120) : "";
+    if (template) naming.template = template;
+    return naming;
+  }
+
+  const TEMPLATE_TOKENS = { 캐릭터: "char", char: "char", 배경: "bg", bg: "bg", 표정: "emo", 감정: "emo", emo: "emo" };
+  // "{캐릭터}_{배경} {표정}" + { char, bg, emo } -> "김춘자_교실 웃음"
+  function renderNameTemplate(template, values) {
+    const out = String(template || "").replace(/\{\s*([^{}\s]+)\s*\}/g, (whole, key) => {
+      const axis = TEMPLATE_TOKENS[key] || TEMPLATE_TOKENS[String(key).toLowerCase()];
+      return axis ? String(values[axis] || "") : whole;
+    });
+    return out.replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").trim().slice(0, 120);
   }
 
   // "웃음 = smiling, open mouth" -> { name: "웃음", tags: "smiling, open mouth" }.
@@ -326,7 +355,7 @@
         for (let ei = 0; ei < count; ei += 1) {
           const emoName = String((ch.emotionNames && ch.emotionNames[ei]) || "").trim() || String(ei + 1);
           const values = { char: charName, bg: bgName, emo: emoName };
-          const title = naming.nameOrder
+          const title = (naming.template && renderNameTemplate(naming.template, values)) || naming.nameOrder
             .filter((axis) => naming.nameOn[axis])
             .map((axis) => values[axis])
             .join(naming.nameSep);
@@ -356,6 +385,7 @@
   }
 
   const api = {
+    renderNameTemplate,
     APP_NAME,
     COMBO_AXES,
     buildComboPlan,
