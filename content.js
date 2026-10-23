@@ -4227,12 +4227,14 @@
 
   // Every combination (with its file name) in generation order.
   function genPlan(raw = collectGenRaw()) {
-    const chars = effectiveChars(raw).map((ch) => ({
-      name: Store.sanitizeFileName(ch.code, "").trim(),
+    // Unnamed ones use the name their chip shows ("캐릭터 1", "배경 1"), so
+    // what is on screen is what gets made.
+    const chars = effectiveChars(raw).map((ch, i) => ({
+      name: Store.sanitizeFileName(ch.code, "").trim() || charDisplayName(ch, i),
       emotionNames: genEmotionNames(ch),
       emotionCount: genEmotionCount(genCharacterMembers(ch)),
     }));
-    const bgName = (bg) => ({ name: Store.sanitizeFileName(bg.code, "").trim() });
+    const bgName = (bg, i) => ({ name: Store.sanitizeFileName(bg.code, "").trim() || bgDisplayName(bg, i) });
     const bgs = raw.bgs.map(bgName);
     if (raw.bgShared === false) {
       raw.chars.forEach((ch, i) => { chars[i].bgs = (ch.bgs || []).map(bgName); });
@@ -4300,6 +4302,14 @@
   }
 
   const GEN_EMPTY_MESSAGE = "만들 조합이 없어요. 캐릭터·배경·표정을 하나씩 넣어 주세요.";
+  // Says what is missing instead of just "nothing to make".
+  function comboEmptyReason(plan) {
+    if (!genState.chars.length) return "캐릭터를 먼저 넣어 주세요";
+    const anyBg = genState.bgShared !== false ? genState.bgs.length : genState.chars.some((ch) => (ch.bgs || []).length);
+    if (!anyBg) return "배경을 하나 넣어 주세요";
+    if (!plan.length) return "표정을 하나 넣어 주세요";
+    return "카드를 모두 뺐어요 · 카드를 누르면 다시 들어가요";
+  }
 
   async function genAppendToQueue() {
     const { items, base, baseNeg } = buildGenItems();
@@ -4488,7 +4498,7 @@
       }
     }
     const parts = genState.chars.map((ch, i) => `${charDisplayName(ch, i)} ${perChar[i]}`).filter((_, i) => perChar[i] > 0);
-    ui.comboSummary.textContent = included.length ? `전체 ${included.length}개${parts.length > 1 ? ` · ${parts.join(" + ")}` : ""}` : "아직 만들 조합이 없어요";
+    ui.comboSummary.textContent = included.length ? `전체 ${included.length}개${parts.length > 1 ? ` · ${parts.join(" + ")}` : ""}` : comboEmptyReason(plan);
     ui.genAppendButton.querySelector("span").textContent = included.length ? `대기열에 ${included.length}개 넣기` : "대기열에 넣기";
     ui.genAppendButton.disabled = !included.length;
     ui.genReplaceButton.disabled = !included.length;
@@ -4533,7 +4543,7 @@
           ${inspectorField("네거티브", `data-mfield="negative" data-mindex="${mi}"`, m.negative, { rows: 1 })}
         </div>`).join("");
       html = `
-        <div class="ias-insp-head"><span class="ias-insp-kicker">캐릭터</span><span class="ias-insp-title">${escapeHtml(charDisplayName(ch, index))}</span></div>
+        <div class="ias-insp-head"><button type="button" class="ias-insp-back" data-insp-back="1">${icon("chevron", 14)}<span>공통 설정</span></button><span class="ias-insp-kicker">캐릭터</span><span class="ias-insp-title">${escapeHtml(charDisplayName(ch, index))}</span></div>
         ${inspectorField("이름 (파일 이름 · 폴더에 들어가요)", 'data-cfield="code" data-autofocus="true"', ch.code, { placeholder: "예: 김춘자" })}
         ${inspectorField("외형 태그", 'data-cfield="appearance"', ch.appearance, { rows: 3, placeholder: "예: girl, black hair, long hair" })}
         ${inspectorField("캐릭터 네거티브", 'data-cfield="negative"', ch.negative, { rows: 2, placeholder: "비우면 없음" })}
@@ -4546,7 +4556,7 @@
       const bg = bgOwnerList()[index];
       const bgKicker = genState.bgShared !== false ? "배경 · 모든 캐릭터 공통" : `${charDisplayName(genState.chars[genActiveChar], genActiveChar)} · 배경`;
       html = `
-        <div class="ias-insp-head"><span class="ias-insp-kicker">${escapeHtml(bgKicker)}</span><span class="ias-insp-title">${escapeHtml(bgDisplayName(bg, index))}</span></div>
+        <div class="ias-insp-head"><button type="button" class="ias-insp-back" data-insp-back="1">${icon("chevron", 14)}<span>공통 설정</span></button><span class="ias-insp-kicker">${escapeHtml(bgKicker)}</span><span class="ias-insp-title">${escapeHtml(bgDisplayName(bg, index))}</span></div>
         ${inspectorField("이름", 'data-bfield="code" data-autofocus="true"', bg.code, { placeholder: "예: 교실" })}
         ${inspectorField("태그", 'data-bfield="tags"', bg.tags, { rows: 3, placeholder: "예: classroom, window" })}
         ${inspectorField("네거티브", 'data-bfield="negative"', bg.negative, { rows: 2, placeholder: "비우면 없음" })}
@@ -4558,7 +4568,7 @@
       if (entry) {
         const kicker = genState.emoShared ? "표정 · 모든 캐릭터 공통" : `${charDisplayName(genState.chars[genActiveChar], genActiveChar)} · 표정`;
         html = `
-          <div class="ias-insp-head"><span class="ias-insp-kicker">${escapeHtml(kicker)}</span><span class="ias-insp-title">${escapeHtml(emoDisplayName(entry, index))}</span></div>
+          <div class="ias-insp-head"><button type="button" class="ias-insp-back" data-insp-back="1">${icon("chevron", 14)}<span>공통 설정</span></button><span class="ias-insp-kicker">${escapeHtml(kicker)}</span><span class="ias-insp-title">${escapeHtml(emoDisplayName(entry, index))}</span></div>
           ${inspectorField("이름 (파일 이름에 들어가요)", 'data-efield="name" data-autofocus="true"', entry.name, { placeholder: `비우면 ${index + 1}` })}
           ${inspectorField("태그", 'data-efield="tags"', entry.tags, { rows: 3, placeholder: "예: smiling, open mouth" })}
           ${genState.emoShared ? "" : copyFromSelect("emo")}
@@ -4609,6 +4619,11 @@
       input.focus();
       input.setSelectionRange(at + text.length, at + text.length);
       input.dispatchEvent(new Event("input", { bubbles: true }));
+      return;
+    }
+    if (target.closest("[data-insp-back]")) {
+      genSelection = { type: null, index: -1 };
+      renderCombo();
       return;
     }
     const chip = target.closest(".ias-chip[data-kind]");
@@ -8640,6 +8655,9 @@
       .ias-combo-empty { grid-column: 1 / -1; border: 1px dashed var(--field-border); border-radius: 10px; padding: 18px; text-align: center; color: var(--text3); font-size: 12.5px; }
       .ias-insp-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; min-width: 0; }
       .ias-insp-kicker { font-size: 11.5px; color: var(--text3); }
+      .ias-insp-back { align-self: flex-start; display: inline-flex; align-items: center; gap: 2px; margin: -2px 0 6px -4px; padding: 2px 8px 2px 2px; border: none; border-radius: 7px; background: transparent; color: var(--accent); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+      .ias-insp-back svg { transform: rotate(180deg); }
+      .ias-insp-back:hover { background: var(--accent-soft, rgba(0,122,255,0.1)); }
       .ias-insp-title { font-size: 16px; font-weight: 750; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .ias-insp-member { border-radius: 8px; background: var(--group); border: 0.5px solid var(--border); padding: 8px; margin-bottom: 10px; }
       .ias-insp-member-head { display: flex; justify-content: space-between; align-items: center; font-size: 12px; font-weight: 700; color: var(--text2); margin-bottom: 6px; }
