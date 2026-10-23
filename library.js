@@ -2252,9 +2252,13 @@
     const auto = el("input", { type: "checkbox", id: "nt-auto", checked: Boolean(notionCfg.autoSend) });
     const clean = el("input", { type: "radio", name: "nt-up", id: "nt-clean", checked: notionCfg.upload !== "original" });
     const orig = el("input", { type: "radio", name: "nt-up", id: "nt-orig", checked: notionCfg.upload === "original" });
+    const once = el("input", { type: "radio", name: "nt-same", id: "nt-once", checked: notionCfg.samePrompt !== "all" });
+    const every = el("input", { type: "radio", name: "nt-same", id: "nt-every", checked: notionCfg.samePrompt === "all" });
     auto.classList.add("ios-switch");
     clean.classList.add("ios-check");
     orig.classList.add("ios-check");
+    once.classList.add("ios-check");
+    every.classList.add("ios-check");
     body.append(
       el("p", { class: "sheet-note", text: `연결된 곳: ${notionCfg.title || ""}` }),
       el("div", { class: "ios-group" }, [
@@ -2265,10 +2269,16 @@
         el("label", { class: "ios-row", for: "nt-clean" }, [el("span", { class: "grow" }, [document.createTextNode("메타데이터 지운 사본"), el("small", { text: "추천 · 프롬프트는 칸에 따로 들어가요" })]), clean]),
         el("label", { class: "ios-row", for: "nt-orig" }, [el("span", { class: "grow", text: "원본 그대로" }), orig]),
       ]),
+      el("div", { class: "ios-group-label", text: "같은 프롬프트로 여러 장 뽑았을 때" }),
+      el("div", { class: "ios-group" }, [
+        el("label", { class: "ios-row", for: "nt-once" }, [el("span", { class: "grow" }, [document.createTextNode("처음 1장만 올리기"), el("small", { text: "프롬프트 하나에 페이지 하나 · 10장 뽑아도 1개" })]), once]),
+        el("label", { class: "ios-row", for: "nt-every" }, [el("span", { class: "grow" }, [document.createTextNode("전부 올리기"), el("small", { text: "그림마다 페이지 하나 · 10장이면 10개" })]), every]),
+      ]),
+      el("p", { class: "sheet-note", text: "같은 프롬프트 = 베이스·캐릭터·네거티브가 글자까지 같은 것 (시드는 상관없어요)." }),
     );
     body.append(el("button", { class: "sheet-danger", type: "button", text: "노션 연결 끊기", onclick: async () => { await NotionSync.clearConfig(); notionCfg = await NotionSync.getConfig(); dialog.close(); render(); toast("노션 연결을 끊었어요. 노션에 올라간 페이지는 그대로 있어요."); } }));
     save.addEventListener("click", async () => {
-      notionCfg = await NotionSync.setConfig({ autoSend: auto.checked, upload: orig.checked ? "original" : "clean" });
+      notionCfg = await NotionSync.setConfig({ autoSend: auto.checked, upload: orig.checked ? "original" : "clean", samePrompt: every.checked ? "all" : "first" });
       dialog.close();
       render();
     });
@@ -2289,6 +2299,7 @@
     let lastUrl = "";
     const failed = [];
     let noPicture = 0;
+    let same = 0;
     for (let i = 0; i < entries.length; i += 1) {
       const entry = entries[i];
       toast(`노션에 보내는 중… ${i + 1} / ${entries.length}`);
@@ -2303,10 +2314,13 @@
             stripped = true;
           }
         }
-        if (!bytes) noPicture += 1;
         const page = await NotionSync.sendEntry(notionCfg, entry, bytes, { metaStripped: stripped });
-        lastUrl = page.url;
-        sent += 1;
+        lastUrl = page.url || lastUrl;
+        if (page.skipped) same += 1;
+        else {
+          sent += 1;
+          if (!bytes) noPicture += 1;
+        }
         if (entry.source !== "dropped") {
           entry.notion = { id: page.id, url: page.url, at: Date.now() };
           await LibDB.put(entry);
@@ -2318,6 +2332,7 @@
     }
     render();
     const parts = [`노션에 ${sent}장을 보냈어요`];
+    if (same) parts.push(`${same}장은 같은 프롬프트가 이미 있어서 건너뛰었어요`);
     if (noPicture) parts.push(`${noPicture}장은 원본을 못 읽어서 프롬프트만`);
     if (failed.length) parts.push(`실패 ${failed.length}장 (${failed[0]})`);
     toast(`${parts.join(" · ")}.`, failed.length || noPicture ? "warn" : "ok", lastUrl ? { label: "노션에서 보기", run: () => window.open(lastUrl, "_blank", "noopener") } : null);

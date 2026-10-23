@@ -20,6 +20,7 @@
     negative: "네거티브",
     image: "그림",
     meta: "메타데이터",
+    key: "프롬프트 키",
   };
   const SCHEMA = {
     [PROPS.char]: { select: { options: [] } },
@@ -31,14 +32,17 @@
     [PROPS.negative]: { rich_text: {} },
     [PROPS.image]: { files: {} },
     [PROPS.meta]: { select: { options: [{ name: "지움", color: "green" }, { name: "남아 있음", color: "orange" }] } },
+    [PROPS.key]: { rich_text: {} },
   };
+  const SENT_KEY = "naiAutoSaver.notionSent"; // { [dataSourceId]: { [promptKey]: { id, url } } }
   // Tags that say nothing about the picture's content.
   const SKIP_TAGS = /^(masterpiece|best quality|amazing quality|great quality|good quality|normal quality|very aesthetic|aesthetic|absurdres|highres|incredibly absurdres|lowres|newest|recent|year \d{4}|rating:.*|nsfw|sfw|no text|official art|very displeasing|displeasing)$/i;
 
   // ------------------------------------------------------------- config ---
   async function getConfig() {
     const got = await chrome.storage.local.get(CONFIG_KEY);
-    return { autoSend: false, upload: "clean", ...(got[CONFIG_KEY] || {}) };
+    // samePrompt: "first" = a prompt goes up once (first picture only), "all" = every picture.
+    return { autoSend: false, upload: "clean", samePrompt: "first", ...(got[CONFIG_KEY] || {}) };
   }
   async function setConfig(patch) {
     const next = { ...(await getConfig()), ...patch };
@@ -208,10 +212,79 @@
     return created.id;
   }
 
+  // ------------------------------------------------------- same prompt ---
+  // Same base + characters + negatives (seed ignored) = same key.
+  async function promptKey(meta) {
+    const norm = (t) => String(t || "").replace(/\s+/g, " ").trim();
+    const parts = [norm(meta?.prompt), norm(meta?.negative), ...(meta?.characters || []).map((c) => `${norm(c.prompt)}|${norm(c.negative)}`)];
+    if (!parts.some(Boolean)) return null; // no prompt to compare (metadata gone)
+    const data = new TextEncoder().encode(JSON.stringify(parts));
+    const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", data));
+    return Array.from(hash.slice(0, 10), (b) => b.toString(16).padStart(2, "0")).join("");
+  }
+  async function sentMap() {
+    return (await chrome.storage.local.get(SENT_KEY))[SENT_KEY] || {};
+  }
+  async function rememberSent(dataSourceId, key, page) {
+    const all = await sentMap();
+    all[dataSourceId] = { ...(all[dataSourceId] || {}), [key]: { id: page.id, url: page.url || "" } };
+    await chrome.storage.local.set({ [SENT_KEY]: all });
+  }
+  // Older connections: add the 프롬프트 키 column once.
+  async function ensureKeyColumn(cfg) {
+    if (cfg.keyColumn) return;
+    try {
+      await call(cfg.token, "PATCH", `/data_sources/${cfg.dataSourceId}`, { properties: { [PROPS.key]: { rich_text: {} } } });
+      await setConfig({ keyColumn: true });
+      cfg.keyColumn = true;
+    } catch (error) {
+      void error;
+    }
+  }
+  // An existing page for this prompt: remembered here, or found in the
+  // database (pages sent from another Chrome profile count too).
+  async function findSamePrompt(cfg, key) {
+    const known = (await sentMap())[cfg.dataSourceId]?.[key];
+    if (known) return known;
+    if (!cfg.keyColumn) return null;
+    try {
+      const found = await call(cfg.token, "POST", `/data_sources/${cfg.dataSourceId}/query`, {
+        filter: { property: PROPS.key, rich_text: { equals: key } },
+        page_size: 1,
+      });
+      const page = found?.results?.[0];
+      if (page) {
+        const hit = { id: page.id, url: page.url || "" };
+        await rememberSent(cfg.dataSourceId, key, hit);
+        return hit;
+      }
+    } catch (error) {
+      void error;
+    }
+    return null;
+  }
+
+  // One send at a time, so ten pictures saved in a row can't race past the
+  // "already sent" check.
+  let sendChain = Promise.resolve();
+  function sendEntry(cfg, entry, bytes, options = {}) {
+    const run = sendChain.then(() => sendEntryNow(cfg, entry, bytes, options));
+    sendChain = run.catch(() => {});
+    return run;
+  }
+
   // entry: a 보관함 record; bytes: the PNG to upload (or null to skip the picture).
-  async function sendEntry(cfg, entry, bytes, { metaStripped = false } = {}) {
+  // Returns { id, url } of the new page, or { id, url, skipped: true } when
+  // the same prompt is already there and only the first picture goes up.
+  async function sendEntryNow(cfg, entry, bytes, { metaStripped = false } = {}) {
     if (!cfg.token || !cfg.dataSourceId) throw new Error("노션이 아직 연결되지 않았어요.");
     const meta = entry.meta || {};
+    await ensureKeyColumn(cfg);
+    const key = await promptKey(meta);
+    if (key && cfg.samePrompt !== "all") {
+      const same = await findSamePrompt(cfg, key);
+      if (same) return { ...same, skipped: true };
+    }
     const name = String(entry.name || "그림");
     const filename = `${name.replace(/[\\/:*?"<>|]/g, "_").slice(0, 150)}.${isWebpBytes(bytes) ? "webp" : "png"}`;
     let uploadId = null;
@@ -236,6 +309,7 @@
     if (tags.length) props[PROPS.tags] = { multi_select: tags.map((t) => ({ name: t.replace(/,/g, " ").slice(0, 100) })) };
     if (meta.model) props[PROPS.model] = { select: { name: String(meta.model).replace(/\s+[0-9A-F]{8}$/i, "").replace(/,/g, " ").slice(0, 100) } };
     if (meta.seed != null) props[PROPS.seed] = { number: Number(meta.seed) };
+    if (key && cfg.keyColumn) props[PROPS.key] = { rich_text: rich(key) };
     if (uploadId) props[PROPS.image] = { files: [{ type: "file_upload", file_upload: { id: uploadId }, name: filename }] };
 
     const children = [];
@@ -265,12 +339,14 @@
       properties: props,
       children: children.slice(0, 100),
     });
-    return { id: page.id, url: page.url || "" };
+    const made = { id: page.id, url: page.url || "" };
+    if (key) await rememberSent(cfg.dataSourceId, key, made);
+    return made;
   }
 
   const api = {
     VERSION, PROPS, CONFIG_KEY, getConfig, setConfig, clearConfig, hasPermission, requestPermission,
-    me, listTargets, createDatabase, prepareDataSource, sendEntry, tagsOf, promptText, rich,
+    me, listTargets, createDatabase, prepareDataSource, sendEntry, tagsOf, promptText, rich, promptKey,
   };
   root.NotionSync = api;
   if (typeof module === "object" && module.exports) module.exports = api;

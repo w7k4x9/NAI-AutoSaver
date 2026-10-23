@@ -459,7 +459,8 @@ async function autoSendToNotion(entry, bytes) {
       }
     }
     const page = await NotionSync.sendEntry(cfg, entry, upload, { metaStripped: stripped });
-    entry.notion = { id: page.id, url: page.url, at: Date.now() };
+    // skipped: the same prompt is already in Notion; link to that page.
+    entry.notion = { id: page.id, url: page.url, at: Date.now(), ...(page.skipped ? { samePrompt: true } : {}) };
     await LibDB.put(entry);
   } catch (error) {
     console.warn("notion auto send failed", error);
