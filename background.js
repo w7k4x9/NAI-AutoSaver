@@ -448,7 +448,11 @@ async function autoSendToNotion(entry, bytes) {
     if (!globalThis.NotionSync) return;
     const cfg = await NotionSync.getConfig();
     if (!cfg.autoSend || !cfg.token || !cfg.dataSourceId) return;
-    if (!(await NotionSync.hasPermission())) return;
+    if (!(await NotionSync.hasPermission())) {
+      // used to stop here without a word
+      await LibDB.setKv("notionLastError", { at: Date.now(), name: entry.name, message: "확장 프로그램의 노션 접속 허락이 꺼져 있어요. 보관함 → 노션 설정 → 「연결 확인」을 누르면 다시 허락할 수 있어요." });
+      return;
+    }
     let upload = bytes;
     let stripped = false;
     if (cfg.upload !== "original" && entry.hasMeta) {

@@ -344,9 +344,44 @@
     return made;
   }
 
+  // 「연결 확인」: every step the automatic send needs, with what went wrong.
+  // Writes one test row and removes it right away (proves we can write).
+  async function check(cfg) {
+    const steps = [];
+    const step = (ok, text) => { steps.push({ ok, text }); return ok; };
+    if (!cfg.token || !cfg.dataSourceId) return { ok: false, steps: [{ ok: false, text: "노션이 연결돼 있지 않아요." }] };
+    if (!step(await hasPermission(), "확장 프로그램이 노션에 접속하도록 허락됨")) return { ok: false, steps };
+    try {
+      await me(cfg.token);
+      step(true, "토큰이 맞음");
+    } catch (error) {
+      step(false, error.message);
+      return { ok: false, steps };
+    }
+    try {
+      const ds = await call(cfg.token, "GET", `/data_sources/${cfg.dataSourceId}`);
+      step(true, `데이터베이스를 찾음 (「${plain(ds.title) || cfg.title || ""}」)`);
+    } catch (error) {
+      step(false, error.message);
+      return { ok: false, steps };
+    }
+    try {
+      const page = await call(cfg.token, "POST", "/pages", {
+        parent: { type: "data_source_id", data_source_id: cfg.dataSourceId },
+        properties: { [cfg.titleName || PROPS.title]: { title: rich("연결 확인 (지워져요)") } },
+      });
+      await call(cfg.token, "PATCH", `/pages/${page.id}`, { in_trash: true }).catch(() => call(cfg.token, "PATCH", `/pages/${page.id}`, { archived: true }));
+      step(true, "새 줄을 쓸 수 있음");
+    } catch (error) {
+      step(false, `새 줄을 못 써요: ${error.message}`);
+      return { ok: false, steps };
+    }
+    return { ok: true, steps };
+  }
+
   const api = {
     VERSION, PROPS, CONFIG_KEY, getConfig, setConfig, clearConfig, hasPermission, requestPermission,
-    me, listTargets, createDatabase, prepareDataSource, sendEntry, tagsOf, promptText, rich, promptKey,
+    me, listTargets, createDatabase, prepareDataSource, sendEntry, tagsOf, promptText, rich, promptKey, check,
   };
   root.NotionSync = api;
   if (typeof module === "object" && module.exports) module.exports = api;

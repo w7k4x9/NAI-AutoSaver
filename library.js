@@ -284,15 +284,26 @@
 
   function renderBanner() {
     const banner = $(".banner");
-    if (false) {
+    const gone = state.pendingGone || [];
+    if (gone.length) {
+      // Pictures listed here whose files are no longer in the linked folder.
+      const folders = [...new Set(gone.map((e) => e.path.split("/").slice(0, -1).join("/")))];
       banner.hidden = false;
       banner.innerHTML = "";
       banner.append(
         el("div", { class: "banner-text" }, [
-          el("strong", { text: `프롬프트가 들어 있는 그림 ${state.shown.length.toLocaleString("ko-KR")}장` }),
-          el("span", { text: "공유하기 전에 메타데이터 지운 사본을 만들어 두세요." }),
+          el("strong", { text: `연결한 폴더에 없는 그림 ${gone.length.toLocaleString("ko-KR")}장이 목록에 남아 있어요` }),
+          el("span", { text: `예전에 보관함에 들어온 뒤 지워지거나 옮겨진 그림이에요 (${folders.slice(0, 3).join(", ")}${folders.length > 3 ? ` 외 ${folders.length - 3}곳` : ""}). 파일은 건드리지 않고 목록에서만 빼요.` }),
         ]),
-        el("button", { class: "btn small", type: "button", text: "전부 고르기", onclick: () => { state.sel = state.shown.map((e) => e.id); render(); } }),
+        el("button", { class: "btn small", type: "button", text: "목록에서 빼기", onclick: async () => {
+          const list = state.pendingGone || [];
+          state.pendingGone = null;
+          for (const e of list) await forget(e);
+          saveCull();
+          render();
+          renderFolderBox();
+          toast(`목록에서 ${list.length.toLocaleString("ko-KR")}장을 뺐어요.`, "ok");
+        } }),
       );
     } else {
       banner.hidden = true;
@@ -1824,7 +1835,7 @@
       state.root = handle;
       state.rootPerm = "granted";
       renderFolderBox();
-      void scanFolder();
+      void scanFolder().then(() => syncFolder({ quiet: true }));
       return true;
     } catch (error) {
       if (error?.name !== "AbortError") toast(`폴더를 열지 못했어요: ${error.message || error}`, "warn");
@@ -1972,6 +1983,7 @@
       // a big "missing" batch found in the background waits on the folder row
       state.pendingGone = massive && !dropped ? gone : null;
       renderFolderBox();
+      renderBanner();
       if (moved && !dropped) {
         saveCull();
         render();
@@ -2672,8 +2684,26 @@
     const last = notionAutoFailing()
       ? el("p", { class: "sheet-warn", text: `마지막 자동 보내기 실패 (${new Date(notionAuto.err.at).toLocaleString("ko-KR")} · ${notionAuto.err.name || ""}): ${notionAuto.err.message}` })
       : notionAuto.ok ? el("p", { class: "sheet-note", text: `마지막으로 자동으로 보낸 그림: ${notionAuto.ok.name || ""} (${new Date(notionAuto.ok.at).toLocaleString("ko-KR")})${notionAuto.ok.same ? " · 같은 프롬프트라 건너뜀" : ""}` }) : null;
+    const checkOut = el("div", { class: "nt-check", hidden: true });
+    const checkBtn = el("button", { class: "btn small", type: "button", text: "연결 확인" });
+    checkBtn.addEventListener("click", async () => {
+      checkBtn.disabled = true;
+      checkOut.hidden = false;
+      checkOut.textContent = "확인하는 중…";
+      // the click lets Chrome ask for the Notion permission again if it is off
+      if (!(await NotionSync.hasPermission())) await NotionSync.requestPermission().catch(() => false);
+      const result = await NotionSync.check(notionCfg);
+      checkOut.innerHTML = "";
+      for (const st of result.steps) checkOut.append(el("div", { class: "nt-step", "data-ok": String(st.ok), text: `${st.ok ? "✓" : "✕"} ${st.text}` }));
+      checkOut.append(el("p", { class: "sheet-note", text: result.ok
+        ? (notionCfg.autoSend ? "노션 쪽은 정상이에요. 이제 새로 저장되는 그림이 올라가요. (같은 프롬프트는 처음 1장만)" : "노션 쪽은 정상이에요. 위의 「자동으로 보내기」를 켜고 저장하면 올라가요.")
+        : "✕ 줄을 고치면 돼요. 토큰·권한 문제면 노션 연결을 끊고 다시 연결하는 게 가장 빨라요." }));
+      checkBtn.disabled = false;
+    });
     body.append(
       el("p", { class: "sheet-note", text: `연결된 곳: ${notionCfg.title || ""} · 노션에서 이름이나 아이콘을 바꿔도 괜찮아요.` }),
+      el("div", { class: "ios-group" }, [el("div", { class: "ios-row" }, [el("span", { class: "grow" }, [document.createTextNode("노션에 잘 들어가는지 확인"), el("small", { text: "시험 줄을 하나 썼다가 바로 지워요" })]), checkBtn])]),
+      checkOut,
       last,
       el("div", { class: "ios-group" }, [
         el("label", { class: "ios-row", for: "nt-auto" }, [el("span", { class: "grow", text: "새로 저장되는 그림 자동으로 보내기" }), auto]),
