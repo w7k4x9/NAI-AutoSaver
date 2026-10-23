@@ -415,6 +415,9 @@
         menu.append(el("button", { type: "button", role: "menuitem", text: notionReady() ? "노션에 보내기" : "노션에 보내기…", onclick: () => void sendToNotion([entry]) }));
       }
       menu.append(el("button", { type: "button", role: "menuitem", text: "파일 위치 복사", onclick: () => copyText(entry.path, "파일 위치를 복사했어요.") }));
+      for (const [label, run, danger] of fileMenuItems([entry])) {
+        menu.append(el("button", { type: "button", role: "menuitem", "data-danger": danger ? "true" : null, text: label, onclick: run }));
+      }
       if (entry.source !== "dropped") menu.append(el("button", { type: "button", role: "menuitem", "data-danger": "true", text: "보관함에서 빼기 (파일은 그대로)", onclick: () => void removeEntries([entry.id]) }));
       menu.addEventListener("click", (e) => {
         if (e.target.closest("button")) menu.remove();
@@ -513,6 +516,7 @@
       items.push([`프롬프트 복사 (${withPrompt.length}장)`, () => copyText(withPrompt.map(promptSummary).join("\n\n"), `${withPrompt.length}장의 프롬프트를 복사했어요.`)]);
     }
     if (notSent.length) items.push([notionReady() ? `노션에 보내기 (${notSent.length}장)` : "노션에 보내기…", () => void sendToNotion(notSent)]);
+    items.push(...fileMenuItems(entries).map(([label, run]) => [label, run]));
     if (items.length) body.prepend(el("div", { class: "multi-more" }, [menuButton(items)]));
     box.append(body, el("div", { class: "insp-foot" }, [shareCard(entries)]));
   }
@@ -973,6 +977,292 @@
     render();
     if (moved) toast(`${moved}장을 ${CULL_FOLDER} 폴더로 옮겼어요${failed.length ? ` · ${failed.length}장은 못 옮겼어요` : ""}.`, failed.length ? "warn" : "ok");
     else toast(`옮기지 못했어요${failed.length ? `: ${failed.slice(0, 2).join(", ")}${failed.length > 2 ? " …" : ""}` : ""}. 파일이 그 자리에 있는지 확인해 주세요.`, "warn");
+  }
+
+  // ------------------------------------------- 파일 다루기 (탐색기처럼) ---
+  // Works on the real files in the linked folder. Delete goes to a _휴지통
+  // folder (a browser cannot use the Windows Recycle Bin), with 되돌리기.
+  const TRASH_FOLDER = "_휴지통";
+  const UNSAFE_NAME = /[\\/:*?"<>|]/g;
+  function saveBaseFor(rel) {
+    const saveParts = state.saveFolder.split("/").filter(Boolean);
+    if (state.root.name === saveParts[saveParts.length - 1]) return [];
+    return saveParts.every((part, i) => rel[i] === part) ? saveParts : [];
+  }
+  async function locate(entry) {
+    const rel = relSegments(entry);
+    const dir = await dirAt(rel.slice(0, -1));
+    const name = rel[rel.length - 1];
+    return { rel, dir, name, handle: await dir.getFileHandle(name) };
+  }
+  // Moves a file handle into `toDir` as `name` (rename when toDir is its own folder).
+  async function moveFile(handle, fromDir, oldName, toDir, name) {
+    if (typeof handle.move === "function") {
+      await handle.move(toDir, name);
+      return;
+    }
+    const data = await (await handle.getFile()).arrayBuffer();
+    const writable = await (await toDir.getFileHandle(name, { create: true })).createWritable();
+    await writable.write(data);
+    await writable.close();
+    await fromDir.removeEntry(oldName);
+  }
+  // The library follows a file that moved inside the linked folder.
+  async function retarget(entry, newPath) {
+    const name = newPath.split("/").pop().replace(/\.(png|webp)$/i, "");
+    const moved = { ...entry, id: newPath, path: newPath, name, downloadId: null };
+    moved.char = LibDB.characterOf(name, newPath, state.saveFolder);
+    moved.search = LibDB.searchText(moved.meta, name);
+    await LibDB.put(moved);
+    await LibDB.remove(entry.id);
+    const at = state.entries.findIndex((e) => e.id === entry.id);
+    if (at >= 0) state.entries[at] = moved;
+    if (state.cull.has(entry.id)) {
+      state.cull.set(newPath, state.cull.get(entry.id));
+      state.cull.delete(entry.id);
+    }
+    const url = thumbUrls.get(entry.id);
+    if (url) {
+      thumbUrls.set(newPath, url);
+      thumbUrls.delete(entry.id);
+    }
+    state.sel = state.sel.map((id) => (id === entry.id ? newPath : id));
+    return moved;
+  }
+  // A file that left the linked folder: out of the library (its 셀렉 too).
+  async function forget(entry) {
+    await LibDB.remove(entry.id);
+    state.entries = state.entries.filter((e) => e.id !== entry.id);
+    state.cull.delete(entry.id);
+    const url = thumbUrls.get(entry.id);
+    if (url) URL.revokeObjectURL(url);
+    thumbUrls.delete(entry.id);
+    state.sel = state.sel.filter((id) => id !== entry.id);
+  }
+  const onDisk = (list) => list.filter((e) => e.source !== "dropped");
+
+  async function trashEntries(list) {
+    const files = onDisk(list);
+    if (!files.length) {
+      toast("불러온 파일은 폴더에 있는 파일이 아니라서 휴지통으로 보낼 게 없어요.", "warn");
+      return;
+    }
+    if (!(await ensureWritable())) {
+      toast("폴더를 고쳐도 된다는 허락이 있어야 지울 수 있어요.", "warn");
+      return;
+    }
+    const undo = [];
+    const failed = [];
+    for (const entry of files) {
+      try {
+        const { rel, dir, name, handle } = await locate(entry);
+        const base = saveBaseFor(rel);
+        const keep = rel.slice(base.length, -1); // e.g. 2026-10-23/루페르타
+        const to = await dirAt([...base, TRASH_FOLDER, ...keep], true);
+        const trashedName = await freeName(to, name);
+        await moveFile(handle, dir, name, to, trashedName);
+        undo.push({ entry, label: cullOf(entry.id).label || null, from: rel, to: [...base, TRASH_FOLDER, ...keep, trashedName] });
+        await forget(entry);
+      } catch (error) {
+        failed.push(entry.name);
+      }
+    }
+    saveCull();
+    render();
+    if (undo.length) {
+      toast(`${undo.length}장을 휴지통(${TRASH_FOLDER})으로 옮겼어요${failed.length ? ` · ${failed.length}장은 못 옮겼어요` : ""}.`, failed.length ? "warn" : "ok", { label: "되돌리기", run: () => void restoreTrashed(undo) });
+    } else {
+      toast("지우지 못했어요. 파일이 그 자리에 있는지 확인해 주세요.", "warn");
+    }
+  }
+  async function restoreTrashed(undo) {
+    let back = 0;
+    for (const u of undo) {
+      try {
+        const dir = await dirAt(u.to.slice(0, -1));
+        const handle = await dir.getFileHandle(u.to[u.to.length - 1]);
+        const toDir = await dirAt(u.from.slice(0, -1), true);
+        const name = await freeName(toDir, u.from[u.from.length - 1]);
+        await moveFile(handle, dir, u.to[u.to.length - 1], toDir, name);
+        const path = [state.root.name, ...u.from.slice(0, -1), name].join("/");
+        const restored = { ...u.entry, id: path, path, name: name.replace(/\.(png|webp)$/i, "") };
+        await LibDB.put(restored);
+        upsert(restored);
+        if (u.label) state.cull.set(path, { label: u.label });
+        back += 1;
+      } catch (error) {
+        void error;
+      }
+    }
+    saveCull();
+    render();
+    toast(back ? `${back}장을 제자리로 되돌렸어요.` : "되돌리지 못했어요.", back ? "ok" : "warn");
+  }
+
+  async function pickDestination(id) {
+    try {
+      return await window.showDirectoryPicker({ id, mode: "readwrite", startIn: state.root || "pictures" });
+    } catch (error) {
+      return null;
+    }
+  }
+  async function moveEntriesTo(list) {
+    const files = onDisk(list);
+    if (!files.length) {
+      toast("불러온 파일은 옮길 수 없어요. 「다른 폴더로 복사」를 써 주세요.", "warn");
+      return;
+    }
+    if (!(await ensureWritable())) {
+      toast("폴더를 고쳐도 된다는 허락이 있어야 옮길 수 있어요.", "warn");
+      return;
+    }
+    const dest = await pickDestination("nai-move-to");
+    if (!dest) return;
+    const inside = await state.root.resolve(dest).catch(() => null); // path inside the linked folder, or null
+    let moved = 0;
+    const failed = [];
+    for (let i = 0; i < files.length; i += 1) {
+      const entry = files[i];
+      if (files.length > 3) toast(`옮기는 중… ${i + 1} / ${files.length}`);
+      try {
+        const { dir, name, handle } = await locate(entry);
+        const target = await freeName(dest, name);
+        await moveFile(handle, dir, name, dest, target);
+        if (inside) await retarget(entry, [state.root.name, ...inside, target].join("/"));
+        else await forget(entry);
+        moved += 1;
+      } catch (error) {
+        failed.push(entry.name);
+      }
+    }
+    saveCull();
+    render();
+    const where = inside ? `「${[state.root.name, ...inside].join("/")}」` : `「${dest.name}」 (연결한 폴더 밖이라 보관함에서는 빠져요)`;
+    toast(moved ? `${moved}장을 ${where}로 옮겼어요${failed.length ? ` · ${failed.length}장은 못 옮겼어요` : ""}.` : "옮기지 못했어요.", moved && !failed.length ? "ok" : "warn");
+  }
+  async function copyEntriesTo(list) {
+    if (!list.length) return;
+    const dest = await pickDestination("nai-copy-to");
+    if (!dest) return;
+    let made = 0;
+    const failed = [];
+    for (let i = 0; i < list.length; i += 1) {
+      const entry = list[i];
+      if (list.length > 3) toast(`복사하는 중… ${i + 1} / ${list.length}`);
+      try {
+        const file = await originalFile(entry, { ask: i === 0 });
+        if (!file) throw new Error("원본 없음");
+        const ext = /\.webp$/i.test(file.name) || entry.format === "webp" ? ".webp" : ".png";
+        const name = await freeName(dest, `${entry.name}${ext}`);
+        const writable = await (await dest.getFileHandle(name, { create: true })).createWritable();
+        await writable.write(await file.arrayBuffer());
+        await writable.close();
+        made += 1;
+      } catch (error) {
+        failed.push(entry.name);
+      }
+    }
+    toast(made ? `${made}장을 「${dest.name}」에 복사했어요${failed.length ? ` · ${failed.length}장은 못 했어요` : ""}.` : "복사하지 못했어요. 폴더를 연결했는지 확인해 주세요.", made && !failed.length ? "ok" : "warn");
+    if (made && state.root) void syncFolder({ quiet: true });
+  }
+  // Ctrl+C: the picture itself, ready to paste into Discord, Notion, … (as PNG).
+  async function copyPicture(entry) {
+    try {
+      const file = await originalFile(entry, { ask: true });
+      const source = file || entry.thumb;
+      if (!source) throw new Error("no picture");
+      const bitmap = await createImageBitmap(source);
+      const canvas = Object.assign(document.createElement("canvas"), { width: bitmap.width, height: bitmap.height });
+      canvas.getContext("2d").drawImage(bitmap, 0, 0);
+      bitmap.close?.();
+      const blob = await new Promise((r) => canvas.toBlob(r, "image/png"));
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+      toast(`그림을 복사했어요. 붙여 넣기(Ctrl+V) 하면 돼요${file ? " · 메타데이터는 빠져요" : " · 원본을 못 읽어서 작은 미리보기예요"}.`, "ok");
+    } catch (error) {
+      toast("그림을 복사하지 못했어요.", "warn");
+    }
+  }
+  function textDialog(title, value, okLabel, hint = "") {
+    const dialog = $(".dialog");
+    if (dialog.open) dialog.close();
+    dialog.classList.remove("sheet");
+    dialog.innerHTML = "";
+    return new Promise((resolve) => {
+      const input = el("input", { class: "dialog-input", type: "text", value, spellcheck: "false" });
+      const finish = (v) => { dialog.close(); dialog.classList.remove("alert"); resolve(v); };
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); finish(input.value); }
+      });
+      dialog.classList.add("alert");
+      dialog.append(
+        el("div", { class: "dialog-body" }, [el("strong", { text: title }), hint ? el("p", { text: hint }) : null, input]),
+        el("div", { class: "dialog-foot" }, [
+          el("button", { class: "btn secondary", type: "button", text: "취소", onclick: () => finish(null) }),
+          el("button", { class: "btn", type: "button", text: okLabel, onclick: () => finish(input.value) }),
+        ]),
+      );
+      dialog.addEventListener("cancel", () => { dialog.classList.remove("alert"); resolve(null); }, { once: true });
+      dialog.showModal();
+      input.focus();
+      input.select();
+    });
+  }
+  async function renameEntry(entry) {
+    if (!entry || entry.source === "dropped") return;
+    const raw = await textDialog("이름 바꾸기", entry.name, "바꾸기", "확장자(.webp/.png)는 그대로 둬요.");
+    const next = String(raw ?? "").replace(UNSAFE_NAME, "_").trim();
+    if (!next || next === entry.name) return;
+    if (!(await ensureWritable())) {
+      toast("폴더를 고쳐도 된다는 허락이 있어야 이름을 바꿀 수 있어요.", "warn");
+      return;
+    }
+    try {
+      const { rel, dir, name, handle } = await locate(entry);
+      const ext = (name.match(/\.(png|webp)$/i) || [".png"])[0];
+      const target = `${next}${ext}`;
+      const exists = await dir.getFileHandle(target).then(() => true, () => false);
+      if (exists) {
+        toast(`「${target}」이 이미 있어요. 다른 이름을 써 주세요.`, "warn");
+        return;
+      }
+      await moveFile(handle, dir, name, dir, target);
+      await retarget(entry, [state.root.name, ...rel.slice(0, -1), target].join("/"));
+      saveCull();
+      render();
+      toast(`「${next}」로 바꿨어요.`, "ok");
+    } catch (error) {
+      toast(`이름을 바꾸지 못했어요: ${error.message || error}`, "warn");
+    }
+  }
+  // The same file actions for the ⋯ menus and the right-click menu.
+  function fileMenuItems(entries) {
+    const files = onDisk(entries);
+    const one = entries.length === 1 ? entries[0] : null;
+    const items = [];
+    if (one) items.push(["그림 복사 (Ctrl+C)", () => void copyPicture(one)]);
+    if (one && files.length) items.push(["이름 바꾸기 (F2)", () => void renameEntry(one)]);
+    if (files.length) items.push([`다른 폴더로 이동…${entries.length > 1 ? ` (${files.length}장)` : ""}`, () => void moveEntriesTo(files)]);
+    items.push([`다른 폴더로 복사…${entries.length > 1 ? ` (${entries.length}장)` : ""}`, () => void copyEntriesTo(entries)]);
+    if (files.length) items.push([`휴지통으로 (Delete)${entries.length > 1 ? ` · ${files.length}장` : ""}`, () => void trashEntries(files)]);
+    return items;
+  }
+  function showContextMenu(x, y, entries) {
+    document.querySelectorAll(".menu.ctx").forEach((m) => m.remove());
+    const menu = el("div", { class: "menu ctx", role: "menu" });
+    const one = entries.length === 1 ? entries[0] : null;
+    const items = [];
+    if (one) items.push(["크게 보기 (Space)", () => openLightbox(one.id)]);
+    if (one?.downloadId != null) items.push(["폴더에서 보기", () => chrome.downloads.show(one.downloadId)]);
+    items.push(...fileMenuItems(entries));
+    const ids = onDisk(entries).map((e) => e.id);
+    if (ids.length) items.push([`보관함에서 빼기 (파일은 그대로)`, () => void removeEntries(ids)]);
+    for (const [label, run, danger] of items) {
+      menu.append(el("button", { type: "button", role: "menuitem", "data-danger": danger ? "true" : null, text: label, onclick: () => { menu.remove(); run(); } }));
+    }
+    document.body.append(menu);
+    const r = menu.getBoundingClientRect();
+    menu.style.left = `${Math.min(x, window.innerWidth - r.width - 8)}px`;
+    menu.style.top = `${Math.min(y, window.innerHeight - r.height - 8)}px`;
   }
 
   async function exportCulled(list, { byChar, clean }) {
@@ -1555,7 +1845,7 @@
   async function* walk(dir, prefix) {
     for await (const [name, handle] of dir.entries()) {
       if (name.startsWith(".")) continue;
-      if (handle.kind === "directory" && name === CULL_FOLDER) continue; // our own sorted copies
+      if (handle.kind === "directory" && (name === CULL_FOLDER || name === TRASH_FOLDER)) continue; // our own sorted copies, trash
       if (handle.kind === "directory") {
         yield* walk(handle, `${prefix}/${name}`);
       } else if (/\.(png|webp)$/i.test(name)) {
@@ -1564,7 +1854,7 @@
     }
   }
 
-  async function scanFolder() {
+  async function scanFolder({ quiet = false } = {}) {
     if (!state.root || state.scan) return;
     const known = new Set(await LibDB.keys());
     const knownSig = new Set(state.entries.filter((e) => e.bytes).map((e) => pictureSig(e.name, e.bytes)));
@@ -1606,11 +1896,100 @@
       const added = state.scan.added;
       state.scan = null;
       render();
-      toast(added ? `폴더에서 새 그림 ${added.toLocaleString("ko-KR")}장을 가져왔어요.` : "폴더의 그림은 이미 다 보관함에 있어요.");
+      if (!quiet || added) toast(added ? `폴더에서 새 그림 ${added.toLocaleString("ko-KR")}장을 가져왔어요.` : "폴더의 그림은 이미 다 보관함에 있어요.");
+      watchFolder();
     } catch (error) {
       state.scan = null;
       render();
       toast(`폴더를 훑다가 멈췄어요: ${error.message || error}`, "warn");
+    }
+  }
+
+  // ---- 폴더와 맞추기: what changed in the folder (탐색기에서 지우기·옮기기·새 파일)
+  // shows up here. Runs when the page comes back into view, every minute while
+  // it is visible, and right away where Chrome can watch the folder.
+  let syncing = false;
+  let lastSync = 0;
+  async function syncFolder({ quiet = true } = {}) {
+    if (!state.root || state.rootPerm !== "granted" || state.scan || syncing) return;
+    if (quiet && Date.now() - lastSync < 5000) return;
+    syncing = true;
+    lastSync = Date.now();
+    try {
+      const found = new Map(); // path inside the linked folder → handle
+      for await (const item of walk(state.root, state.root.name)) found.set(item.path.split("/").slice(1).join("/"), item);
+      if (!found.size) return; // an empty or unreachable folder never empties the library
+      const tops = new Set([...found.keys()].map((k) => k.split("/")[0]));
+      const covered = (rel) => rel.length > 1 && tops.has(rel[0]) && !rel.includes(CULL_FOLDER) && !rel.includes(TRASH_FOLDER);
+      const files = onDisk(state.entries);
+      const known = new Set();
+      const gone = [];
+      for (const e of files) {
+        const rel = relSegments(e);
+        const key = rel.join("/");
+        known.add(key);
+        if (covered(rel) && !found.has(key)) gone.push(e);
+      }
+      // Same name + size showing up elsewhere = the file was moved: follow it.
+      const goneBySig = new Map();
+      for (const e of gone) if (e.bytes) goneBySig.set(pictureSig(e.name, e.bytes), e);
+      const fresh = [...found.entries()].filter(([key]) => !known.has(key));
+      let moved = 0;
+      const rest = [];
+      for (const [key, item] of fresh) {
+        const name = key.split("/").pop().replace(/\.(png|webp)$/i, "");
+        let size = -1;
+        try { size = (await item.handle.getFile()).size; } catch (error) { continue; }
+        const match = goneBySig.get(pictureSig(name, size));
+        if (match) {
+          goneBySig.delete(pictureSig(name, size));
+          gone.splice(gone.indexOf(match), 1);
+          await retarget(match, `${state.root.name}/${key}`);
+          moved += 1;
+        } else {
+          rest.push(item);
+        }
+      }
+      // Many files missing at once looks like a drive/folder problem: ask first.
+      const coveredCount = files.filter((e) => covered(relSegments(e))).length;
+      const drop = async () => {
+        for (const e of gone) await forget(e);
+        saveCull();
+        render();
+      };
+      const massive = gone.length > 30 && gone.length > coveredCount * 0.3;
+      if (!massive) await drop();
+      if (moved || (!massive && gone.length)) {
+        saveCull();
+        render();
+      }
+      const parts = [];
+      if (moved) parts.push(`옮겨진 ${moved}장 따라감`);
+      if (gone.length && !massive) parts.push(`없어진 ${gone.length}장 뺌`);
+      if (parts.length) toast(`폴더에 맞췄어요 · ${parts.join(" · ")}`);
+      if (massive) toast(`폴더에서 ${gone.length}장이 한꺼번에 안 보여요. 드라이브나 폴더가 바뀐 거면 목록은 그대로 둘게요.`, "warn", { label: "목록에서 빼기", run: () => void drop() });
+      syncing = false;
+      if (rest.length) await scanFolder({ quiet: true }); // new files: the usual import (with progress)
+    } catch (error) {
+      void error; // permission gone, folder unplugged, …: try again next time
+    } finally {
+      syncing = false;
+    }
+  }
+  let folderObserver = null;
+  function watchFolder() {
+    if (!state.root || state.rootPerm !== "granted") return;
+    if (!folderObserver && typeof window.FileSystemObserver === "function") {
+      let t = null;
+      try {
+        folderObserver = new window.FileSystemObserver(() => {
+          clearTimeout(t);
+          t = setTimeout(() => void syncFolder(), 1500);
+        });
+        folderObserver.observe(state.root, { recursive: true }).catch(() => { folderObserver = null; });
+      } catch (error) {
+        folderObserver = null;
+      }
     }
   }
 
@@ -2619,6 +2998,21 @@
     document.addEventListener("click", (event) => {
       if (!event.target.closest(".menu-wrap")) document.querySelectorAll(".menu").forEach((m) => m.remove());
     });
+    $(".gallery").addEventListener("contextmenu", (event) => {
+      const tile = event.target.closest(".tile");
+      if (!tile) return;
+      event.preventDefault();
+      const id = tile.dataset.id;
+      if (!state.sel.includes(id)) {
+        state.sel = [id];
+        state.anchor = id;
+        updateSelectionLook();
+      }
+      showContextMenu(event.clientX, event.clientY, state.sel.map(byId).filter(Boolean));
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") document.querySelectorAll(".menu.ctx").forEach((m) => m.remove());
+    });
     document.addEventListener("keydown", (event) => {
       const typing = event.target.closest?.("input, textarea, [contenteditable]");
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
@@ -2639,6 +3033,17 @@
         return; // the viewer has its own keys
       } else if (!$(".compare").hidden) {
         return; // so does the compare view
+      } else if ($(".dialog").open) {
+        return;
+      } else if (state.sel.length && (event.key === "Delete" || ((event.metaKey || event.ctrlKey) && event.key === "Backspace"))) {
+        event.preventDefault();
+        void trashEntries(state.sel.map(byId).filter(Boolean));
+      } else if (state.sel.length === 1 && event.key === "F2") {
+        event.preventDefault();
+        void renameEntry(byId(state.sel[0]));
+      } else if (state.sel.length === 1 && (event.metaKey || event.ctrlKey) && event.code === "KeyC" && !String(window.getSelection?.() || "")) {
+        event.preventDefault();
+        void copyPicture(byId(state.sel[0]));
       } else if (cullAction(event) && state.sel.length) {
         event.preventDefault();
         applyCullAction(state.sel, cullAction(event));
@@ -2672,7 +3077,10 @@
         });
       }
     });
-    if (state.root && state.rootPerm === "granted") void scanFolder();
+    if (state.root && state.rootPerm === "granted") void scanFolder().then(() => syncFolder({ quiet: true }));
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) void syncFolder(); });
+    window.addEventListener("focus", () => void syncFolder());
+    setInterval(() => { if (!document.hidden) void syncFolder(); }, 60000);
     if (location.hash.includes("notion")) void (notionReady() ? openNotionSettings() : openNotionConnect());
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area === "local" && changes[NotionSync.CONFIG_KEY]) {
