@@ -107,6 +107,14 @@
     censored: { title: "검열 사본", icon: "shield", test: (e) => e.source === "censored" },
   };
   function navTest(nav) {
+    if (nav.startsWith("cull:")) {
+      const want = nav.slice(5);
+      return want === "none" ? (e) => !cullOf(e.id).label : (e) => cullOf(e.id).label === want;
+    }
+    if (nav.startsWith("rating:")) {
+      const min = Number(nav.slice(7)) || 1;
+      return (e) => (cullOf(e.id).rating || 0) >= min;
+    }
     if (nav.startsWith("char:")) {
       const name = nav.slice(5);
       return (e) => e.char === name;
@@ -114,6 +122,8 @@
     return NAV[nav]?.test || NAV.all.test;
   }
   function navTitle(nav) {
+    if (nav.startsWith("cull:")) return nav === "cull:none" ? "안 고른 그림" : LABELS[nav.slice(5)] || "셀렉";
+    if (nav.startsWith("rating:")) return `별점 ${nav.slice(7)}개 이상`;
     return nav.startsWith("char:") ? nav.slice(5) || "이름 없음" : NAV[nav]?.title || "전체";
   }
 
@@ -129,6 +139,7 @@
       const count = all.filter(NAV[key].test).length;
       nav.append(navButton(key, NAV[key].title, NAV[key].icon, count));
     }
+    renderCullNav(all);
     const chars = new Map();
     for (const e of all) {
       if (e.char) chars.set(e.char, (chars.get(e.char) || 0) + 1);
@@ -263,6 +274,9 @@
       if (url) img.append(el("img", { src: url, alt: "", loading: "lazy", decoding: "async" }));
       if (entry.source === "censored") img.append(el("span", { class: "tile-badge censored", html: `${icon("shield", 12)}검열`, title: "검열 사본" }));
       else if (!entry.hasMeta) img.append(el("span", { class: "tile-badge", html: `${icon("shield", 12)}사본`, title: "메타데이터 없음" }));
+      img.append(el("span", { class: "tile-cull", html: tileCullHtml(entry.id) }));
+      const cullLabel = cullOf(entry.id).label;
+      if (cullLabel) tile.dataset.cull = cullLabel;
       const check = el("button", { class: "tile-check", type: "button", "aria-label": `여러 장 고르기: ${entry.name}`, "aria-pressed": String(on), html: icon("check", 15) });
       box.append(img, check);
       tile.append(box, el("span", { class: "tile-name", text: entry.name }));
@@ -375,7 +389,11 @@
       ]),
       menuWrap,
     ]));
-
+    body.append(cullControls([entry.id]));
+    const group = groupMembers(entry);
+    if (group.length > 1) {
+      body.append(el("button", { class: "btn secondary small cmp-open", type: "button", html: `${icon("grid", 14)}<span>같은 이름 ${group.length}장 비교하기</span>`, title: "이름이 같은 그림을 나란히 놓고 골라요 (C)", onclick: () => openCompare(group.map((e) => e.id), { group: groupKeyOf(entry) }) }));
+    }
 
     const ps = parts(entry);
     if (ps.length) {
@@ -444,6 +462,8 @@
       stack,
       el("div", { class: "multi-title", text: `${entries.length}장 골랐어요` }),
       el("div", { class: "multi-sub", html: "⌘/Ctrl을 누른 채 클릭하면 더하고 빼요.<br>Shift는 범위, 빈 곳을 끌면 상자로 골라요." }),
+      cullControls(entries.map((e) => e.id)),
+      el("button", { class: "btn small cmp-open", type: "button", html: `${icon("grid", 14)}<span>${entries.length}장 나란히 비교하기</span>`, title: "고른 그림을 나란히 놓고 채택·탈락을 골라요 (C)", onclick: () => openCompare(entries.map((e) => e.id)) }),
       el("div", { class: "grow" }),
     );
     const withPrompt = entries.filter((e) => parts(e).length);
@@ -557,6 +577,7 @@
     const img = $(".lb-img");
     const ids = state.shown.map((e) => e.id);
     $(".lb-name").textContent = entry.name;
+    $(".lb-cull").innerHTML = cullSummaryHtml(id);
     $(".lb-count").textContent = ids.length > 1 ? `${ids.indexOf(id) + 1} / ${ids.length}` : "";
     box.dataset.actual = "false";
     if (lb.url) URL.revokeObjectURL(lb.url);
@@ -607,10 +628,334 @@
     document.addEventListener("keydown", (event) => {
       if (box.hidden) return;
       event.stopImmediatePropagation();
+      const action = cullAction(event);
+      if (action && lb.id) {
+        event.preventDefault();
+        applyCullAction([lb.id], action);
+        $(".lb-cull").innerHTML = cullSummaryHtml(lb.id);
+        if ("label" in action && action.label) setTimeout(() => stepLightbox(1), 120); // keep going, like a culling viewer
+        return;
+      }
       if (event.key === "Escape" || event.key === " ") { event.preventDefault(); closeLightbox(); }
       else if (event.key === "ArrowRight" || event.key === "ArrowDown") { event.preventDefault(); stepLightbox(1); }
       else if (event.key === "ArrowLeft" || event.key === "ArrowUp") { event.preventDefault(); stepLightbox(-1); }
     });
+  }
+
+  // ---------------------------------------------------------------- 셀렉 ---
+  // Culling marks per picture: a label (채택 / 보류 / 탈락) and 0–5 stars. Kept in
+  // the library database next to the entries (not inside them, so re-reading a
+  // folder never wipes them). Keys follow the physical key so they also work
+  // while typing Korean: Q/P 채택, W 보류, E/X 탈락, R/U 지우기, 1–5 별점, 0 별점 지우기.
+  const LABELS = { pick: "채택", hold: "보류", reject: "탈락" };
+  const CULL_KV = "cull";
+  state.cull = new Map();
+  let cullTimer = null;
+  async function loadCull() {
+    try {
+      const saved = await LibDB.getKv(CULL_KV);
+      if (saved && typeof saved === "object") state.cull = new Map(Object.entries(saved));
+    } catch (error) {
+      void error;
+    }
+  }
+  function saveCull() {
+    clearTimeout(cullTimer);
+    cullTimer = setTimeout(() => { void LibDB.setKv(CULL_KV, Object.fromEntries(state.cull)).catch(() => {}); }, 200);
+  }
+  function cullOf(id) {
+    return state.cull.get(id) || {};
+  }
+  function setCull(ids, patch) {
+    for (const id of ids) {
+      const next = { ...cullOf(id), ...patch };
+      if (!next.label) delete next.label;
+      if (!next.rating) delete next.rating;
+      if (next.label || next.rating) state.cull.set(id, next);
+      else state.cull.delete(id);
+    }
+    saveCull();
+    refreshCullLook(ids);
+  }
+  // Pressing the label every picture already has clears it (same for stars).
+  function applyCullAction(ids, action) {
+    if (!ids.length || !action) return;
+    if ("label" in action) {
+      const same = action.label && ids.every((id) => cullOf(id).label === action.label);
+      setCull(ids, { label: same ? null : action.label });
+    } else {
+      const same = action.rating && ids.every((id) => cullOf(id).rating === action.rating);
+      setCull(ids, { rating: same ? 0 : action.rating });
+    }
+  }
+  function cullAction(event) {
+    if (event.metaKey || event.ctrlKey || event.altKey) return null;
+    const code = event.code || "";
+    if (code === "KeyQ" || code === "KeyP") return { label: "pick" };
+    if (code === "KeyW") return { label: "hold" };
+    if (code === "KeyE" || code === "KeyX") return { label: "reject" };
+    if (code === "KeyR" || code === "KeyU") return { label: null };
+    const digit = code.match(/^(?:Digit|Numpad)([0-5])$/);
+    if (digit) return { rating: Number(digit[1]) };
+    if (code === "Backquote") return { rating: 0 };
+    return null;
+  }
+  const starText = (n) => "★".repeat(n);
+  function tileCullHtml(id) {
+    const c = cullOf(id);
+    return `${c.label ? `<span class="cull-pill" data-label="${c.label}">${LABELS[c.label]}</span>` : ""}${c.rating ? `<span class="cull-stars">${starText(c.rating)}</span>` : ""}`;
+  }
+  function cullSummaryHtml(id) {
+    const c = cullOf(id);
+    return tileCullHtml(id) || (c.label || c.rating ? "" : '<span class="cull-none">안 고름</span>');
+  }
+  function cullControls(ids) {
+    const all = (fn) => ids.length && ids.every(fn);
+    const wrap = el("div", { class: "cull-row" });
+    const seg = el("div", { class: "seg cull-seg", role: "group", "aria-label": "셀렉" });
+    for (const [label, key] of [["pick", "Q"], ["hold", "W"], ["reject", "E"]]) {
+      seg.append(el("button", {
+        type: "button", "data-label": label, "aria-pressed": String(all((id) => cullOf(id).label === label)),
+        title: `${LABELS[label]} (${key}) · 한 번 더 누르면 지워져요`, text: LABELS[label],
+        onclick: () => applyCullAction(ids, { label }),
+      }));
+    }
+    const stars = el("div", { class: "cull-stars-input", role: "group", "aria-label": "별점" });
+    const shown = ids.length && ids.every((id) => (cullOf(id).rating || 0) === (cullOf(ids[0]).rating || 0)) ? cullOf(ids[0]).rating || 0 : 0;
+    for (let n = 1; n <= 5; n += 1) {
+      stars.append(el("button", { type: "button", "data-on": String(n <= shown), title: `별 ${n}개 (${n})`, "aria-label": `별 ${n}개`, text: "★", onclick: () => applyCullAction(ids, { rating: n }) }));
+    }
+    wrap.append(seg, stars);
+    return wrap;
+  }
+  function refreshCullLook(ids) {
+    for (const id of ids) {
+      const tile = document.querySelector(`.tile[data-id="${CSS.escape(id)}"]`);
+      if (!tile) continue;
+      const label = cullOf(id).label;
+      if (label) tile.dataset.cull = label;
+      else delete tile.dataset.cull;
+      const badge = tile.querySelector(".tile-cull");
+      if (badge) badge.innerHTML = tileCullHtml(id);
+    }
+    renderCullNav(allEntries());
+    if (state.sel.some((id) => ids.includes(id))) renderInspector();
+    if (!$(".compare").hidden) renderCompare({ keepImages: true });
+  }
+  function renderCullNav(all) {
+    const nav = $(".nav-cull");
+    if (!nav) return;
+    nav.innerHTML = "";
+    const counts = { pick: 0, hold: 0, reject: 0 };
+    for (const e of all) {
+      const label = cullOf(e.id).label;
+      if (label) counts[label] += 1;
+    }
+    const icons = { pick: "check_circle", hold: "pause", reject: "close" };
+    for (const label of ["pick", "hold", "reject"]) nav.append(navButton(`cull:${label}`, LABELS[label], icons[label], counts[label]));
+    if (counts.pick + counts.hold + counts.reject) {
+      nav.append(navButton("cull:none", "안 고른 그림", "image", all.length - counts.pick - counts.hold - counts.reject));
+    }
+    const current = state.nav.startsWith("rating:") ? Number(state.nav.slice(7)) : 0;
+    const row = el("div", { class: "rating-filter", title: "별점이 이만큼 이상인 그림만 봐요" }, [el("span", { class: "label", text: "별점" })]);
+    for (let n = 1; n <= 5; n += 1) {
+      row.append(el("button", { type: "button", "data-on": String(n <= current), "aria-label": `별점 ${n}개 이상`, text: "★", onclick: () => setNav(current === n ? "all" : `rating:${n}`) }));
+    }
+    nav.append(row);
+  }
+
+  // ------------------------------------------------------------- 비교 ---
+  // Pictures side by side. Opened for the selected pictures, or for every
+  // picture with the same name (김춘자_교실 웃음 (1), (2)…), then mark them.
+  const cmp = { ids: [], focus: 0, filter: "all", group: null, urls: new Map(), token: 0 };
+  function groupKeyOf(entry) {
+    return LibDB.stripCounter(entry.name).trim();
+  }
+  function counterOf(entry) {
+    const m = String(entry.name).match(/\((\d+)\)\s*$/);
+    return m ? Number(m[1]) : 0;
+  }
+  function groupMembers(entry) {
+    const key = groupKeyOf(entry);
+    return allEntries().filter((e) => groupKeyOf(e) === key).sort((a, b) => counterOf(a) - counterOf(b) || a.savedAt - b.savedAt);
+  }
+  function groupsInView() {
+    const seen = new Map();
+    for (const e of state.shown || []) {
+      const key = groupKeyOf(e);
+      if (!seen.has(key)) seen.set(key, e);
+    }
+    return [...seen.entries()].filter(([, e]) => groupMembers(e).length > 1);
+  }
+  function compareVisible() {
+    return cmp.ids.filter((id) => {
+      const label = cullOf(id).label;
+      if (cmp.filter === "keep") return label !== "reject";
+      if (cmp.filter === "pick") return label === "pick";
+      return true;
+    });
+  }
+  function openCompare(ids, { group = null } = {}) {
+    if (ids.length < 2) return;
+    cmp.ids = ids.slice(0, 48);
+    cmp.group = group;
+    cmp.focus = 0;
+    $(".compare").hidden = false;
+    renderCompare();
+  }
+  function closeCompare() {
+    $(".compare").hidden = true;
+    cmp.token += 1;
+    for (const url of cmp.urls.values()) URL.revokeObjectURL(url);
+    cmp.urls.clear();
+    $(".cmp-grid").innerHTML = "";
+  }
+  function stepGroup(step) {
+    const groups = groupsInView();
+    if (!groups.length) return;
+    const at = groups.findIndex(([key]) => key === cmp.group);
+    const [key, entry] = groups[(at + step + groups.length) % groups.length];
+    openCompare(groupMembers(entry).map((e) => e.id), { group: key });
+  }
+  // Columns that make the pictures as big as possible in the space we have.
+  function bestColumns(n, width, height, aspect) {
+    let best = 1;
+    let bestSize = 0;
+    for (let cols = 1; cols <= n; cols += 1) {
+      const rows = Math.ceil(n / cols);
+      const w = width / cols;
+      const h = height / rows;
+      const size = Math.min(w, h * aspect);
+      if (size > bestSize) {
+        bestSize = size;
+        best = cols;
+      }
+    }
+    return best;
+  }
+  function renderCompare({ keepImages = false } = {}) {
+    const box = $(".compare");
+    const grid = $(".cmp-grid");
+    const visible = compareVisible();
+    cmp.focus = Math.max(0, Math.min(cmp.focus, visible.length - 1));
+    const counts = { pick: 0, hold: 0, reject: 0 };
+    for (const id of cmp.ids) {
+      const label = cullOf(id).label;
+      if (label) counts[label] += 1;
+    }
+    $(".cmp-title").textContent = cmp.group || `고른 ${cmp.ids.length}장`;
+    const groups = cmp.group ? groupsInView() : [];
+    const at = groups.findIndex(([key]) => key === cmp.group);
+    $(".cmp-sub").textContent = [`${visible.length} / ${cmp.ids.length}장`, `채택 ${counts.pick}`, `보류 ${counts.hold}`, `탈락 ${counts.reject}`, groups.length > 1 && at >= 0 ? `묶음 ${at + 1} / ${groups.length}` : ""].filter(Boolean).join(" · ");
+    box.querySelectorAll(".cmp-nav").forEach((b) => { b.hidden = !(groups.length > 1); });
+    box.querySelectorAll("[data-cmp-filter]").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.cmpFilter === cmp.filter)));
+    if (!visible.length) {
+      grid.style.gridTemplateColumns = "";
+      grid.innerHTML = `<div class="cmp-empty">${cmp.filter === "pick" ? "아직 채택한 그림이 없어요." : "보이는 그림이 없어요."}<br><button type="button" class="btn small" data-cmp-filter="all">전체 보기</button></div>`;
+      return;
+    }
+    const first = byId(visible[0]) || {};
+    const aspect = first.w && first.h ? first.w / first.h : 2 / 3;
+    const rect = grid.getBoundingClientRect();
+    const cols = bestColumns(visible.length, Math.max(200, rect.width - 24), Math.max(200, rect.height - 24), aspect);
+    const rows = Math.ceil(visible.length / cols);
+    grid.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
+    grid.style.gridTemplateRows = `repeat(${rows}, minmax(${rows > 4 ? "220px" : "0"}, 1fr))`;
+    const old = keepImages ? new Map([...grid.querySelectorAll(".cmp-cell")].map((c) => [c.dataset.id, c.querySelector("img")])) : new Map();
+    grid.innerHTML = "";
+    visible.forEach((id, i) => {
+      const entry = byId(id);
+      if (!entry) return;
+      const label = cullOf(id).label;
+      const cell = el("div", { class: "cmp-cell", "data-id": id, "data-focus": String(i === cmp.focus), "data-cull": label || null });
+      const img = old.get(id) || el("img", { src: cmp.urls.get(id) || thumbUrl(entry), alt: entry.name, draggable: "false" });
+      cell.append(img, el("div", { class: "cmp-cap" }, [
+        el("span", { class: "cmp-name", text: counterOf(entry) ? `(${counterOf(entry)})` : entry.name }),
+        el("span", { class: "tile-cull", html: tileCullHtml(id) }),
+      ]));
+      grid.append(cell);
+    });
+    if (!keepImages) void loadCompareOriginals(visible);
+    grid.querySelector('.cmp-cell[data-focus="true"]')?.scrollIntoView({ block: "nearest" });
+  }
+  async function loadCompareOriginals(ids) {
+    const token = (cmp.token += 1);
+    for (const id of ids) {
+      if (cmp.urls.has(id)) continue;
+      const entry = byId(id);
+      const file = entry ? await originalFile(entry, { ask: false }).catch(() => null) : null;
+      if (token !== cmp.token) return;
+      if (!file) continue;
+      const url = URL.createObjectURL(file);
+      cmp.urls.set(id, url);
+      const img = document.querySelector(`.cmp-cell[data-id="${CSS.escape(id)}"] img`);
+      if (img) img.src = url;
+    }
+  }
+  function bindCompare() {
+    const box = $(".compare");
+    $(".cmp-close").addEventListener("click", closeCompare);
+    $(".cmp-prev-group").addEventListener("click", () => stepGroup(-1));
+    $(".cmp-next-group").addEventListener("click", () => stepGroup(1));
+    box.addEventListener("click", (event) => {
+      const filter = event.target.closest("[data-cmp-filter]");
+      if (filter) {
+        cmp.filter = filter.dataset.cmpFilter;
+        renderCompare({ keepImages: true });
+        return;
+      }
+      const cell = event.target.closest(".cmp-cell");
+      if (cell) {
+        cmp.focus = compareVisible().indexOf(cell.dataset.id);
+        box.querySelectorAll(".cmp-cell").forEach((c) => { c.dataset.focus = String(c === cell); });
+      }
+    });
+    box.addEventListener("dblclick", (event) => {
+      const cell = event.target.closest(".cmp-cell");
+      if (cell) openLightbox(cell.dataset.id);
+    });
+    let resizeTimer = null;
+    window.addEventListener("resize", () => {
+      if (box.hidden) return;
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => renderCompare({ keepImages: true }), 120);
+    });
+    document.addEventListener("keydown", (event) => {
+      if (box.hidden || !$(".lightbox").hidden) return;
+      if (event.target.closest?.("input, textarea")) return;
+      const visible = compareVisible();
+      const action = cullAction(event);
+      if (action) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        const id = visible[cmp.focus];
+        if (!id) return;
+        applyCullAction([id], action);
+        // Marked: move on to the next picture (unless it just left the view).
+        if ("label" in action && action.label && compareVisible().includes(id)) cmp.focus = Math.min(cmp.focus + 1, compareVisible().length - 1);
+        renderCompare({ keepImages: true });
+        return;
+      }
+      const moves = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+      if (event.key in moves) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        cmp.focus = (cmp.focus + moves[event.key] + visible.length) % Math.max(1, visible.length);
+        renderCompare({ keepImages: true });
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        closeCompare();
+      } else if (event.key === "[" || event.key === "]") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        if (cmp.group) stepGroup(event.key === "]" ? 1 : -1);
+      } else if (event.key === " " && visible[cmp.focus]) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        openLightbox(visible[cmp.focus]);
+      }
+    }, true);
   }
 
   // ------------------------------------------------------------ selection ---
@@ -1717,7 +2062,7 @@
       state.query = q;
       $(".search-input").value = q;
     }
-    await Promise.all([loadEntries(), restoreFolder(), loadNotion()]);
+    await Promise.all([loadEntries(), restoreFolder(), loadNotion(), loadCull()]);
     // nothing selected at first: the first click shows that picture
     render();
 
@@ -1738,6 +2083,7 @@
     });
     $(".clear-sel").addEventListener("click", () => { state.sel = []; updateSelectionLook(); });
     bindLightbox();
+    bindCompare();
     bindMarquee();
     $(".open-files").addEventListener("click", () => $(".file-input").click());
     $(".file-input").addEventListener("change", (event) => {
@@ -1769,7 +2115,7 @@
       if (!event.target.closest(".menu-wrap")) document.querySelectorAll(".menu").forEach((m) => m.remove());
     });
     document.addEventListener("keydown", (event) => {
-      const typing = event.target.closest("input, textarea, [contenteditable]");
+      const typing = event.target.closest?.("input, textarea, [contenteditable]");
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
         event.preventDefault();
         $(".search-input").focus();
@@ -1786,6 +2132,19 @@
         updateSelectionLook();
       } else if (!$(".lightbox").hidden) {
         return; // the viewer has its own keys
+      } else if (!$(".compare").hidden) {
+        return; // so does the compare view
+      } else if (cullAction(event) && state.sel.length) {
+        event.preventDefault();
+        applyCullAction(state.sel, cullAction(event));
+      } else if (event.code === "KeyC" && !event.metaKey && !event.ctrlKey && state.sel.length) {
+        event.preventDefault();
+        if (state.sel.length > 1) openCompare(state.sel.slice());
+        else {
+          const entry = byId(state.sel[0]);
+          const group = entry ? groupMembers(entry) : [];
+          if (group.length > 1) openCompare(group.map((e) => e.id), { group: groupKeyOf(entry) });
+        }
       } else if (event.key === " " && state.sel.length) {
         event.preventDefault();
         openLightbox(state.sel[state.sel.length - 1]);

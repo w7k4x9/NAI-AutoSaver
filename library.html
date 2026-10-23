@@ -15,6 +15,8 @@
         <span class="brand-name">보관함</span>
       </div>
       <nav class="nav" aria-label="모아 보기"></nav>
+      <div class="side-label">셀렉</div>
+      <nav class="nav nav-cull" aria-label="셀렉"></nav>
       <div class="side-label">캐릭터</div>
       <nav class="nav nav-chars" aria-label="캐릭터"></nav>
       <div class="grow"></div>
@@ -58,12 +60,29 @@
   </div>
 
   <div class="lightbox" hidden role="dialog" aria-modal="true" aria-label="크게 보기">
-    <div class="lb-top"><span class="lb-name"></span><span class="lb-count"></span><button class="lb-close" type="button" aria-label="닫기" title="닫기 (Esc)">×</button></div>
+    <div class="lb-top"><span class="lb-name"></span><span class="lb-cull"></span><span class="lb-count"></span><button class="lb-close" type="button" aria-label="닫기" title="닫기 (Esc)">×</button></div>
     <div class="lb-stage"><img class="lb-img" alt=""></div>
     <button class="lb-nav lb-prev" type="button" aria-label="이전 그림">‹</button>
     <button class="lb-nav lb-next" type="button" aria-label="다음 그림">›</button>
     <div class="lb-note" hidden>작은 미리보기라 흐릿해요. 왼쪽 아래에서 NovelAI 폴더를 연결하면 원본 화질로 보여요.</div>
-    <div class="lb-hint">←/→ 넘기기 · 그림 누르면 실제 크기 · Esc 닫기</div>
+    <div class="lb-hint">←/→ 넘기기 · Q 채택 · W 보류 · E 탈락 · 1–5 별점 (고르면 다음 장) · 그림 누르면 실제 크기 · Esc 닫기</div>
+  </div>
+
+  <div class="compare" hidden role="dialog" aria-modal="true" aria-label="비교">
+    <div class="cmp-top">
+      <button class="cmp-nav cmp-prev-group" type="button" aria-label="이전 묶음" title="이전 묶음 ([)">‹</button>
+      <div class="cmp-titles"><span class="cmp-title"></span><span class="cmp-sub"></span></div>
+      <button class="cmp-nav cmp-next-group" type="button" aria-label="다음 묶음" title="다음 묶음 (])">›</button>
+      <span class="grow"></span>
+      <div class="cmp-seg" role="radiogroup" aria-label="보이는 그림">
+        <button type="button" role="radio" data-cmp-filter="all">전체</button>
+        <button type="button" role="radio" data-cmp-filter="keep" title="탈락은 빼고 봐요">탈락 빼기</button>
+        <button type="button" role="radio" data-cmp-filter="pick">채택만</button>
+      </div>
+      <button class="lb-close cmp-close" type="button" aria-label="닫기" title="닫기 (Esc)">×</button>
+    </div>
+    <div class="cmp-grid"></div>
+    <div class="cmp-hint">←/→ 고르기 · Q 채택 · W 보류 · E 탈락 · R 지우기 · 1–5 별점 · 두 번 누르면 크게 · Esc 닫기</div>
   </div>
 
   <div class="drop-overlay" hidden>

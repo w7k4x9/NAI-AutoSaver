@@ -84,7 +84,7 @@ button.conn-row:hover, .conn-act:hover { background: var(--hover); }
 
 /* toolbar */
 .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.toolbar { height: 56px; flex: 0 0 56px; border-bottom: 0.5px solid var(--border); display: grid; grid-template-columns: minmax(150px, 1fr) minmax(200px, 440px) minmax(150px, 1fr); align-items: center; gap: 12px; padding: 0 16px 0 22px; }
+.toolbar { height: 56px; flex: 0 0 56px; border-bottom: 0.5px solid var(--border); display: grid; grid-template-columns: minmax(120px, 1fr) minmax(180px, 440px) max-content; align-items: center; gap: 12px; padding: 0 16px 0 22px; }
 .tb-left { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
 .tb-right { display: flex; align-items: center; justify-content: flex-end; gap: 4px; min-width: 0; }
 .title { margin: 0; font-size: 16px; font-weight: 750; white-space: nowrap; }
@@ -429,3 +429,50 @@ body { word-break: keep-all; overflow-wrap: anywhere; }
 .lt-topic[data-done="true"] .lt-topic-end { color: var(--accent); }
 .lt-foot { margin: 12px 18px 16px; font-size: 12px; color: var(--text2); }
 .help-open[aria-expanded="true"] { color: var(--accent-text); }
+
+/* 셀렉: label pill + stars on tiles, controls in the inspector, sidebar filter */
+.tile-cull { position: absolute; left: 6px; bottom: 6px; display: flex; gap: 4px; align-items: center; pointer-events: none; }
+.tile-cull:empty { display: none; }
+.cull-pill { height: 18px; padding: 0 7px; border-radius: 9px; font-size: 11px; font-weight: 700; display: inline-flex; align-items: center; color: #fff; background: rgba(0,0,0,0.55); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+.cull-pill[data-label="pick"] { background: var(--accent-fill); }
+.cull-pill[data-label="hold"] { background: rgba(120,120,128,0.85); }
+.cull-pill[data-label="reject"] { background: rgba(0,0,0,0.6); color: rgba(255,255,255,0.8); }
+.cull-stars { height: 18px; padding: 0 6px; border-radius: 9px; font-size: 10.5px; letter-spacing: -1px; display: inline-flex; align-items: center; color: #FFCC00; background: rgba(0,0,0,0.55); }
+.tile[data-cull="reject"] .tile-img img { opacity: 0.32; }
+.cull-none { color: rgba(255,255,255,0.45); font-size: 12px; }
+.cull-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 2px 0 2px; }
+.cull-seg button[aria-pressed="true"] { background: var(--seg-on); color: var(--seg-on-text); font-weight: 650; box-shadow: 0 1px 2px rgba(0,0,0,0.2); }
+.cull-seg button[data-label="pick"][aria-pressed="true"] { background: var(--accent-fill); color: #fff; }
+.cull-stars-input { display: inline-flex; gap: 1px; }
+.cull-stars-input button, .rating-filter button { border: none; background: transparent; padding: 0 2px; font-size: 16px; line-height: 1; color: var(--text3); opacity: 0.45; cursor: pointer; }
+.cull-stars-input button[data-on="true"], .rating-filter button[data-on="true"] { color: #FFCC00; opacity: 1; }
+.cull-stars-input button:hover, .rating-filter button:hover { opacity: 1; }
+.rating-filter { display: flex; align-items: center; gap: 1px; padding: 4px 9px 2px; }
+.rating-filter .label { font-size: 13px; color: var(--text2); margin-right: auto; }
+.btn.cmp-open { align-self: flex-start; margin: 2px 0; }
+.lb-cull { display: inline-flex; gap: 6px; align-items: center; }
+.lb-cull .cull-pill, .lb-cull .cull-stars { height: 20px; }
+
+/* 비교: pictures side by side, dark like the viewer */
+.compare { position: fixed; inset: 0; z-index: 90; background: #0E0E10; color: #fff; display: flex; flex-direction: column; }
+.compare[hidden] { display: none; }
+.cmp-top { height: 52px; flex: 0 0 52px; display: flex; align-items: center; gap: 10px; padding: 0 12px 0 14px; }
+.cmp-titles { display: flex; flex-direction: column; min-width: 0; }
+.cmp-title { font-weight: 700; font-size: 14.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cmp-sub { font-size: 12px; color: rgba(255,255,255,0.55); font-variant-numeric: tabular-nums; }
+.cmp-nav { width: 30px; height: 30px; border: none; border-radius: 15px; background: rgba(255,255,255,0.1); color: #fff; font-size: 20px; line-height: 1; cursor: pointer; }
+.cmp-nav:hover { background: rgba(255,255,255,0.2); }
+.cmp-nav[hidden] { display: none; }
+.cmp-seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px; background: rgba(255,255,255,0.1); }
+.cmp-seg button { height: 26px; padding: 0 11px; border: none; border-radius: 6px; background: transparent; color: rgba(255,255,255,0.75); font: inherit; font-size: 12.5px; cursor: pointer; }
+.cmp-seg button[aria-checked="true"] { background: rgba(255,255,255,0.9); color: #111; font-weight: 650; }
+.cmp-grid { flex: 1; min-height: 0; display: grid; gap: 8px; padding: 4px 12px 34px; overflow: auto; }
+.cmp-cell { position: relative; min-width: 0; min-height: 0; border-radius: 10px; overflow: hidden; background: #18181B; display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.06); }
+.cmp-cell img { width: 100%; height: 100%; object-fit: contain; display: block; user-select: none; }
+.cmp-cell[data-focus="true"] { box-shadow: inset 0 0 0 3px var(--accent); }
+.cmp-cell[data-cull="reject"] img { opacity: 0.3; }
+.cmp-cap { position: absolute; left: 8px; right: 8px; bottom: 8px; display: flex; align-items: center; gap: 6px; pointer-events: none; }
+.cmp-cap .tile-cull { position: static; }
+.cmp-name { font-size: 11.5px; font-weight: 650; padding: 2px 7px; border-radius: 9px; background: rgba(0,0,0,0.55); color: rgba(255,255,255,0.85); }
+.cmp-empty { grid-column: 1 / -1; align-self: center; text-align: center; color: rgba(255,255,255,0.6); line-height: 2.2; }
+.cmp-hint { position: absolute; bottom: 9px; left: 0; right: 0; text-align: center; font-size: 11.5px; color: rgba(255,255,255,0.5); pointer-events: none; }

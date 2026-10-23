@@ -51,6 +51,14 @@
       ],
     },
     {
+      id: "cull", icon: "check_circle", title: "셀렉 · 비교", short: "잘 나온 그림 고르기 · 나란히 보기",
+      steps: [
+        { prep: ensureSelected, target: () => $(".cull-row"), empty: NO_PICTURE, title: "채택 · 보류 · 탈락 · 별점", body: "그림을 고르고 <b>Q 채택 · W 보류 · E 탈락</b>, 숫자 <b>1–5</b>로 별점을 줘요. 한 번 더 누르면 지워져요. 한글 입력 상태여도 돼요. 크게 보기에서 누르면 다음 장으로 넘어가요." },
+        { prep: ensureSelected, target: () => $(".cmp-open"), empty: "이름이 같은 그림이 두 장 이상이면(예: 김춘자_교실 웃음 (1), (2)…) 여기에 <b>같은 이름 비교하기</b>가 생겨요. 여러 장을 골라도 비교할 수 있어요.", title: "나란히 비교하기", body: "<b>같은 이름</b>(김춘자_교실 웃음 (1), (2)…)끼리, 또는 고른 그림끼리 나란히 놓고 봐요. ←/→로 옮기며 Q/W/E로 고르고, <b>탈락 빼기</b>를 켜면 떨어진 그림이 사라지면서 남은 그림이 커져요. <b>[ ]</b>로 다음 묶음." },
+        { target: () => $(".nav-cull"), title: "고른 것만 보기", body: "<b>채택 · 보류 · 탈락</b>이나 <b>별점</b>을 누르면 그 그림만 보여요. 채택만 띄워 놓고 <b>모두 선택</b> → 사본 만들기나 노션 보내기를 하면 편해요." },
+      ],
+    },
+    {
       id: "share", icon: "shield", title: "공유용 사본 만들기", short: "올리기 전에 프롬프트 지우기",
       steps: [
         { prep: ensureSelected, target: () => $(".share-card"), empty: NO_PICTURE, title: "왜 사본이 필요해요?", body: "NovelAI 그림 파일 안에는 <b>프롬프트 · 시드가 숨어 있어요.</b> 그대로 올리면 누구나 볼 수 있어서, 원본은 두고 정보를 지운 <b>사본</b>을 따로 만들어요." },
