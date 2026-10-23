@@ -6731,6 +6731,12 @@
         text = `오늘 ${todaySavedCount}장 저장`;
       }
       ui.activityText.innerHTML = text;
+      // Hover card: everything the one-line box may have to cut off.
+      if (ui.activityPop) {
+        ui.activityPop.innerHTML = info.running
+          ? (info.details || []).map(([k, v]) => `<span class="ias-ap-k">${escapeHtml(k)}</span><span class="ias-ap-v">${escapeHtml(v)}</span>`).join("")
+          : "";
+      }
       ui.activityBox.dataset.tone = tone;
       ui.activityBox.dataset.empty = text ? "false" : "true";
       ui.activityBox.title = "";
@@ -6996,20 +7002,36 @@
     const perImage = avgImageMs() || seedImageMs;
     const remaining = remainingImages();
     const eta = remaining != null && perImage ? formatEta(remaining * perImage) : "";
+    const etaText = eta ? `약 ${eta}` : "재는 중…";
     if (queueRun.active) {
       const item = queueRun.items[queueRun.index];
+      const next = queueRun.items[queueRun.index + 1];
+      const percent = overallPercent();
       return {
         running: true,
         title: item ? item.title : "대기열",
         sub: [`${completed}/${targetLabel}장`, `대기열 ${queueRun.index + 1}/${queueRun.items.length}`, eta ? `약 ${eta}` : ""].filter(Boolean).join(" · "),
-        percent: overallPercent(),
+        percent,
+        details: [
+          ["지금", item ? item.title : "대기열"],
+          ["이 항목", `${completed} / ${targetLabel}장`],
+          ["대기열", `${queueRun.index + 1} / ${queueRun.items.length}번째${percent != null ? ` · 전체 ${Math.round(percent)}%` : ""}`],
+          ["다음", next ? next.title : "없음 (마지막)"],
+          ["남은 시간", etaText],
+        ],
       };
     }
+    const title = (saveContext.baseName || "").trim() || "바로 생성";
     return {
       running: true,
-      title: (saveContext.baseName || "").trim() || "바로 생성",
+      title,
       sub: [`${completed}/${targetLabel}장`, eta ? `약 ${eta}` : ""].filter(Boolean).join(" · "),
       percent: currentItemPercent(),
+      details: [
+        ["지금", title],
+        ["진행", `${completed} / ${targetLabel}장`],
+        ["남은 시간", etaText],
+      ],
     };
   }
 
@@ -8310,10 +8332,10 @@
 
       .ias-toolbar-title { font-size: 15px; font-weight: 700; white-space: nowrap; }
       .ias-activity {
-        flex: 1; display: flex; justify-content: center; min-width: 0;
+        flex: 1; display: flex; justify-content: center; min-width: 0; position: relative;
       }
       .ias-activity-box {
-        width: min(280px, 100%); height: 28px; border-radius: 7px; background: var(--elev); border: 0.5px solid var(--border);
+        width: min(400px, 100%); height: 28px; border-radius: 7px; background: var(--elev); border: 0.5px solid var(--border);
         display: flex; flex-direction: column; overflow: hidden;
       }
       .ias-activity-line { flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 0 8px; font-size: 12px; color: var(--text2); min-width: 0; }
@@ -8325,6 +8347,16 @@
       .ias-activity-box[data-running="false"] { background: transparent; border-color: transparent; }
       .ias-activity-box[data-running="false"] .ias-activity-dot { display: none; }
       .ias-activity-box[data-running="false"] .ias-activity-line { color: var(--text3); }
+      .ias-activity-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .ias-activity-pop {
+        display: none; position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%); z-index: 30;
+        width: max-content; max-width: min(420px, 92%); padding: 10px 12px; border-radius: 10px;
+        background: var(--elev); border: 0.5px solid var(--border); box-shadow: 0 8px 28px rgba(0,0,0,0.22);
+        grid-template-columns: auto minmax(0, 1fr); column-gap: 12px; row-gap: 4px; font-size: 12.5px; cursor: default;
+      }
+      .ias-activity:hover .ias-activity-box[data-running="true"] + .ias-activity-pop { display: grid; }
+      .ias-ap-k { color: var(--text3); white-space: nowrap; }
+      .ias-ap-v { color: var(--text); word-break: break-all; }
 
       /* ---- toasts: one-off messages, never truncated ---- */
       .ias-main { position: relative; }
@@ -9047,6 +9079,8 @@
                   <div class="ias-activity-line"><span class="ias-activity-dot"></span><span class="ias-activity-text"></span></div>
                   <div class="ias-activity-bar"><span></span></div>
                 </div>
+                <div class="ias-activity-pop" role="tooltip">
+                </div>
               </div>
 
               <div class="ias-tb-actions" data-for="auto">
@@ -9684,6 +9718,7 @@
       toolbar: panelShadow.querySelector(".ias-toolbar"),
       toolbarTitle: panelShadow.querySelector(".ias-toolbar-title"),
       activityBox: panelShadow.querySelector(".ias-activity-box"),
+      activityPop: panelShadow.querySelector(".ias-activity-pop"),
       activityText: panelShadow.querySelector(".ias-activity-text"),
       activityBar: panelShadow.querySelector(".ias-activity-bar > span"),
       helpButton: panelShadow.querySelector(".ias-help-btn"),
