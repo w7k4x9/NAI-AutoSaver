@@ -130,6 +130,7 @@
   let activeTab = "auto";
   let editorExpanded = false;
   let panelFullscreen = false;
+  let panelCompact = false;
   let panelPosition = null;
   let panelSize = null;
   let statusTimer = null;
@@ -7591,8 +7592,37 @@
     persistUiState();
   }
 
+  function toggleCompact() {
+    panelCompact = !panelCompact;
+    if (panelCompact && panelFullscreen) {
+      panelFullscreen = false;
+      applyFullscreen();
+    }
+    if (panelCollapsed) {
+      setPanelCollapsed(false);
+    }
+    applyCompact();
+    persistUiState();
+  }
+
+  function applyCompact() {
+    if (!ui.shell) {
+      return;
+    }
+    ui.shell.dataset.compact = panelCompact ? "true" : "false";
+    if (ui.sideMin) {
+      ui.sideMin.title = panelCompact ? "원래 크기로" : "작게";
+      ui.sideMin.setAttribute("aria-label", ui.sideMin.title);
+    }
+    requestAnimationFrame(clampPanelIntoView);
+  }
+
   function toggleFullscreen() {
     panelFullscreen = !panelFullscreen;
+    if (panelFullscreen && panelCompact) {
+      panelCompact = false;
+      applyCompact();
+    }
     if (panelFullscreen && panelCollapsed) {
       setPanelCollapsed(false);
     }
@@ -7605,6 +7635,10 @@
       return;
     }
     ui.shell.dataset.fullscreen = panelFullscreen ? "true" : "false";
+    if (ui.sideFs) {
+      ui.sideFs.setAttribute("aria-label", panelFullscreen ? "전체화면 해제" : "전체화면");
+      ui.sideFs.title = panelFullscreen ? "전체화면 해제" : "전체화면";
+    }
     if (panelFullscreen) {
       // Let the fullscreen CSS drive the size; drop any manual width/height.
       if (ui.card) {
@@ -7619,7 +7653,7 @@
 
   function persistUiState() {
     void storageSet("local", {
-      [UI_STORAGE_KEY]: { collapsed: panelCollapsed, position: panelPosition, size: panelSize, fullscreen: panelFullscreen },
+      [UI_STORAGE_KEY]: { collapsed: panelCollapsed, position: panelPosition, size: panelSize, fullscreen: panelFullscreen, compact: panelCompact },
     });
   }
 
@@ -7859,19 +7893,20 @@
         display: flex; align-items: center; gap: 10px;
         min-width: 52px; height: 52px; padding: 0 14px 0 14px; border-radius: 26px;
         /* frosted glass: blur what is behind, thin bright rim, soft drop shadow */
-        background: var(--pill-bg); color: var(--pill-text); cursor: grab; border: none;
+        background: var(--pill-bg); color: var(--pill-text); cursor: grab;
         -webkit-backdrop-filter: blur(22px) saturate(180%); backdrop-filter: blur(22px) saturate(180%);
-        box-shadow: inset 0 1px 0 var(--pill-shine), 0 0 0 0.5px var(--pill-ring), 0 10px 30px rgba(0,0,0,0.28);
+        border: 1px solid var(--pill-ring); box-shadow: 0 6px 20px rgba(0,0,0,0.18);
         touch-action: none; user-select: none; font-size: 13px;
         transition: transform 0.12s ease;
       }
       .ias-fab[data-running="false"] { width: 52px; padding: 0; justify-content: center; }
       .ias-fab:active { cursor: grabbing; transform: scale(0.97); }
       .ias-fab[data-dragging="true"] { transform: scale(1.04); }
-      .ias-fab[data-alert="true"] { box-shadow: inset 0 1px 0 var(--pill-shine), 0 0 0 1px rgba(255,159,10,0.7), 0 10px 30px rgba(0,0,0,0.28); }
-      .ias-fab .ias-ic { color: var(--pill-icon, var(--accent)); }
-      .ias-shell[data-surface="dark"] { --pill-bg: rgba(255,255,255,0.13); --pill-ring: rgba(255,255,255,0.28); --pill-text: #FFFFFF; --pill-sub: rgba(235,235,245,0.66); --pill-shine: rgba(255,255,255,0.3); --pill-icon: #5AA9FF; }
-      .ias-shell[data-surface="light"] { --pill-bg: rgba(255,255,255,0.55); --pill-ring: rgba(0,0,0,0.08); --pill-text: #1D1D1F; --pill-sub: rgba(60,60,67,0.65); --pill-shine: rgba(255,255,255,0.8); --pill-icon: #007AFF; }
+      .ias-fab[data-alert="true"] { border-color: rgba(255,159,10,0.8); }
+      .ias-fab .ias-ic { color: #FFFFFF; }
+      /* white glyph everywhere: frosted light on dark pages, frosted dark on light ones */
+      .ias-shell[data-surface="dark"] { --pill-bg: rgba(255,255,255,0.14); --pill-ring: rgba(255,255,255,0.22); --pill-text: #FFFFFF; --pill-sub: rgba(235,235,245,0.66); }
+      .ias-shell[data-surface="light"] { --pill-bg: rgba(40,40,48,0.38); --pill-ring: rgba(255,255,255,0.35); --pill-text: #FFFFFF; --pill-sub: rgba(255,255,255,0.75); }
       .ias-pill-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; max-width: 240px; text-align: left; }
       .ias-pill-title { font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .ias-pill-sub { font-size: 12px; color: var(--pill-sub); white-space: nowrap; }
@@ -7882,6 +7917,10 @@
       .ias-shell[data-fullscreen="true"] { inset: 0 !important; right: auto; bottom: auto; }
       .ias-shell[data-fullscreen="true"] .ias-card { width: calc(100vw - 24px) !important; height: calc(100vh - 24px) !important; margin: 12px; }
       .ias-shell[data-fullscreen="true"] .ias-edge { display: none; }
+
+      /* ---- compact ---- */
+      .ias-shell[data-compact="true"] .ias-card { width: min(470px, calc(100vw - 32px)) !important; height: min(430px, calc(100vh - 40px)) !important; }
+      .ias-shell[data-compact="true"] .ias-edge { display: none; }
       .ias-shell[data-collapsed="true"][data-fullscreen="true"] { inset: auto !important; right: 20px !important; bottom: 20px !important; }
 
 
@@ -7910,10 +7949,18 @@
       /* ---- sidebar ---- */
       .ias-side {
         display: flex; flex-direction: column; min-height: 0;
-        padding: 14px 10px 12px; background: var(--side); border-right: 0.5px solid var(--border);
+        padding: 16px 10px 12px; background: var(--side); border-right: 0.5px solid var(--border);
         cursor: grab; touch-action: none; user-select: none; overflow: hidden;
       }
       .ias-side:active { cursor: grabbing; }
+      /* macOS window buttons: plain coloured dots, no glyphs */
+      .ias-lights { display: flex; gap: 8px; padding: 0 8px 20px; }
+      .ias-light { width: 12px; height: 12px; border-radius: 6px; border: none; padding: 0; cursor: pointer; }
+      .ias-light:hover { filter: brightness(0.92); }
+      .ias-light[data-c="red"] { background: #FF5F57; }
+      .ias-light[data-c="yellow"] { background: #FEBC2E; }
+      .ias-light[data-c="green"] { background: #28C840; }
+      .ias-shell[data-theme="light"] .ias-light { box-shadow: inset 0 0 0 0.5px rgba(0,0,0,0.15); }
       .ias-tabs { display: flex; flex-direction: column; gap: 1px; }
       .ias-tab, .ias-side-btn {
         width: 100%; height: 28px; display: flex; align-items: center; gap: 8px; padding: 0 10px;
@@ -7930,6 +7977,7 @@
       .ias-side-foot { margin-top: auto; display: flex; flex-direction: column; gap: 1px; }
       @container iaswin (max-width: 600px) {
         .ias-side.ias-side { width: 56px; padding-left: 8px; padding-right: 8px; }
+        .ias-lights { gap: 5px; justify-content: center; padding: 0 0 16px; }
         .ias-side-label { display: none; }
         .ias-tab, .ias-side-btn { justify-content: center; padding: 0; height: 34px; }
         .ias-tab-label, .ias-tab-badge { display: none; }
@@ -7942,14 +7990,7 @@
         border-bottom: 0.5px solid var(--border); cursor: grab; touch-action: none; user-select: none;
       }
       .ias-toolbar:active { cursor: grabbing; }
-      /* iOS-style close: a soft grey disc with the mark, same in both themes */
-      .ias-tb-close {
-        width: 26px; height: 26px; flex: 0 0 26px; margin-left: 2px; margin-right: -4px; border: none; border-radius: 13px; padding: 0;
-        display: flex; align-items: center; justify-content: center; cursor: pointer;
-        background: var(--elev2); color: var(--text2);
-      }
-      .ias-tb-close:hover { color: var(--text); }
-      .ias-tb-close:active { transform: scale(0.94); }
+
       .ias-toolbar-title { font-size: 15px; font-weight: 700; white-space: nowrap; }
       .ias-activity {
         flex: 1; display: flex; justify-content: center; min-width: 0;
@@ -8636,6 +8677,11 @@
         <button class="ias-fab" type="button" data-running="false" title="NAI 자동저장"></button>
         <div class="ias-card">
           <aside class="ias-side" title="빈 곳이나 위쪽 막대를 잡고 끌면 창을 옮길 수 있어요">
+            <div class="ias-lights">
+              <button class="ias-light ias-side-close" data-c="red" type="button" aria-label="접기" title="접기"></button>
+              <button class="ias-light ias-side-min" data-c="yellow" type="button" aria-label="작게" title="작게"></button>
+              <button class="ias-light ias-side-fs" data-c="green" type="button" aria-label="전체화면" title="전체화면"></button>
+            </div>
             <div class="ias-tabs">
               ${sideTab("auto", { active: true })}
               ${sideTab("gen")}
@@ -8706,7 +8752,6 @@
                   <input class="ias-memo-import-file" type="file" accept="application/json,.json" hidden>
                 </div>
               </div>
-              <button class="ias-tb-close" type="button" aria-label="패널 접기" title="접기 · 오른쪽 아래 버튼으로 다시 열어요">${icon("close", 13)}</button>
             </div>
             <div class="ias-alert" role="alert" hidden>
               ${icon("warning", 17)}
@@ -8935,7 +8980,9 @@
   }
 
   function bindEvents() {
-    ui.tbClose.addEventListener("click", () => setPanelCollapsed(true));
+    ui.sideClose.addEventListener("click", () => setPanelCollapsed(true));
+    ui.sideMin?.addEventListener("click", toggleCompact);
+    ui.sideFs?.addEventListener("click", toggleFullscreen);
     for (const button of ui.appearanceButtons || []) {
       button.addEventListener("click", () => {
         appearance = normalizeAppearance(button.dataset.appearance);
@@ -9268,7 +9315,9 @@
       sidebar: panelShadow.querySelector(".ias-side"),
       tabs: Array.from(panelShadow.querySelectorAll(".ias-tab")),
       panes: Array.from(panelShadow.querySelectorAll(".ias-pane")),
-      tbClose: panelShadow.querySelector(".ias-tb-close"),
+      sideClose: panelShadow.querySelector(".ias-side-close"),
+      sideMin: panelShadow.querySelector(".ias-side-min"),
+      sideFs: panelShadow.querySelector(".ias-side-fs"),
       card: panelShadow.querySelector(".ias-card"),
       edges: Array.from(panelShadow.querySelectorAll(".ias-edge")),
       toolbar: panelShadow.querySelector(".ias-toolbar"),
@@ -9393,8 +9442,10 @@
     const startCollapsed = stored.collapsed !== false;
     // Collapsed + fullscreen is the click-swallowing combo; never restore into it.
     panelFullscreen = Boolean(stored.fullscreen) && !startCollapsed;
+    panelCompact = Boolean(stored.compact) && !panelFullscreen;
     setPanelCollapsed(startCollapsed);
     applyFullscreen();
+    applyCompact();
 
     let recoveryMessage = "";
     try {
