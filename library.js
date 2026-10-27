@@ -258,7 +258,7 @@
     const terms = parseQuery(state.query);
     const test = navTest(state.nav);
     const cullTest = state.cullNav ? navTest(state.cullNav) : () => true;
-    state.shown = sortShown(allEntries().filter((e) => test(e) && cullTest(e) && matches(e, terms)));
+    state.shown = sortShown(allEntries().filter((e) => !state.hiding.has(e.id) && test(e) && cullTest(e) && matches(e, terms)));
     renderSortButton();
     const visible = new Set(state.shown.map((e) => e.id));
     state.sel = state.sel.filter((id) => visible.has(id));
@@ -273,7 +273,11 @@
     grid.innerHTML = "";
     grid.dataset.multi = String(state.sel.length > 1);
     state.rendered = 0;
-    renderMoreTiles();
+    grid.hidden = state.board;
+    $(".board").hidden = !state.board;
+    renderBoardButton();
+    if (state.board) renderBoard();
+    else renderMoreTiles();
     const empty = $(".empty");
     if (!state.shown.length) {
       empty.hidden = false;
@@ -371,6 +375,157 @@
       ]));
     }
     wrap.append(menu);
+  }
+
+  // ---- 셀렉 현황: 캐릭터마다 배경 × 표정 칸. A cell is one same-name group
+  // (루페르타 밤_기쁨 (1)…(28)); it is done once it has a 채택. Click a cell
+  // to 셀렉 it in 나란히.
+  const BOARD_KEY = "naiAutoSaver.libraryBoard";
+  state.board = false;
+  try {
+    state.board = localStorage.getItem(BOARD_KEY) === "1";
+  } catch (error) {
+    void error;
+  }
+  let comboNames = { bgs: [], emos: [], emoFirst: false };
+  async function loadComboNames() {
+    try {
+      const raw = (await chrome.storage.local.get("naiAutoSaver.generator"))["naiAutoSaver.generator"] || {};
+      const bgs = new Set();
+      const emos = [];
+      const addEmos = (text) => {
+        for (const line of String(text || "").split(/\n/)) {
+          const m = line.match(/^\s*([^=,{}\[\]]{1,30}?)\s*=/);
+          const name = m ? m[1].trim() : "";
+          if (name && !emos.includes(name)) emos.push(name);
+        }
+      };
+      for (const bg of raw.bgs || []) if (bg?.code?.trim()) bgs.add(bg.code.trim());
+      addEmos(raw.sharedExpressions);
+      for (const ch of raw.chars || []) {
+        for (const bg of ch.bgs || []) if (bg?.code?.trim()) bgs.add(bg.code.trim());
+        addEmos(ch.expressions);
+      }
+      // where 표정 sits against 배경 in the file name ("{캐릭터}_{표정} {배경}")
+      const n = raw.naming || {};
+      let emoFirst = false;
+      if (typeof n.template === "string" && n.template.trim()) {
+        const t = n.template;
+        const at = (re) => { const m = t.search(re); return m < 0 ? Infinity : m; };
+        emoFirst = at(/\{\s*(표정|감정|emo)\s*\}/i) < at(/\{\s*(배경|bg)\s*\}/i);
+      } else if (Array.isArray(n.nameOrder)) {
+        emoFirst = n.nameOrder.indexOf("emo") >= 0 && n.nameOrder.indexOf("emo") < n.nameOrder.indexOf("bg");
+      }
+      comboNames = { bgs: [...bgs].sort((a, b) => b.length - a.length), emos, emoFirst };
+    } catch (error) {
+      void error;
+    }
+  }
+  // 캐릭터 · 배경 · 표정 of a picture: saved with it (조합, from 1.15.7) or
+  // read back from its name ("루페르타 밤_기쁨 (3)").
+  function axesOf(entry) {
+    const char = entry.char || entry.axes?.char || "";
+    if (entry.axes?.emo) return { char, bg: entry.axes.bg || "", emo: entry.axes.emo };
+    const key = groupKeyOf(entry);
+    let rest = char && key.startsWith(char) ? key.slice(char.length) : key;
+    rest = rest.replace(/^[\s_-]+/, "");
+    const sep = (text, at) => at >= text.length || /[\s_-]/.test(text[at]);
+    const clean = (text) => text.replace(/^[\s_-]+|[\s_-]+$/g, "");
+    for (const bg of comboNames.bgs) {
+      if (!comboNames.emoFirst && rest.startsWith(bg) && sep(rest, bg.length)) return { char, bg, emo: clean(rest.slice(bg.length)) || "—" };
+      if (comboNames.emoFirst && rest.endsWith(bg) && (rest.length === bg.length || /[\s_-]/.test(rest[rest.length - bg.length - 1]))) return { char, bg, emo: clean(rest.slice(0, -bg.length)) || "—" };
+    }
+    const m = rest.match(/^(.+?)[_\s-]+(.+)$/);
+    if (m) return comboNames.emoFirst ? { char, bg: m[2], emo: m[1] } : { char, bg: m[1], emo: m[2] };
+    return { char, bg: "", emo: rest || key };
+  }
+  function setBoard(on) {
+    state.board = Boolean(on);
+    try {
+      localStorage.setItem(BOARD_KEY, state.board ? "1" : "0");
+    } catch (error) {
+      void error;
+    }
+    render();
+    $(".gallery").scrollTop = 0;
+  }
+  function renderBoardButton() {
+    const btn = $(".board-btn");
+    if (!btn) return;
+    btn.setAttribute("aria-pressed", String(state.board));
+    // the board has no single picture to show, sort or select
+    document.querySelector(".app")?.toggleAttribute("data-board", state.board);
+    $(".sort-wrap").hidden = state.board;
+    $(".pick-all").hidden = state.board;
+    btn.innerHTML = state.board ? `${icon("grid", 15)}<span>그림으로 보기</span>` : `${icon("table", 15)}<span>셀렉 현황</span>`;
+  }
+  function renderBoard({ keepScroll = false } = {}) {
+    const board = $(".board");
+    const scroll = $(".gallery").scrollTop;
+    board.innerHTML = "";
+    // character → background → emotion → pictures (in the order they were made)
+    const chars = new Map();
+    const order = state.shown.slice().sort((a, b) => a.savedAt - b.savedAt);
+    for (const e of order) {
+      if (e.source === "dropped") continue;
+      const ax = axesOf(e);
+      const charKey = ax.char || "캐릭터 없음";
+      if (!chars.has(charKey)) chars.set(charKey, { bgs: [], emos: [], cells: new Map() });
+      const c = chars.get(charKey);
+      if (!c.bgs.includes(ax.bg)) c.bgs.push(ax.bg);
+      if (!c.emos.includes(ax.emo)) c.emos.push(ax.emo);
+      const cellKey = `${ax.bg}\u0000${ax.emo}`;
+      if (!c.cells.has(cellKey)) c.cells.set(cellKey, []);
+      c.cells.get(cellKey).push(e);
+    }
+    const emoRank = (name) => {
+      const at = comboNames.emos.indexOf(name);
+      return at < 0 ? 1e6 : at;
+    };
+    for (const [charName, c] of [...chars.entries()].sort((a, b) => a[0].localeCompare(b[0], "ko"))) {
+      // 표정 in the order of the combination screen; unknown ones after, as made
+      c.emos.sort((a, b) => emoRank(a) - emoRank(b));
+      let done = 0;
+      const table = el("div", { class: "bd-table", style: `--cols: ${c.bgs.length}` });
+      table.append(el("div", { class: "bd-corner", text: "표정" }));
+      for (const bg of c.bgs) table.append(el("div", { class: "bd-colhead", text: bg || "배경 없음" }));
+      for (const emo of c.emos) {
+        table.append(el("div", { class: "bd-rowhead", text: emo }));
+        for (const bg of c.bgs) {
+          const list = c.cells.get(`${bg}\u0000${emo}`) || [];
+          if (!list.length) {
+            table.append(el("div", { class: "bd-cell", "data-state": "none" }));
+            continue;
+          }
+          const counts = { pick: 0, hold: 0, reject: 0, none: 0 };
+          for (const e of list) counts[cullOf(e.id).label || "none"] += 1;
+          const picked = list.filter((e) => cullOf(e.id).label === "pick");
+          const st = picked.length ? "done" : counts.none === list.length ? "todo" : "doing";
+          if (picked.length) done += 1;
+          const cover = picked[0] || null;
+          const url = cover ? thumbUrl(cover) : "";
+          const ids = list.map((e) => e.id).join("\n");
+          const cell = el("button", { type: "button", class: "bd-cell", "data-state": st, "data-board-group": groupKeyOf(list[0]), "data-ids": ids, title: `${groupKeyOf(list[0])} · ${list.length}장` });
+          if (url) cell.append(el("img", { src: url, alt: "", loading: "lazy", draggable: "false" }));
+          const text = st === "done"
+            ? (picked.length > 1 ? `채택 ${picked.length}` : "")
+            : st === "doing" ? `${NONE_LABEL} ${counts.none} / ${list.length}` : `${list.length}장`;
+          cell.append(el("span", { class: "bd-badge", html: st === "done" ? `${icon("check", 12)}${text ? `<b>${text}</b>` : ""}` : text }));
+          table.append(cell);
+        }
+      }
+      const total = [...c.cells.keys()].length;
+      board.append(el("section", { class: "bd-char" }, [
+        el("div", { class: "bd-head" }, [
+          el("h2", { text: charName }),
+          el("span", { class: "bd-progress", text: `${total}칸 중 ${done}칸 셀렉 완료` }),
+          el("span", { class: "bd-bar" }, [el("i", { style: `width: ${total ? Math.round((done / total) * 100) : 0}%` })]),
+        ]),
+        table,
+      ]));
+    }
+    if (!chars.size) board.append(el("p", { class: "bd-empty", text: "보이는 그림이 없어요." }));
+    if (keepScroll) $(".gallery").scrollTop = scroll;
   }
 
   function renderBanner() {
@@ -1137,6 +1292,39 @@
     return moved;
   }
   // A file that left the linked folder: out of the library (its 셀렉 too).
+  // Our own file moves: the folder watcher sees them too, but the library
+  // already knows — no need to walk the whole folder again for them. Only
+  // these exact paths are skipped; a change made in 탐색기 still counts.
+  const ownPaths = new Map(); // path inside the linked folder → until when
+  function ownChange(...paths) {
+    const until = Date.now() + 15000;
+    for (const p of paths) if (p) ownPaths.set(Array.isArray(p) ? p.join("/") : p, until);
+  }
+  function isOwnChange(parts) {
+    const key = (parts || []).join("/");
+    const until = ownPaths.get(key);
+    if (until) ownPaths.delete(key); // each own change is skipped once
+    return Boolean(until && until > Date.now());
+  }
+  const selfOps = async (run) => run();
+  // Pictures on their way out (휴지통·옮기기): gone from the grid right away,
+  // while the files move in the background.
+  state.hiding = new Set();
+  async function forgetMany(list) {
+    const gone = new Set(list.map((e) => e.id));
+    for (const e of list) await LibDB.remove(e.id).catch(() => {});
+    state.entries = state.entries.filter((e) => !gone.has(e.id));
+    invalidateGroups();
+    dataVersion += 1;
+    for (const id of gone) {
+      state.cull.delete(id);
+      const url = thumbUrls.get(id);
+      if (url) URL.revokeObjectURL(url);
+      thumbUrls.delete(id);
+      state.hiding.delete(id);
+    }
+    state.sel = state.sel.filter((id) => !gone.has(id));
+  }
   async function forget(entry) {
     await LibDB.remove(entry.id);
     state.entries = state.entries.filter((e) => e.id !== entry.id);
@@ -1162,22 +1350,43 @@
     }
     const undo = [];
     const failed = [];
-    for (const entry of files) {
-      try {
-        const { rel, dir, name, handle } = await locate(entry);
-        const base = saveBaseFor(rel);
-        const keep = rel.slice(base.length, -1); // e.g. 2026-10-23/루페르타
-        const to = await dirAt([...base, TRASH_FOLDER, ...keep], true);
-        const trashedName = await freeName(to, name);
-        await moveFile(handle, dir, name, to, trashedName);
-        undo.push({ entry, label: cullOf(entry.id).label || null, from: rel, to: [...base, TRASH_FOLDER, ...keep, trashedName] });
-        await forget(entry);
-      } catch (error) {
-        failed.push(entry.name);
-      }
-    }
-    saveCull();
+    const done = [];
+    // gone from view at once; the files follow
+    for (const e of files) state.hiding.add(e.id);
+    const keepScroll = $(".gallery").scrollTop;
     render();
+    $(".gallery").scrollTop = keepScroll;
+    await selfOps(async () => {
+      for (let i = 0; i < files.length; i += 1) {
+        const entry = files[i];
+        if (files.length > 3) toast(`휴지통으로 옮기는 중… ${i + 1} / ${files.length}`);
+        try {
+          const { rel, dir, name, handle } = await locate(entry);
+          const base = saveBaseFor(rel);
+          const keep = rel.slice(base.length, -1); // e.g. 2026-10-23/루페르타
+          const to = await dirAt([...base, TRASH_FOLDER, ...keep], true);
+          const trashedName = await freeName(to, name);
+          ownChange(rel, [...base, TRASH_FOLDER, ...keep, trashedName]);
+          await moveFile(handle, dir, name, to, trashedName);
+          undo.push({ entry, label: cullOf(entry.id).label || null, from: rel, to: [...base, TRASH_FOLDER, ...keep, trashedName] });
+          done.push(entry);
+        } catch (error) {
+          failed.push(entry.name);
+          state.hiding.delete(entry.id); // still there: show it again
+        }
+      }
+    });
+    await forgetMany(done);
+    saveCull();
+    if (failed.length || state.board) {
+      const y = $(".gallery").scrollTop;
+      render();
+      $(".gallery").scrollTop = y;
+    } else {
+      renderSidebar();
+      renderPickBar();
+      renderInspector();
+    }
     if (undo.length) {
       toast(`${undo.length}장을 휴지통(${TRASH_FOLDER})으로 옮겼어요${failed.length ? ` · ${failed.length}장은 못 옮겼어요` : ""}.`, failed.length ? "warn" : "ok", { label: "되돌리기", run: () => void restoreTrashed(undo) });
     } else {
@@ -1192,6 +1401,7 @@
         const handle = await dir.getFileHandle(u.to[u.to.length - 1]);
         const toDir = await dirAt(u.from.slice(0, -1), true);
         const name = await freeName(toDir, u.from[u.from.length - 1]);
+        ownChange(u.to, [...u.from.slice(0, -1), name]);
         await moveFile(handle, dir, u.to[u.to.length - 1], toDir, name);
         const path = [state.root.name, ...u.from.slice(0, -1), name].join("/");
         const restored = { ...u.entry, id: path, path, name: name.replace(/\.(png|webp)$/i, "") };
@@ -1230,20 +1440,30 @@
     const inside = await state.root.resolve(dest).catch(() => null); // path inside the linked folder, or null
     let moved = 0;
     const failed = [];
-    for (let i = 0; i < files.length; i += 1) {
-      const entry = files[i];
-      if (files.length > 3) toast(`옮기는 중… ${i + 1} / ${files.length}`);
-      try {
-        const { dir, name, handle } = await locate(entry);
-        const target = await freeName(dest, name);
-        await moveFile(handle, dir, name, dest, target);
-        if (inside) await retarget(entry, [state.root.name, ...inside, target].join("/"));
-        else await forget(entry);
-        moved += 1;
-      } catch (error) {
-        failed.push(entry.name);
-      }
+    const out = [];
+    if (!inside) {
+      for (const e of files) state.hiding.add(e.id);
+      render();
     }
+    await selfOps(async () => {
+      for (let i = 0; i < files.length; i += 1) {
+        const entry = files[i];
+        if (files.length > 3) toast(`옮기는 중… ${i + 1} / ${files.length}`);
+        try {
+          const { rel, dir, name, handle } = await locate(entry);
+          const target = await freeName(dest, name);
+          ownChange(rel, inside ? [...inside, target] : null);
+          await moveFile(handle, dir, name, dest, target);
+          if (inside) await retarget(entry, [state.root.name, ...inside, target].join("/"));
+          else out.push(entry);
+          moved += 1;
+        } catch (error) {
+          failed.push(entry.name);
+          state.hiding.delete(entry.id);
+        }
+      }
+    });
+    await forgetMany(out);
     saveCull();
     render();
     const where = inside ? `「${[state.root.name, ...inside].join("/")}」` : `「${dest.name}」 (연결한 폴더 밖이라 보관함에서는 빠져요)`;
@@ -1334,6 +1554,7 @@
         toast(`「${target}」이 이미 있어요. 다른 이름을 써 주세요.`, "warn");
         return;
       }
+      ownChange(rel, [...rel.slice(0, -1), target]);
       await moveFile(handle, dir, name, dir, target);
       await retarget(entry, [state.root.name, ...rel.slice(0, -1), target].join("/"));
       saveCull();
@@ -1588,6 +1809,7 @@
   }
   function closeCompare() {
     $(".compare").hidden = true;
+    if (state.board) renderBoard({ keepScroll: true });
     cmp.token += 1;
     for (const url of cmp.urls.values()) URL.revokeObjectURL(url);
     cmp.urls.clear();
@@ -2144,9 +2366,15 @@
   // it is visible, and right away where Chrome can watch the folder.
   let syncing = false;
   let lastSync = 0;
+  let syncAgain = null;
   async function syncFolder({ quiet = true } = {}) {
-    if (!state.root || state.rootPerm !== "granted" || state.scan || syncing) return;
-    if (quiet && Date.now() - lastSync < 5000) return;
+    if (!state.root || state.rootPerm !== "granted") return;
+    if (state.scan || syncing || (quiet && Date.now() - lastSync < 5000)) {
+      // busy or just done: come back once instead of dropping the change
+      clearTimeout(syncAgain);
+      syncAgain = setTimeout(() => void syncFolder({ quiet }), Math.max(1000, 5000 - (Date.now() - lastSync)));
+      return;
+    }
     syncing = true;
     lastSync = Date.now();
     try {
@@ -2274,6 +2502,7 @@
             }
             if (r.type === "appeared" && r.changedHandle?.kind === "directory") continue; // its files report themselves
             if ((r.type === "disappeared" || r.type === "moved") && name.endsWith(".crdownload")) continue; // a download finishing
+            if ((r.type === "disappeared" || r.type === "moved") && (isOwnChange(parts) || isOwnChange(r.relativePathMovedFrom))) continue; // our own 휴지통·옮기기·이름 바꾸기
             full = true; // removed, moved, renamed, unknown: look at the whole folder
           }
           if (later.size) {
@@ -3277,7 +3506,7 @@
       state.query = q;
       $(".search-input").value = q;
     }
-    await Promise.all([loadEntries(), restoreFolder(), loadNotion(), loadCull()]);
+    await Promise.all([loadEntries(), restoreFolder(), loadNotion(), loadCull(), loadComboNames()]);
     await dropDuplicateEntries();
     // nothing selected at first: the first click shows that picture
     render();
@@ -3293,6 +3522,14 @@
       openLightbox(tile.dataset.id);
     });
     $(".sort-btn").addEventListener("click", openSortMenu);
+    $(".board-btn").addEventListener("click", () => setBoard(!state.board));
+    $(".board").addEventListener("click", (event) => {
+      const cell = event.target.closest("[data-board-group]");
+      if (!cell) return;
+      const ids = cell.dataset.ids.split("\n");
+      if (ids.length > 1) openCompare(ids, { group: cell.dataset.boardGroup });
+      else openLightbox(ids[0]);
+    });
     $(".pick-all").addEventListener("click", () => {
       while (state.rendered < state.shown.length) renderMoreTiles();
       state.sel = state.shown.map((e) => e.id);
@@ -3308,7 +3545,7 @@
       event.target.value = "";
     });
     new IntersectionObserver((list) => {
-      if (list.some((e) => e.isIntersecting) && state.rendered < state.shown.length) renderMoreTiles();
+      if (!state.board && list.some((e) => e.isIntersecting) && state.rendered < state.shown.length) renderMoreTiles();
     }, { root: $(".gallery"), rootMargin: "600px" }).observe($(".sentinel"));
 
     let dragDepth = 0;
@@ -3378,6 +3615,8 @@
         return; // so does the compare view
       } else if ($(".dialog").open) {
         return;
+      } else if (state.board) {
+        return; // the 현황 board has no picture to move to or mark
       } else if (state.sel.length && (event.key === "Delete" || ((event.metaKey || event.ctrlKey) && event.key === "Backspace"))) {
         event.preventDefault();
         void trashEntries(state.sel.map(byId).filter(Boolean));
@@ -3423,6 +3662,7 @@
     setInterval(() => { if (!folderObserver && !document.hidden) void syncFolder(); }, 300000);
     if (location.hash.includes("notion")) void (notionReady() ? openNotionSettings() : openNotionConnect());
     chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === "local" && changes["naiAutoSaver.generator"]) void loadComboNames().then(() => { if (state.board) renderBoard({ keepScroll: true }); });
       if (area === "local" && changes[NotionSync.CONFIG_KEY]) {
         void loadNotion().then(() => { renderNotionBox(); refreshNotionLast(); });
       }

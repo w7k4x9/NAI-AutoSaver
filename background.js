@@ -390,7 +390,7 @@ async function saveGeneratedImage(request) {
       else resolve(id);
     });
   });
-  if (converted.bytes) void indexSavedImage(converted.bytes, filename, downloadId);
+  if (converted.bytes) void indexSavedImage(converted.bytes, filename, downloadId, request.axes);
   return { ok: true, downloadId, filename, format: converted.ext, warning: converted.warning || null };
 }
 
@@ -424,7 +424,7 @@ async function finalDownloadPath(downloadId, requested) {
   return requested;
 }
 
-async function indexSavedImage(bytes, requested, downloadId) {
+async function indexSavedImage(bytes, requested, downloadId, axes = null) {
   try {
     if (!globalThis.LibDB || !NAIMeta.imageType(bytes)) return;
     const savedAt = Date.now();
@@ -434,6 +434,11 @@ async function indexSavedImage(bytes, requested, downloadId) {
     ]);
     if (!path) return;
     const entry = await LibDB.buildEntry({ path, bytes, meta, savedAt, downloadId, source: "saved" });
+    // 조합 pictures remember their 캐릭터 · 배경 · 표정 (보관함 셀렉 현황)
+    if (axes && typeof axes === "object") {
+      const pick = (v) => String(v == null ? "" : v).trim().slice(0, 60);
+      entry.axes = { char: pick(axes.char), bg: pick(axes.bg), emo: pick(axes.emo) };
+    }
     await LibDB.put(entry);
     await autoSendToNotion(entry, bytes);
     chrome.runtime.sendMessage({ action: "libraryChanged", id: entry.id }).catch?.(() => {});

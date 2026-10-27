@@ -3233,6 +3233,7 @@
       fileName,
       folder,
       format: effectiveFormat(),
+      axes: saveContext.axes || null,
     }, (response) => {
       const lastError = chrome.runtime.lastError;
       if (lastError) {
@@ -3431,7 +3432,7 @@
     await scheduleNextAutoClick();
   }
 
-  async function startAutoGenerate({ target = 0, saveName = "", folderName = "", applyPrompt = null, applyBasePrompt = null, applyCharacterPrompt = null, applyBaseNegative = null, applyCharacterNegative = null, shouldContinue = null } = {}) {
+  async function startAutoGenerate({ target = 0, saveName = "", folderName = "", axes = null, applyPrompt = null, applyBasePrompt = null, applyCharacterPrompt = null, applyBaseNegative = null, applyCharacterNegative = null, shouldContinue = null } = {}) {
     if (!runSafetyChecks({ alertUser: true })) {
       return { ok: false, error: "안전 점검 실패" };
     }
@@ -3491,6 +3492,7 @@
     saveContext = {
       baseName: saveName || "",
       folderName: folderName || "",
+      axes: axes || null, // 캐릭터·배경·표정 of a combination item, kept with each saved picture
       counter: 0,
       lastSavedSrc: saveContext.lastSavedSrc || "",
     };
@@ -3824,6 +3826,7 @@
           target: Math.max(1, item.count - skip),
           saveName: item.title,
           folderName: item.folderName || "",
+          axes: item.axes || null,
           applyBasePrompt: itemBase && itemBase.trim() ? itemBase : null,
           applyCharacterPrompt: item.characterPrompt && item.characterPrompt.trim() ? item.characterPrompt : null,
           applyBaseNegative: itemBaseNeg,

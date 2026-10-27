@@ -37,6 +37,7 @@
           </label>
         </div>
         <div class="tb-right">
+        <button class="btn plain board-btn" type="button" aria-pressed="false" title="캐릭터마다 배경 × 표정 칸으로 모아서, 어느 칸을 셀렉했는지 보여 줘요"></button>
         <div class="menu-wrap sort-wrap"><button class="btn plain sort-btn" type="button" aria-haspopup="menu" title="정렬 순서 · ←/→와 셀렉도 이 순서를 따라가요"></button></div>
         <button class="btn plain pick-all" type="button" title="보이는 그림 모두 고르기 (⌘/Ctrl+A)">모두 선택</button>
         <button class="btn plain clear-sel" type="button" hidden title="Esc">선택 해제</button>
@@ -51,6 +52,7 @@
       <div class="body">
         <section class="gallery" aria-label="그림">
           <div class="banner" hidden></div>
+          <div class="board" hidden></div>
           <div class="grid" role="listbox" aria-multiselectable="true" aria-label="그림 목록"></div>
           <div class="sentinel" aria-hidden="true"></div>
           <div class="empty" hidden></div>
