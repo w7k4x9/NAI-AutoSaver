@@ -4043,8 +4043,25 @@
       .split(/\r?\n/)
       .map((line) => stripLeadingNumber(line))
       .filter((line) => line.length > 0)
-      .map((line) => Store.parseComboLine(line))
+      .map((line) => repairTypedChain(Store.parseComboLine(line)))
       .filter((entry) => entry.name || entry.tags);
+  }
+  // A 표정 name the line format could not hold ("삐짐,토라짐": a comma, or
+  // over 30 letters) used to slip into the tags on every keystroke, piling up
+  // "삐짐,토라짐 = 삐짐,토라지 = 삐짐,토라 = … = 진짜 태그". Undo that pile:
+  // the first piece is the name, the last one the tags.
+  function repairTypedChain(entry) {
+    const parts = String(entry.tags || "").split(/\s=\s/);
+    if (parts.length < 2) return entry;
+    const pile = entry.name ? parts.slice(0, -1) : parts.slice(0, -1);
+    const head = String(entry.name || parts[0]).trim().slice(0, 2);
+    if (!head || !pile.every((p) => p.trim().startsWith(head))) return entry;
+    return { name: safeEmotionName(entry.name || parts[0]), tags: parts[parts.length - 1].trim() };
+  }
+  // What a 표정 name can be: no "=" or line breaks (the line format), no
+  // {}[] (NAI brackets); a comma becomes "·" ("삐짐·토라짐"); 30 letters.
+  function safeEmotionName(value) {
+    return String(value == null ? "" : value).replace(/[=\n{}\[\]]/g, "").replace(/\s*[,，]\s*/g, "·").trim().slice(0, 30);
   }
 
   function parseExpressionSet(text) {
@@ -4625,7 +4642,7 @@
         const kicker = genState.emoShared ? "표정 · 모든 캐릭터 공통" : `${charDisplayName(genState.chars[genActiveChar], genActiveChar)} · 표정`;
         html = `
           <div class="ias-insp-head"><button type="button" class="ias-insp-back" data-insp-back="1">${icon("chevron", 14)}<span>공통 베이스</span></button><span class="ias-insp-kicker">${escapeHtml(kicker)}</span><span class="ias-insp-title">${escapeHtml(emoDisplayName(entry, index))}</span></div>
-          ${inspectorField("이름 (파일 이름에 들어가요)", 'data-efield="name" data-autofocus="true"', entry.name, { placeholder: `비우면 ${index + 1}` })}
+          ${inspectorField("이름 (파일 이름에 들어가요)", 'data-efield="name" data-autofocus="true" maxlength="30"', entry.name, { placeholder: `비우면 ${index + 1} · 쉼표는 「·」로 바뀌어요` })}
           ${inspectorField("태그", 'data-efield="tags"', entry.tags, { rows: 3, placeholder: "예: smiling, open mouth" })}
           ${genState.emoShared ? "" : copyFromSelect("emo")}
           <div class="ias-insp-spacer"></div>
@@ -4803,7 +4820,7 @@
       const ch = emoOwner();
       const entries = charEmotionEntries(ch);
       if (entries[index]) {
-        entries[index][el.dataset.efield] = value.replace(/[=\n]/g, el.dataset.efield === "name" ? "" : " ");
+        entries[index][el.dataset.efield] = el.dataset.efield === "name" ? safeEmotionName(value) : value.replace(/[=\n]/g, " ");
         setCharEmotionEntries(ch, entries);
         if (el.dataset.efield === "tags" && value.trim()) {
           tourEvent("combo-emo-tagged");

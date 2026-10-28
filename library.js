@@ -459,8 +459,10 @@
     $(".pick-all").hidden = state.board;
     btn.innerHTML = state.board ? `${icon("grid", 15)}<span>그림으로 보기</span>` : `${icon("table", 15)}<span>셀렉 현황</span>`;
   }
+  let boardOrder = []; // 셀렉 현황 cells, 캐릭터 → 배경 → 표정: what ] walks through
   function renderBoard({ keepScroll = false } = {}) {
     const board = $(".board");
+    const order2 = [];
     const scroll = $(".gallery").scrollTop;
     board.innerHTML = "";
     // character → background → emotion → pictures (in the order they were made)
@@ -514,6 +516,10 @@
           table.append(cell);
         }
       }
+      for (const bg of c.bgs) for (const emo of c.emos) {
+        const list = c.cells.get(`${bg}\u0000${emo}`);
+        if (list?.length) order2.push({ key: groupKeyOf(list[0]), ids: list.map((e) => e.id) });
+      }
       const total = [...c.cells.keys()].length;
       board.append(el("section", { class: "bd-char" }, [
         el("div", { class: "bd-head" }, [
@@ -525,6 +531,8 @@
       ]));
     }
     if (!chars.size) board.append(el("p", { class: "bd-empty", text: "보이는 그림이 없어요." }));
+    boardOrder = order2;
+    if (cmp.sequence && !$(".compare").hidden) cmp.sequence = boardOrder;
     if (keepScroll) $(".gallery").scrollTop = scroll;
   }
 
@@ -692,7 +700,7 @@
     body.append(cullControls([entry.id]));
     const group = groupMembers(entry);
     if (group.length > 1) {
-      body.append(el("button", { class: "btn secondary small cmp-open", type: "button", html: `${icon("grid", 14)}<span>같은 이름 ${group.length}장 비교하기</span>`, title: "이름이 같은 그림을 나란히 놓고 골라요 (C)", onclick: () => openCompare(group.map((e) => e.id), { group: groupKeyOf(entry) }) }));
+      body.append(el("button", { class: "btn secondary small cmp-open", type: "button", html: `${icon("grid", 14)}<span>같은 이름 ${group.length}장 비교하기</span>`, title: "이름이 같은 그림을 나란히 놓고 골라요 (C)", onclick: () => openCompare(group.map((e) => e.id), { group: groupKeyOf(entry), sequence: null }) }));
     }
 
     const ps = parts(entry);
@@ -763,7 +771,7 @@
       el("div", { class: "multi-title", text: `${entries.length}장 골랐어요` }),
       el("div", { class: "multi-sub", html: "⌘/Ctrl을 누른 채 클릭하면 더하고 빼요.<br>Shift는 범위, 빈 곳을 끌면 상자로 골라요." }),
       cullControls(entries.map((e) => e.id)),
-      el("button", { class: "btn small cmp-open", type: "button", html: `${icon("grid", 14)}<span>${entries.length}장 나란히 비교하기</span>`, title: "고른 그림을 나란히 놓고 채택·탈락을 골라요 (C)", onclick: () => openCompare(entries.map((e) => e.id)) }),
+      el("button", { class: "btn small cmp-open", type: "button", html: `${icon("grid", 14)}<span>${entries.length}장 나란히 비교하기</span>`, title: "고른 그림을 나란히 놓고 채택·탈락을 골라요 (C)", onclick: () => openCompare(entries.map((e) => e.id), { sequence: null }) }),
       el("div", { class: "grow" }),
     );
     const withPrompt = entries.filter((e) => parts(e).length);
@@ -1796,8 +1804,27 @@
       return true;
     });
   }
-  function openCompare(ids, { group = null } = {}) {
+  // The groups ‹ › and ] [ walk through: the 셀렉 현황 order when opened from
+  // there (캐릭터 → 배경 → 표정), otherwise the same-name groups in view.
+  function groupSequence() {
+    if (cmp.sequence) return cmp.sequence;
+    return groupsInView().map(([key, e]) => ({ key, ids: groupMembers(e).map((m) => m.id) }));
+  }
+  const groupDone = (ids) => ids.some((id) => cullOf(id).label === "pick");
+  // The next group without a 채택 (the one after it when every group is done).
+  function nextGroup(step) {
+    const seq = groupSequence().filter((g) => g.ids.length > 1);
+    if (!seq.length) return null;
+    const at = seq.findIndex((g) => g.key === cmp.group);
+    for (let i = 1; i <= seq.length; i += 1) {
+      const g = seq[(at + step * i + seq.length * i) % seq.length];
+      if (g.key !== cmp.group && !groupDone(g.ids)) return g;
+    }
+    return seq.length > 1 ? seq[(at + step + seq.length) % seq.length] : null;
+  }
+  function openCompare(ids, { group = null, sequence = undefined } = {}) {
     if (ids.length < 2) return;
+    if (sequence !== undefined) cmp.sequence = sequence;
     cmp.ids = ids.slice(0, 48);
     cmp.group = group;
     cmp.focus = 0;
@@ -1816,11 +1843,8 @@
     $(".cmp-grid").innerHTML = "";
   }
   function stepGroup(step) {
-    const groups = groupsInView();
-    if (!groups.length) return;
-    const at = groups.findIndex(([key]) => key === cmp.group);
-    const [key, entry] = groups[(at + step + groups.length) % groups.length];
-    openCompare(groupMembers(entry).map((e) => e.id), { group: key });
+    const g = nextGroup(step);
+    if (g) openCompare(g.ids, { group: g.key });
   }
   // Columns that make the pictures as big as possible in the space we have.
   function bestColumns(n, width, height, aspect) {
@@ -1846,9 +1870,9 @@
     const counts = { none: 0, pick: 0, hold: 0, reject: 0 };
     for (const id of cmp.ids) counts[cullOf(id).label || "none"] += 1;
     $(".cmp-title").textContent = cmp.group || `고른 ${cmp.ids.length}장`;
-    const groups = cmp.group ? groupsInView() : [];
-    const at = groups.findIndex(([key]) => key === cmp.group);
-    $(".cmp-sub").textContent = [cmp.mode === "pair" ? `${cmp.ids.length}장` : `${visible.length} / ${cmp.ids.length}장`, `채택 ${counts.pick}`, `B컷 ${counts.hold}`, `탈락 ${counts.reject}`, `${NONE_LABEL} ${counts.none}`, groups.length > 1 && at >= 0 ? `이름 ${at + 1} / ${groups.length}` : ""].filter(Boolean).join(" · ");
+    const groups = cmp.group ? groupSequence().filter((g) => g.ids.length > 1) : [];
+    const left = groups.filter((g) => !groupDone(g.ids)).length;
+    $(".cmp-sub").textContent = [cmp.mode === "pair" ? `${cmp.ids.length}장` : `${visible.length} / ${cmp.ids.length}장`, `채택 ${counts.pick}`, `B컷 ${counts.hold}`, `탈락 ${counts.reject}`, `${NONE_LABEL} ${counts.none}`, groups.length > 1 ? (left ? `남은 칸 ${left} / ${groups.length}` : `${groups.length}칸 모두 채택 ✓`) : ""].filter(Boolean).join(" · ");
     box.querySelectorAll(".cmp-nav").forEach((b) => { b.hidden = !(groups.length > 1); });
     box.querySelectorAll("[data-cmp-filter]").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.cmpFilter === cmp.filter)));
     box.querySelectorAll("[data-cmp-mode]").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.cmpMode === cmp.mode)));
@@ -1934,10 +1958,10 @@
             : `<p>${leftName} 그림이 없어요.${cmp.lane.left === "none" ? " 다 골랐어요!" : ""}</p>`)
           : `<p>아직 ${LABELS[cmp.lane.right]}이 없어요.<br>왼쪽에서 <b>${cmp.lane.right === "pick" ? "Q" : "W"}</b>를 누르면 여기로 와요.</p>`;
         cell.append(el("div", { class: "cmp-lane-empty", html: msg }));
-        if (side === "a" && cmp.group && groupsInView().length > 1) {
-          const all = groupsInView();
-          const next = all[(all.findIndex(([key]) => key === cmp.group) + 1) % all.length]?.[0];
-          cell.querySelector(".cmp-lane-empty").append(el("button", { class: "btn small", type: "button", "data-next-group": "1", text: `다음 이름: ${next} ›` }));
+        const next = side === "a" && cmp.group ? nextGroup(1) : null;
+        if (next) {
+          const label = groupDone(next.ids) ? "다음 이름" : "다음 안 한 칸";
+          cell.querySelector(".cmp-lane-empty").append(el("button", { class: "btn small", type: "button", "data-next-group": "1", text: `${label}: ${next.key} ›` }));
         }
       }
       grid.append(cell);
@@ -3527,7 +3551,7 @@
       const cell = event.target.closest("[data-board-group]");
       if (!cell) return;
       const ids = cell.dataset.ids.split("\n");
-      if (ids.length > 1) openCompare(ids, { group: cell.dataset.boardGroup });
+      if (ids.length > 1) openCompare(ids, { group: cell.dataset.boardGroup, sequence: boardOrder });
       else openLightbox(ids[0]);
     });
     $(".pick-all").addEventListener("click", () => {
@@ -3631,11 +3655,11 @@
         applyCullAction(state.sel, cullAction(event));
       } else if (event.code === "KeyC" && !event.metaKey && !event.ctrlKey && state.sel.length) {
         event.preventDefault();
-        if (state.sel.length > 1) openCompare(state.sel.slice());
+        if (state.sel.length > 1) openCompare(state.sel.slice(), { sequence: null });
         else {
           const entry = byId(state.sel[0]);
           const group = entry ? groupMembers(entry) : [];
-          if (group.length > 1) openCompare(group.map((e) => e.id), { group: groupKeyOf(entry) });
+          if (group.length > 1) openCompare(group.map((e) => e.id), { group: groupKeyOf(entry), sequence: null });
         }
       } else if (event.key === " " && state.sel.length) {
         event.preventDefault();
