@@ -999,9 +999,29 @@
     // character → background → emotion → pictures (in the order they were made)
     const chars = new Map();
     const order = state.shown.slice().sort((a, b) => a.savedAt - b.savedAt);
+    // A 표정/배경 renamed only by spaces or _ ("과거섹스" → "과거 섹스") is the
+    // same row: old pictures keep the old name in their files. The row shows
+    // the name used in the 조합 screen now, else the newest one.
+    const loose = (t) => String(t || "").replace(/[\s_\-·]+/g, "").toLowerCase();
+    const named = new Map();
+    const nameFor = (kind, name, list) => {
+      const k = `${kind}:${loose(name)}`;
+      const current = list.find((n) => loose(n) === loose(name));
+      if (current) named.set(k, current);
+      else if (!named.has(k) || !list.some((n) => n === named.get(k))) named.set(k, name);
+    };
+    const axesCache = new Map();
     for (const e of order) {
       if (e.source === "dropped") continue;
       const ax = axesOf(e);
+      axesCache.set(e.id, ax);
+      nameFor("b", ax.bg, comboNames.bgs);
+      nameFor("e", ax.emo, comboNames.emos);
+    }
+    for (const e of order) {
+      if (e.source === "dropped") continue;
+      const raw = axesCache.get(e.id);
+      const ax = { char: raw.char, bg: named.get(`b:${loose(raw.bg)}`) ?? raw.bg, emo: named.get(`e:${loose(raw.emo)}`) ?? raw.emo };
       const charKey = ax.char || "캐릭터 없음";
       if (!chars.has(charKey)) chars.set(charKey, { bgs: [], emos: [], cells: new Map() });
       const c = chars.get(charKey);
