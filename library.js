@@ -918,7 +918,7 @@
   } catch (error) {
     void error;
   }
-  let comboNames = { bgs: [], emos: [], emoFirst: false };
+  let comboNames = { bgs: [], emos: [], emoFirst: false, byChar: new Map() };
   async function loadComboNames() {
     try {
       const raw = (await chrome.storage.local.get("naiAutoSaver.generator"))["naiAutoSaver.generator"] || {};
@@ -947,7 +947,18 @@
       } else if (Array.isArray(n.nameOrder)) {
         emoFirst = n.nameOrder.indexOf("emo") >= 0 && n.nameOrder.indexOf("emo") < n.nameOrder.indexOf("bg");
       }
-      comboNames = { bgs: [...bgs].sort((a, b) => b.length - a.length), emos, emoFirst };
+      // per character: the 표정 and 배경 the 조합 screen makes for them
+      const byChar = new Map();
+      const namesOf = (text) => String(text || "").split(/\n/).map((line) => (line.match(/^\s*([^=,{}\[\]]{1,30}?)\s*=/) || [])[1]?.trim()).filter(Boolean);
+      for (const ch of raw.chars || []) {
+        const name = String(ch?.code || "").trim();
+        if (!name) continue;
+        byChar.set(name, {
+          emos: raw.emoShared ? namesOf(raw.sharedExpressions) : namesOf(ch.expressions),
+          bgs: (raw.bgShared === false ? ch.bgs || [] : raw.bgs || []).map((b) => String(b?.code || "").trim()).filter(Boolean),
+        });
+      }
+      comboNames = { bgs: [...bgs].sort((a, b) => b.length - a.length), emos, emoFirst, byChar };
     } catch (error) {
       void error;
     }
@@ -1022,6 +1033,7 @@
       if (e.source === "dropped") continue;
       const raw = axesCache.get(e.id);
       const ax = { char: raw.char, bg: named.get(`b:${loose(raw.bg)}`) ?? raw.bg, emo: named.get(`e:${loose(raw.emo)}`) ?? raw.emo };
+      boardRaw.set(e.id, raw);
       const charKey = ax.char || "캐릭터 없음";
       if (!chars.has(charKey)) chars.set(charKey, { bgs: [], emos: [], cells: new Map() });
       const c = chars.get(charKey);
@@ -1031,6 +1043,16 @@
       if (!c.cells.has(cellKey)) c.cells.set(cellKey, []);
       c.cells.get(cellKey).push(e);
     }
+    // the 조합 screen's 표정/배경 for a character show even before (or after
+    // moving away) any picture: a row to copy pictures into
+    for (const [charName, c] of chars) {
+      const plan = comboNames.byChar?.get(charName);
+      if (!plan) continue;
+      for (const bg of plan.bgs) if (!c.bgs.some((b) => loose(b) === loose(bg))) c.bgs.push(bg);
+      for (const emo of plan.emos) if (!c.emos.some((m) => loose(m) === loose(emo))) c.emos.push(emo);
+    }
+    boardCells.clear();
+    for (const [charName, c] of chars) for (const [k, list] of c.cells) boardCells.set(`${charName}\u0000${k}`, list);
     const emoRank = (name) => {
       const at = comboNames.emos.indexOf(name);
       return at < 0 ? 1e6 : at;
@@ -1043,11 +1065,11 @@
       table.append(el("div", { class: "bd-corner", text: "표정" }));
       for (const bg of c.bgs) table.append(el("div", { class: "bd-colhead", text: bg || "배경 없음" }));
       for (const emo of c.emos) {
-        table.append(el("div", { class: "bd-rowhead", text: emo }));
+        table.append(el("button", { type: "button", class: "bd-rowhead", "data-row-char": charName, "data-row-emo": emo, title: "이 표정 줄: 이름 바꾸기 · 옮기기 · 복사해 오기 · 휴지통", text: emo }));
         for (const bg of c.bgs) {
           const list = c.cells.get(`${bg}\u0000${emo}`) || [];
           if (!list.length) {
-            table.append(el("div", { class: "bd-cell", "data-state": "none" }));
+            table.append(el("button", { type: "button", class: "bd-cell", "data-state": "none", "data-empty": "1", "data-char": charName, "data-bg": bg, "data-emo": emo, title: "빈 칸 · 눌러서 다른 표정에서 복사해 오기", html: icon("add", 14) }));
             continue;
           }
           const counts = { pick: 0, hold: 0, reject: 0, none: 0 };
@@ -1058,7 +1080,7 @@
           const cover = picked[0] || null;
           const url = cover ? thumbUrl(cover) : "";
           const ids = list.map((e) => e.id).join("\n");
-          const cell = el("button", { type: "button", class: "bd-cell", "data-state": st, "data-board-group": groupKeyOf(list[0]), "data-ids": ids, title: `${groupKeyOf(list[0])} · ${list.length}장` });
+          const cell = el("button", { type: "button", class: "bd-cell", "data-state": st, "data-board-group": groupKeyOf(list[0]), "data-ids": ids, "data-char": charName, "data-bg": bg, "data-emo": emo, title: `${groupKeyOf(list[0])} · ${list.length}장 · 오른쪽 클릭: 칸 관리` });
           if (url) cell.append(el("img", { src: url, alt: "", loading: "lazy", draggable: "false" }));
           const text = st === "done"
             ? (picked.length > 1 ? `채택 ${picked.length}` : "")
@@ -1085,6 +1107,227 @@
     boardOrder = order2;
     if (cmp.sequence && !$(".compare").hidden) cmp.sequence = boardOrder;
     if (keepScroll) $(".gallery").scrollTop = scroll;
+  }
+
+  // ---- 칸 관리 (셀렉 현황): a 표정 줄 (all 배경) or one 칸 (one 배경) can be
+  // renamed / moved to another 표정, filled by copying from another 표정, or
+  // sent to the 휴지통. Renaming changes the file names; 셀렉 stays.
+  const boardRaw = new Map(); // id → axes as written in the file name
+  const boardCells = new Map(); // char \0 bg \0 emo → entries
+  function slotEntries({ char, bg, emo }) {
+    const out = [];
+    for (const [k, list] of boardCells) {
+      const [c, b, m] = k.split("\u0000");
+      if (c === char && m === emo && (bg == null || b === bg)) out.push(...list);
+    }
+    return out;
+  }
+  function slotEmotions(char) {
+    const set = [];
+    for (const k of boardCells.keys()) {
+      const [c, , m] = k.split("\u0000");
+      if (c === char && !set.includes(m)) set.push(m);
+    }
+    for (const m of comboNames.byChar?.get(char)?.emos || []) if (!set.includes(m)) set.push(m);
+    return set;
+  }
+  const slotTitle = ({ char, bg, emo }) => `${char} · ${bg ? `${bg} · ` : ""}${emo}`;
+  function openSlotMenu(x, y, slot) {
+    document.querySelectorAll(".menu.ctx").forEach((m) => m.remove());
+    const list = slotEntries(slot);
+    const menu = el("div", { class: "menu ctx", role: "menu" });
+    menu.append(el("div", { class: "menu-head", text: slot.bg ? `${slot.char} · ${slot.bg} · ${slot.emo}` : `${slot.char} · ${slot.emo} (모든 배경)` }));
+    const items = [];
+    if (list.length) items.push([`표정 이름 바꾸기 · 다른 표정으로 옮기기… (${list.length}장)`, () => void moveSlot(slot)]);
+    items.push(["다른 표정에서 복사해 오기…", () => void copyIntoSlot(slot)]);
+    if (list.length > 1 && slot.bg) items.push(["비교하기", () => openCompare(list.map((e) => e.id), { group: groupKeyOf(list[0]), sequence: boardOrder })]);
+    if (list.length) items.push([`휴지통으로 (${list.length}장)`, async () => {
+      if (await confirmDialog(`${slotTitle(slot)} ${list.length}장을 휴지통으로 보낼까요?`, `파일은 ${TRASH_FOLDER} 폴더로 옮겨지고, 바로 되돌릴 수 있어요.`, "휴지통으로")) await trashEntries(list);
+    }, true]);
+    for (const [label, run, danger] of items) menu.append(el("button", { type: "button", role: "menuitem", "data-danger": danger ? "true" : null, text: label, onclick: () => { menu.remove(); run(); } }));
+    document.body.append(menu);
+    const r = menu.getBoundingClientRect();
+    menu.style.left = `${Math.min(x, window.innerWidth - r.width - 8)}px`;
+    menu.style.top = `${Math.min(y, window.innerHeight - r.height - 8)}px`;
+  }
+  // Choose a 표정: one of the character's, or a new name.
+  function pickEmotion(title, hint, char, exclude, { allowNew = true, okLabel = "확인" } = {}) {
+    const { dialog, body, right } = notionDialogShell(title, { leftLabel: "취소", rightLabel: allowNew ? okLabel : "" });
+    return new Promise((resolve) => {
+      // resolve once the dialog's close event is over, so the next dialog
+      // opened right after is not closed by it
+      let result = null;
+      let done = false;
+      const finish = (v) => { if (done) return; done = true; result = v; dialog.close(); };
+      dialog.addEventListener("close", () => { done = true; setTimeout(() => resolve(result), 0); }, { once: true });
+      if (hint) body.append(el("p", { class: "sheet-note", text: hint }));
+      const chips = el("div", { class: "emo-chips" });
+      for (const m of slotEmotions(char)) {
+        if (m === exclude) continue;
+        const n = slotEntries({ char, bg: null, emo: m }).length;
+        chips.append(el("button", { type: "button", class: "emo-chip", onclick: () => finish(m) }, [document.createTextNode(m), el("small", { text: n ? ` ${n}` : " 빈 줄" })]));
+      }
+      body.append(chips);
+      if (allowNew) {
+        const input = el("input", { class: "dialog-input", type: "text", placeholder: "새 표정 이름", spellcheck: "false" });
+        input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); finish(input.value.trim() || null); } });
+        body.append(el("div", { class: "ios-group-label", text: "새 이름으로" }), input);
+        right.onclick = () => finish(input.value.trim() || null);
+      }
+    });
+  }
+  // The file name with its 표정 swapped: "루페르트 밤_과한웃음 (5)_2" → "루페르트 밤_잠식 (5)_2".
+  function renamedFor(entry, toEmo) {
+    const raw = boardRaw.get(entry.id) || axesOf(entry);
+    const key = groupKeyOf(entry);
+    const at = comboNames.emoFirst ? key.indexOf(raw.emo) : key.lastIndexOf(raw.emo);
+    if (!raw.emo || at < 0) return null;
+    return { key: key.slice(0, at) + toEmo + key.slice(at + raw.emo.length), tail: entry.name.slice(key.length) };
+  }
+  // A free "(n)" for a new picture of `key`, after the ones already there.
+  function nextCounter(key) {
+    let max = 0;
+    for (const e of state.entries) {
+      if (groupKeyOf(e) !== key) continue;
+      const m = counterOf(e).match(/\d+/);
+      if (m) max = Math.max(max, Number(m[0]));
+    }
+    return max + 1;
+  }
+  async function moveSlot(slot) {
+    const list = slotEntries(slot);
+    const to = await pickEmotion(`${slotTitle(slot)} → 어느 표정으로?`, `${list.length}장의 파일 이름에서 「${slot.emo}」를 바꿔요. 있는 표정을 고르면 그 줄로 합쳐지고, 새 이름을 쓰면 이름만 바뀌어요. 채택·B컷은 그대로예요.`, slot.char, slot.emo, { okLabel: "바꾸기" });
+    const toEmo = String(to || "").replace(UNSAFE_NAME, "_").replace(/[_]+$/, "").trim();
+    if (!toEmo || toEmo === slot.emo) return;
+    if (!(await ensureWritable())) {
+      toast("폴더를 고쳐도 된다는 허락이 있어야 이름을 바꿀 수 있어요.", "warn");
+      return;
+    }
+    let done = 0;
+    const failed = [];
+    const counters = new Map();
+    for (let i = 0; i < list.length; i += 1) {
+      const entry = list[i];
+      if (list.length > 3) toast(`옮기는 중… ${i + 1} / ${list.length}`);
+      try {
+        const r = renamedFor(entry, toEmo);
+        if (!r) throw new Error("이름에서 표정을 못 찾음");
+        const { rel, dir, name, handle } = await locate(entry);
+        const ext = (name.match(/\.(png|webp)$/i) || [".png"])[0];
+        let target = `${r.key}${r.tail}${ext}`;
+        const taken = async (n) => (await dir.getFileHandle(n).then(() => true, () => false)) || state.entries.some((e) => e.id === [state.root.name, ...rel.slice(0, -1), n].join("/"));
+        if (await taken(target)) {
+          // the 표정 it joins already has this number: next free one
+          let n = counters.get(r.key) || nextCounter(r.key);
+          while (await taken(`${r.key} (${n})${ext}`)) n += 1;
+          counters.set(r.key, n + 1);
+          target = `${r.key} (${n})${ext}`;
+        }
+        ownChange(rel, [...rel.slice(0, -1), target]);
+        await moveFile(handle, dir, name, dir, target);
+        const moved = await retarget(entry, [state.root.name, ...rel.slice(0, -1), target].join("/"));
+        if (moved.axes) {
+          moved.axes = { ...moved.axes, emo: toEmo };
+          await LibDB.put(moved);
+        }
+        done += 1;
+      } catch (error) {
+        failed.push(entry.name);
+      }
+    }
+    saveCull();
+    render();
+    toast(done ? `${done}장을 「${toEmo}」로 옮겼어요${failed.length ? ` · ${failed.length}장은 못 옮겼어요 (${failed[0]})` : ""}.` : `옮기지 못했어요${failed.length ? ` (${failed[0]})` : ""}.`, done && !failed.length ? "ok" : "warn");
+  }
+  // Fill a 칸/줄 with copies from another 표정 (same character, same 배경).
+  async function copyIntoSlot(slot) {
+    const from = await pickEmotion(`${slotTitle(slot)} ← 어느 표정에서 가져올까요?`, "고른 표정의 그림을 이 표정 이름으로 복사해 넣어요. 원래 그림은 그대로 있어요.", slot.char, slot.emo, { allowNew: false });
+    if (!from) return;
+    const source = slotEntries({ char: slot.char, bg: slot.bg, emo: from });
+    if (!source.length) {
+      toast(`「${from}」${slot.bg ? `의 ${slot.bg}` : ""}에는 그림이 없어요.`, "warn");
+      return;
+    }
+    const picked = await pickPictures(`${from} → ${slot.emo}${slot.bg ? ` (${slot.bg})` : ""}`, source);
+    if (!picked) return;
+    if (!(await ensureWritable())) {
+      toast("폴더를 고쳐도 된다는 허락이 있어야 복사할 수 있어요.", "warn");
+      return;
+    }
+    let made = 0;
+    const failed = [];
+    const counters = new Map();
+    for (let i = 0; i < picked.ids.length; i += 1) {
+      const entry = byId(picked.ids[i]);
+      if (picked.ids.length > 3) toast(`복사하는 중… ${i + 1} / ${picked.ids.length}`);
+      try {
+        const r = renamedFor(entry, slot.emo);
+        if (!r) throw new Error("이름에서 표정을 못 찾음");
+        const { rel, dir, name } = await locate(entry);
+        const ext = (name.match(/\.(png|webp)$/i) || [".png"])[0];
+        let n = counters.get(r.key) || nextCounter(r.key);
+        while (await dir.getFileHandle(`${r.key} (${n})${ext}`).then(() => true, () => false)) n += 1;
+        counters.set(r.key, n + 1);
+        const target = `${r.key} (${n})${ext}`;
+        const file = await originalFile(entry, { ask: false });
+        if (!file) throw new Error("원본 없음");
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const path = [state.root.name, ...rel.slice(0, -1), target].join("/");
+        ownChange([...rel.slice(0, -1), target]);
+        const writable = await (await dir.getFileHandle(target, { create: true })).createWritable();
+        await writable.write(bytes);
+        await writable.close();
+        const copy = await LibDB.buildEntry({ path, bytes, savedAt: Date.now(), source: "folder" });
+        if (entry.axes) copy.axes = { ...entry.axes, emo: slot.emo };
+        await LibDB.put(copy);
+        upsert(copy);
+        if (picked.asPick) state.cull.set(copy.id, { label: "pick" });
+        made += 1;
+      } catch (error) {
+        failed.push(entry?.name || "?");
+      }
+    }
+    saveCull();
+    render();
+    toast(made ? `「${slot.emo}」에 ${made}장을 복사해 넣었어요${picked.asPick ? " (채택)" : ""}${failed.length ? ` · ${failed.length}장은 못 했어요` : ""}.` : "복사하지 못했어요. 폴더를 연결했는지 확인해 주세요.", made && !failed.length ? "ok" : "warn");
+  }
+  // Pictures to choose from (채택 first): → { ids, asPick } or null.
+  function pickPictures(title, list) {
+    const { dialog, body, right } = notionDialogShell(title, { leftLabel: "취소", rightLabel: "복사해 오기" });
+    dialog.classList.add("wide");
+    dialog.addEventListener("close", () => dialog.classList.remove("wide"), { once: true });
+    const rank = { pick: 0, hold: 1, none: 2, reject: 3 };
+    const sorted = list.slice().sort((a, b) => rank[cullOf(a.id).label || "none"] - rank[cullOf(b.id).label || "none"] || b.savedAt - a.savedAt);
+    const chosen = new Set();
+    const grid = el("div", { class: "pick-grid" });
+    const count = () => { right.textContent = chosen.size ? `${chosen.size}장 복사해 오기` : "복사해 오기"; right.disabled = !chosen.size; };
+    for (const e of sorted) {
+      const tile = el("button", { type: "button", class: "pick-tile", "aria-pressed": "false", title: e.name }, [
+        el("img", { src: thumbUrl(e), alt: "", loading: "lazy", draggable: "false" }),
+        el("span", { class: "pick-cap", html: `${tileCullHtml(e.id)}<span>${counterOf(e) || ""}</span>` }),
+      ]);
+      tile.addEventListener("click", () => {
+        if (chosen.has(e.id)) chosen.delete(e.id); else chosen.add(e.id);
+        tile.setAttribute("aria-pressed", String(chosen.has(e.id)));
+        count();
+      });
+      grid.append(tile);
+    }
+    const asPick = el("input", { type: "checkbox", id: "pick-as", checked: true });
+    asPick.classList.add("ios-switch");
+    body.append(
+      el("p", { class: "sheet-note", text: "가져올 그림을 눌러 골라요 (여러 장 가능). 채택한 그림이 앞에 있어요." }),
+      grid,
+      el("div", { class: "ios-group" }, [el("label", { class: "ios-row", for: "pick-as" }, [el("span", { class: "grow" }, [document.createTextNode("가져온 그림을 채택으로"), el("small", { text: "끄면 미분류로 들어가요" })]), asPick])]),
+    );
+    count();
+    return new Promise((resolve) => {
+      let result = null;
+      let done = false;
+      const finish = (v) => { if (done) return; done = true; result = v; dialog.close(); };
+      dialog.addEventListener("close", () => { done = true; setTimeout(() => resolve(result), 0); }, { once: true });
+      right.onclick = () => { if (chosen.size) finish({ ids: [...chosen], asPick: asPick.checked }); };
+    });
   }
 
   function renderBanner() {
@@ -3022,9 +3265,38 @@
           await retarget(match, `${state.root.name}/${key}`);
           moved += 1;
         } else {
-          rest.push(item);
+          rest.push({ item, key, size });
         }
       }
+      // Renamed in 탐색기 (과한웃음 → 잠식): same folder, same size, and the
+      // only such pair there → the same picture; its 셀렉 goes along.
+      const dirOf = (p) => p.split("/").slice(0, -1).join("/");
+      const goneByDirSize = new Map();
+      for (const e of gone) {
+        if (!e.bytes) continue;
+        const k = `${dirOf(relSegments(e).join("/"))}|${e.bytes}`;
+        goneByDirSize.set(k, goneByDirSize.has(k) ? null : e);
+      }
+      const freshByDirSize = new Map();
+      for (const r of rest) {
+        const k = `${dirOf(r.key)}|${r.size}`;
+        freshByDirSize.set(k, (freshByDirSize.get(k) || 0) + 1);
+      }
+      const stillNew = [];
+      for (const r of rest) {
+        const k = `${dirOf(r.key)}|${r.size}`;
+        const match = goneByDirSize.get(k);
+        if (match && freshByDirSize.get(k) === 1) {
+          goneByDirSize.delete(k);
+          gone.splice(gone.indexOf(match), 1);
+          await retarget(match, `${state.root.name}/${r.key}`);
+          moved += 1;
+        } else {
+          stillNew.push(r.item);
+        }
+      }
+      rest.length = 0;
+      rest.push(...stillNew);
       // Many files missing at once looks like a drive/folder problem: ask first.
       const coveredCount = files.filter((e) => covered(e, relSegments(e))).length;
       const drop = async () => {
@@ -4148,7 +4420,27 @@
     });
     Aesthetic.on(onAesEvent);
     if (aes.on) void Aesthetic.start().catch(() => {});
+    $(".board").addEventListener("contextmenu", (event) => {
+      const cell = event.target.closest(".bd-cell[data-char]");
+      const row = event.target.closest("[data-row-emo]");
+      if (!cell && !row) return;
+      event.preventDefault();
+      if (row) openSlotMenu(event.clientX, event.clientY, { char: row.dataset.rowChar, bg: null, emo: row.dataset.rowEmo });
+      else openSlotMenu(event.clientX, event.clientY, { char: cell.dataset.char, bg: cell.dataset.bg, emo: cell.dataset.emo });
+    });
     $(".board").addEventListener("click", (event) => {
+      const row = event.target.closest("[data-row-emo]");
+      if (row) {
+        event.stopPropagation(); // the page's "click elsewhere closes menus" would close it at once
+        const r = row.getBoundingClientRect();
+        openSlotMenu(r.left, r.bottom + 4, { char: row.dataset.rowChar, bg: null, emo: row.dataset.rowEmo });
+        return;
+      }
+      const empty = event.target.closest("[data-empty]");
+      if (empty) {
+        void copyIntoSlot({ char: empty.dataset.char, bg: empty.dataset.bg, emo: empty.dataset.emo });
+        return;
+      }
       const cell = event.target.closest("[data-board-group]");
       if (!cell) return;
       const ids = cell.dataset.ids.split("\n");
