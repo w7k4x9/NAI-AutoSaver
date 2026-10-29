@@ -458,6 +458,7 @@ body { word-break: keep-all; overflow-wrap: anywhere; }
 .lt-topic[data-done="true"] .lt-topic-end { color: var(--accent); }
 .lt-foot { margin: 12px 18px 16px; font-size: 12px; color: var(--text2); }
 .nav-item.help-open { margin-bottom: 6px; }
+.nav-item.settings-open svg { color: var(--text2); }
 .nav-item.help-open svg { color: var(--accent); }
 .nav-item.help-open[aria-expanded="true"] { background: var(--sel); }
 
@@ -575,3 +576,41 @@ body { word-break: keep-all; overflow-wrap: anywhere; }
 .aes-table td { padding: 5px 6px; border-top: 0.5px solid var(--border); text-align: right; font-variant-numeric: tabular-nums; }
 .aes-table td:first-child { text-align: left; color: var(--text2); }
 .aes-table td.better { color: var(--accent); font-weight: 650; }
+.aes-progress { display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--text2); }
+.aes-progress .bar { flex: 1; height: 5px; border-radius: 3px; background: var(--elev2); overflow: hidden; }
+.aes-progress .bar i { display: block; height: 100%; background: var(--accent-fill); }
+/* ⚙ 설정 — the same look as the NovelAI panel's 설정 */
+.settings-open[aria-current="true"] { background: var(--sel); }
+.app[data-settings] .toolbar .search-wrap, .app[data-settings] .toolbar .tb-right, .app[data-settings] .body { display: none; }
+.settings-pane { flex: 1; min-height: 0; overflow: hidden; display: flex; }
+.set-scroll { flex: 1; overflow-y: auto; padding: 18px 24px 40px; }
+.set-scroll > * { max-width: 620px; margin-left: auto; margin-right: auto; }
+.set-title { font-size: 13px; font-weight: 650; color: var(--text2); margin: 20px 4px 6px; }
+.set-group { border-radius: 10px; background: var(--group); border: 0.5px solid var(--hair); }
+.set-row { min-height: 44px; display: flex; align-items: center; gap: 12px; padding: 6px 12px; }
+.set-row + .set-row { border-top: 0.5px solid var(--hair); }
+.set-label { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; font-size: 13px; color: var(--text); }
+.set-label small { font-size: 11.5px; color: var(--text3); }
+.set-inline { display: inline-flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.set-switch { position: relative; width: 32px; height: 19px; flex: 0 0 auto; }
+.set-switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+.set-slider { position: absolute; inset: 0; cursor: pointer; background: var(--elev2); border-radius: 999px; transition: background 0.2s ease; }
+.set-slider::before { content: ""; position: absolute; width: 15px; height: 15px; left: 2px; top: 2px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.3); transition: transform 0.2s ease; }
+.set-switch input:checked + .set-slider { background: var(--accent-fill); }
+.set-switch input:checked + .set-slider::before { transform: translateX(13px); }
+.set-switch input:focus-visible + .set-slider { box-shadow: 0 0 0 3px var(--accent-ring); }
+.set-appearance { display: flex; gap: 14px; }
+.set-appearance button { border: none; background: transparent; color: var(--text2); font: inherit; font-size: 12px; padding: 0; display: flex; flex-direction: column; align-items: center; gap: 5px; cursor: pointer; }
+.set-appearance button[data-active="true"] { color: var(--text); font-weight: 650; }
+.set-swatch { width: 58px; height: 38px; border-radius: 7px; box-shadow: 0 0 0 1px var(--field-border); overflow: hidden; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; }
+.set-appearance button[data-active="true"] .set-swatch { box-shadow: 0 0 0 3px var(--accent-fill); }
+.set-seg { display: inline-flex; gap: 2px; border-radius: 7px; background: var(--seg-bg); padding: 2px; flex: 0 0 auto; }
+.set-seg button { height: 24px; border: none; border-radius: 5px; background: transparent; color: var(--text2); font: inherit; font-size: 12.5px; padding: 0 10px; cursor: pointer; }
+.set-seg button[aria-checked="true"] { background: var(--seg-on); color: var(--seg-on-text); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,0.2); }
+.set-select { height: 28px; font: inherit; font-size: 12.5px; border-radius: 6px; border: 0.5px solid var(--field-border); background: var(--elev); color: var(--text); padding: 0 8px; }
+.set-row .btn { flex: 0 0 auto; }
+.set-version { margin: 16px 4px 0; font-size: 11.5px; color: var(--text3); }
+.set-scroll > .set-title { margin: 20px auto 6px; padding: 0 4px; }
+.set-scroll > .set-version { margin: 16px auto 0; padding: 0 4px; }
+.set-scroll > .set-title { margin: 20px auto 6px; padding: 0 4px; }
+.set-scroll > .set-version { margin: 16px auto 0; padding: 0 4px; }

@@ -48,8 +48,17 @@
   // --- helpers shared by the worker and the page -----------------------------
   // "이름 (3)" → "이름". Chrome adds its own " (1)" when a file with that name
   // already exists, so "이름 (3) (1)" is the same picture name too.
+  // "평온 (5)", "평온 (2) (1)" (Chrome renamed a second "(2)"), "평온 (5)_2" or
+  // "평온 (5) [2]" / "평온 (5) - 복사본" (copied again somewhere) → "평온".
+  // A "_2" counts only right after such a counter: "밤_2" can be a real name.
   function stripCounter(name) {
-    return String(name || "").replace(/(\s*\(\d+\))+$/, "");
+    let s = String(name || "");
+    for (;;) {
+      let t = s.replace(/\s*\(\d+\)$/, "").replace(/\s*\[\d+\]$/, "").replace(/\s*-\s*(복사본|사본|copy)$/i, "");
+      if (t === s && /[)\]]_\d+$/.test(s)) t = s.replace(/_\d+$/, "");
+      if (t === s) return s;
+      s = t;
+    }
   }
   // The character is the folder the picture was saved in (조합 saves into
   // NovelAI/날짜/<캐릭터>/, whatever the file name looks like, e.g.

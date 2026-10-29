@@ -200,6 +200,12 @@
     return button;
   }
   function setNav(key) {
+    if (state.settings) {
+      state.settings = false;
+      document.querySelector(".app").removeAttribute("data-settings");
+      $(".settings-open").setAttribute("aria-current", "false");
+      $(".settings-pane").hidden = true;
+    }
     if (isCullKey(key)) state.cullNav = state.cullNav === key ? "" : key; // press again to turn off
     else state.nav = key;
     state.sel = [];
@@ -474,6 +480,7 @@
     }, 1500);
   }
   let aesBoxTimer = null;
+  let settingsDrawn = 0;
   function onAesEvent(event) {
     if (event.type === "score") {
       // the 점수 badge in the compare view, if it is showing that picture
@@ -489,7 +496,11 @@
       if (sortNeedsScores()) scheduleScoreSort();
     }
     clearTimeout(aesBoxTimer);
-    aesBoxTimer = setTimeout(() => { renderAesBox(); refreshAesSheet(); }, event.type === "score" ? 400 : 0);
+    aesBoxTimer = setTimeout(() => {
+      renderAesBox();
+      refreshAesSheet();
+      if (state.settings && Date.now() - settingsDrawn > 1500 && !document.querySelector(".set-scroll select:focus")) { settingsDrawn = Date.now(); void renderSettings(); }
+    }, event.type === "score" ? 400 : 0);
   }
   const sortNeedsScores = () => state.sort === "aes" && !state.board;
   let scoreSortTimer = null;
@@ -617,7 +628,14 @@
     const lg = learnableGroups();
     const fmt = (n) => n.toLocaleString("ko-KR");
     box.append(el("p", { class: "sheet-note", text: "채택해 둔 칸에서 「같은 칸 안에서 무엇을 골랐나」를 배워요 (채택 > B컷 > 미분류 > 탈락). 학습에 안 쓴 칸으로 확인해서, 일반 점수보다 나을 때만 써요." }));
-    box.append(el("p", {}, [el("b", { text: `배울 수 있는 칸 ${fmt(lg.total)}개` }), document.createTextNode(` · 준비된 칸 ${fmt(lg.ready.length)}개${lg.need.length ? ` · 지문 모을 그림 ${fmt(lg.need.length)}장` : ""}`)]));
+    box.append(el("p", {}, [el("b", { text: `배울 수 있는 칸 ${fmt(lg.total)}개` }), document.createTextNode(` · 준비된 칸 ${fmt(lg.ready.length)}개`)]));
+    if (lg.need.length) {
+      const have = lg.pictures - lg.need.length;
+      box.append(el("div", { class: "aes-progress" }, [
+        el("span", { text: `그림 지문 ${fmt(have)} / ${fmt(lg.pictures)}장` }),
+        el("span", { class: "bar" }, [el("i", { style: `width:${lg.pictures ? Math.round((have / lg.pictures) * 100) : 0}%` })]),
+      ]));
+    }
     const row = el("div", { class: "aes-actions" });
     if (lg.need.length) {
       const queuedAll = lg.need.every((id) => !Aesthetic.needs(id)) || Aesthetic.pending() >= lg.need.length;
@@ -632,6 +650,7 @@
     }
     const trainBtn = el("button", { class: "btn small", type: "button", text: tasteRun ? `학습 중… ${Math.round(tasteRun.p * 100)}%` : Aesthetic.taste() ? "다시 학습하기" : "학습하기" });
     trainBtn.disabled = Boolean(tasteRun) || lg.ready.length < 8;
+    if (!tasteRun && lg.ready.length < 8) box.append(el("p", { class: "sheet-note", text: `학습은 준비된 칸이 8개부터 돼요 (30개 넘으면 더 정확해요). 배울 수 있는 칸은 채택 1장 + 나머지 B컷처럼, 고른 것과 안 고른 것이 같이 있는 칸이에요.` }));
     trainBtn.title = lg.ready.length < 8 ? "준비된 칸이 8개 이상 있어야 해요 (30개 이상 권장)" : "";
     trainBtn.addEventListener("click", () => void trainTaste(redraw));
     row.append(trainBtn);
@@ -730,13 +749,163 @@
     let last = 0;
     refreshAesSheet = () => {
       if (!dialog.open) return;
-      if (Date.now() - last < 1500) return; // not on every score
+      if (Date.now() - last < 1200) return; // not on every score
       last = Date.now();
-      if (dialog.contains(document.activeElement) && document.activeElement.matches("input")) return;
+      const y = dialog.querySelector(".dialog-body")?.scrollTop || 0;
       draw();
+      const b = dialog.querySelector(".dialog-body");
+      if (b) b.scrollTop = y;
     };
     dialog.addEventListener("close", () => { refreshAesSheet = () => {}; }, { once: true });
     draw();
+  }
+
+  // ---- ⚙ 설정: the 보관함's settings in one pane, laid out like the NovelAI
+  // panel's 설정 (모양 · 보관함 · 미적 점수 · 태그 뜻 · 데이터 · version).
+  state.settings = false;
+  function openSettings(on = true) {
+    state.settings = Boolean(on);
+    document.querySelector(".app").toggleAttribute("data-settings", state.settings);
+    $(".settings-open").setAttribute("aria-current", String(state.settings));
+    $(".settings-pane").hidden = !state.settings;
+    if (state.settings) {
+      $(".title").textContent = "설정";
+      $(".count").textContent = "";
+      void renderSettings();
+      checkUpdate();
+    } else {
+      render();
+    }
+  }
+  let updateInfo = null;
+  function checkUpdate(force = false) {
+    chrome.runtime.sendMessage({ action: "updateStatus", force }, (info) => {
+      void chrome.runtime.lastError;
+      updateInfo = info || null;
+      if (state.settings) renderSettings();
+    });
+  }
+  function setRow(title, sub, control, attrs = {}) {
+    return el("div", { class: "set-row", ...attrs }, [
+      el("span", { class: "set-label" }, [document.createTextNode(title), sub ? el("small", { text: sub }) : null]),
+      control || null,
+    ]);
+  }
+  function setSwitch(id, checked, onChange) {
+    const input = el("input", { type: "checkbox", id, checked: Boolean(checked) });
+    input.addEventListener("change", () => onChange(input.checked));
+    return el("label", { class: "set-switch", for: id }, [input, el("span", { class: "set-slider" })]);
+  }
+  function setSeg(label, options, value, onPick) {
+    const seg = el("div", { class: "set-seg", role: "radiogroup", "aria-label": label });
+    for (const [v, text] of options) {
+      seg.append(el("button", { type: "button", role: "radio", "aria-checked": String(value === v), text, onclick: (event) => {
+        seg.querySelectorAll("button").forEach((b) => b.setAttribute("aria-checked", String(b === event.currentTarget)));
+        onPick(v);
+      } }));
+    }
+    return seg;
+  }
+  const setBtn = (text, run, primary = false) => el("button", { class: `btn small${primary ? "" : " secondary"}`, type: "button", text, onclick: run });
+  let settingsSync = {};
+  async function renderSettings() {
+    const pane = $(".set-scroll");
+    if (!pane) return;
+    settingsSync = await chrome.storage.sync.get(["appearance", "tagHover", "tagHoverMachine"]);
+    const y = pane.scrollTop;
+    pane.innerHTML = "";
+    const title = (t) => el("div", { class: "set-title", text: t });
+    const group = (...rows) => el("div", { class: "set-group" }, rows.filter(Boolean));
+    const fmt = (n) => n.toLocaleString("ko-KR");
+
+    // 모양
+    const look = el("div", { class: "set-appearance", role: "group", "aria-label": "모양" });
+    for (const [v, label, sw] of [["auto", "자동", '<span style="background:#ECECEE"></span><span style="background:#2A2A2C"></span>'], ["light", "라이트", '<span style="background:#ECECEE"></span>'], ["dark", "다크", '<span style="background:#2A2A2C"></span>']]) {
+      look.append(el("button", { type: "button", "data-active": String((settingsSync.appearance || "auto") === v), html: `<span class="set-swatch">${sw}</span>${label}`, onclick: async () => {
+        await chrome.storage.sync.set({ appearance: v });
+        look.querySelectorAll("button").forEach((b) => b.setAttribute("data-active", String(b.textContent === label)));
+      } }));
+    }
+    pane.append(group(setRow("모양", "NovelAI 패널과 같이 바뀌어요", look)));
+
+    // 보관함
+    pane.append(title("보관함"));
+    const linked = state.root && state.rootPerm === "granted";
+    const folderSub = state.root ? `${state.root.name} · ${linked ? `${fmt(state.entries.length)}장` : "허락이 필요해요"}` : "연결하면 예전 그림도 보이고, 탐색기에서 바꾼 것도 따라가요";
+    pane.append(group(
+      setRow("연결한 폴더", folderSub, el("div", { class: "set-inline" }, [
+        linked ? setBtn("폴더와 맞추기", () => void syncFolder({ quiet: false })) : null,
+        setBtn(!state.root ? "연결하기…" : linked ? "다른 폴더로…" : "다시 허락하기", async () => {
+          if (linked) state.root = null; // pick another one
+          await connectFolder();
+          renderFolderBox();
+          renderSettings();
+        }),
+      ])),
+      setRow("정렬", "그리드 · ←/→ · 셀렉 · 크게 보기 순서", (() => {
+        const sel = el("select", { class: "set-select", "aria-label": "정렬" });
+        for (const [k, label] of SORTS) sel.append(el("option", { value: k, text: label, selected: state.sort === k }));
+        sel.addEventListener("change", () => setSort(sel.value));
+        return sel;
+      })()),
+    ));
+
+    // 미적 점수
+    pane.append(title("미적 점수"));
+    const st = Aesthetic.status();
+    const aesSub = !aes.on ? `그림마다 0–100점 · 처음 켤 때 모델 약 ${Aesthetic.MODEL.sizeMB}MB를 한 번 받아요`
+      : st.phase === "downloading" ? `모델 받는 중 · ${Math.round(st.progress * 100)}%`
+        : st.phase === "loading" ? "준비하는 중…"
+          : st.phase === "error" ? `시작하지 못했어요: ${st.error}`
+            : st.queued ? `점수 매기는 중 · 남은 ${fmt(st.queued)}장` : "준비됐어요 · 보는 그림부터 뒤에서 매겨요";
+    const rows = [setRow("미적 점수", aesSub, setSwitch("set-aes", aes.on, async (on) => {
+      aes.on = on;
+      saveAes();
+      if (on) {
+        await Aesthetic.loadScores();
+        void Aesthetic.start().then(() => feedAesFromView(), () => {});
+        feedAesFromView();
+      } else {
+        Aesthetic.stop();
+      }
+      renderAesBox();
+      renderSettings();
+    }))];
+    if (aes.on) {
+      rows.push(setRow("칸을 열 때 점수 아래쪽 건너뛰기", "건너뛴 그림은 미분류로 남아요 · 비교 화면 위에서 다시 보기", setSeg("건너뛰기", [[0, "끄기"], [30, "30%"], [50, "50%"], [70, "70%"]], aes.skip, (v) => { aes.skip = v; saveAes(); renderAesBox(); })));
+      const t = Aesthetic.taste();
+      const lg = learnableGroups();
+      const tasteSub = Aesthetic.fingerprintsSupported() === false ? "이 모델에서는 만들 수 없어요"
+        : t ? `${new Date(t.at).toLocaleDateString("ko-KR")} 학습 · 채택을 위로 본 비율 일반 ${Math.round(t.generic.pairAcc)}% → 내 점수 ${Math.round(t.personal.pairAcc)}%`
+          : `배울 수 있는 칸 ${fmt(lg.total)}개 · 준비된 칸 ${fmt(lg.ready.length)}개${lg.need.length ? ` · 지문 ${fmt(lg.pictures - lg.need.length)} / ${fmt(lg.pictures)}장` : ""}`;
+      rows.push(setRow("내 점수 (내 셀렉으로 학습)", tasteSub, setBtn(t ? "결과 · 다시 학습…" : "학습…", () => void openAesSettings())));
+      if (t) rows.push(setRow("칸 순서·건너뛰기에 내 점수 쓰기", t.better ? "내 점수가 더 잘 맞아요" : "아직은 일반 점수가 더 맞아요", setSwitch("set-taste", Aesthetic.usingTaste(), async (on) => { await Aesthetic.setUseTaste(on); renderSettings(); })));
+    }
+    pane.append(group(...rows));
+
+    // 태그 뜻
+    pane.append(title("태그 뜻"));
+    pane.append(group(
+      setRow("태그에 마우스 올리면 한국어 뜻", "NovelAI 입력칸 · 패널 · 보관함", setSwitch("set-taghover", settingsSync.tagHover !== false, (on) => void chrome.storage.sync.set({ tagHover: on }))),
+      setRow("사전에 없는 태그는 자동 번역", "크롬 내장 번역기 · 처음 한 번 내려받기", setSwitch("set-tagmachine", settingsSync.tagHoverMachine !== false, (on) => void chrome.storage.sync.set({ tagHoverMachine: on }))),
+    ));
+
+    // 데이터
+    pane.append(title("데이터"));
+    const nt = notionReady() ? `${notionCfg.title || "노션"} · 자동 보내기 ${notionCfg.autoSend ? "켜짐" : "꺼짐"}` : "그림·프롬프트를 노션 데이터베이스로";
+    const dataRows = [setRow("노션 연결", nt, setBtn(notionReady() ? "설정…" : "연결하기…", () => void (notionReady() ? openNotionSettings() : openNotionConnect())))];
+    const u = updateInfo;
+    if (u?.eligible) {
+      const sub = u.store ? "웹 스토어 버전이 나왔어요 · 업데이트가 자동이에요" : u.available ? `새 버전 ${u.latest} · 지금 ${u.current}` : u.error ? "확인하지 못했어요 · 인터넷을 확인해 주세요" : `최신 버전이에요 · ${u.current}`;
+      dataRows.push(setRow("업데이트", sub, setBtn(u.store ? "옮기기…" : u.available ? "업데이트…" : "확인", () => {
+        if (u.available || u.store) chrome.runtime.sendMessage({ action: "openUpdatePage" }, () => void chrome.runtime.lastError);
+        else checkUpdate(true);
+      }, Boolean(u.available || u.store))));
+    }
+    dataRows.push(setRow("보관함 안내", "할 수 있는 것과 단축키", setBtn("다시 보기", () => { openSettings(false); globalThis.LibraryTour?.open?.(); })));
+    pane.append(group(...dataRows));
+    pane.append(el("p", { class: "set-version", text: `NAI 자동저장 ${chrome.runtime.getManifest().version}` }));
+    pane.scrollTop = y;
   }
 
   // ---- 셀렉 현황: 캐릭터마다 배경 × 표정 칸. A cell is one same-name group
@@ -3920,6 +4089,7 @@
       openLightbox(tile.dataset.id);
     });
     $(".sort-btn").addEventListener("click", openSortMenu);
+    $(".settings-open").addEventListener("click", () => openSettings(!state.settings));
     $(".board-btn").addEventListener("click", () => setBoard(!state.board));
     $(".cmp-aes").addEventListener("click", (event) => {
       const b = event.target.closest("[data-aes]");
