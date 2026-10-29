@@ -613,3 +613,5 @@ body { word-break: keep-all; overflow-wrap: anywhere; }
 .set-scroll > .set-version { margin: 16px auto 0; padding: 0 4px; }
 .set-scroll > .set-title { margin: 20px auto 6px; padding: 0 4px; }
 .set-scroll > .set-version { margin: 16px auto 0; padding: 0 4px; }
+.cmp-finish { background: var(--accent-fill); color: #fff; }
+.cmp-finish:hover:not(:disabled) { background: var(--accent-fill); filter: brightness(1.1); }

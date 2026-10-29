@@ -2264,6 +2264,25 @@
     laneCurrent("b");
     laneCurrent("a");
   }
+  // 「이걸로 확정」: the 기준 stays 채택; every other 채택 or 미분류 of the 칸 → B컷
+  // (탈락 stays 탈락). One click instead of pressing W on each.
+  const finishTargets = (keep) => cmp.ids.filter((id) => id !== keep && (cullOf(id).label === "pick" || !cullOf(id).label));
+  const finishCount = (keep) => finishTargets(keep).length;
+  function finishGroup() {
+    const keep = laneCurrent("b");
+    if (!keep) return;
+    const ids = finishTargets(keep);
+    if (!ids.length) return;
+    const before = ids.map((id) => [id, cullOf(id).label || null]);
+    applyCullAction(ids, { label: "hold" });
+    cmp.skipped = new Set();
+    laneCurrent("a");
+    renderCompare({ keepImages: true });
+    toast(`이 칸은 채택 1장으로 확정했어요 · ${ids.length}장 B컷`, "ok", { label: "되돌리기", run: () => {
+      for (const [id, label] of before) applyCullAction([id], { label });
+      renderCompare({ keepImages: true });
+    } });
+  }
   // S: the left picture becomes the 기준 and the old 기준 goes to the left —
   // each takes the other's label when the lanes show different ones.
   function swapLanes() {
@@ -2379,7 +2398,7 @@
   function openCompare(ids, { group = null, sequence = undefined } = {}) {
     if (ids.length < 2) return;
     if (sequence !== undefined) cmp.sequence = sequence;
-    cmp.ids = ids.slice(0, 60);
+    cmp.ids = ids.slice(0, 600); // a 칸 can hold many takes (several days); all of them are compared
     cmp.group = group;
     cmp.order = cmp.ids.slice(); // as given, before 미적 점수
     cmp.skipped = new Set();
@@ -2497,6 +2516,7 @@
       cell.append(el("div", { class: "cmp-lane-head" }, [
         title,
         side === "b" ? el("button", { class: "cmp-swap", type: "button", "data-swap": "1", title: "왼쪽 그림을 기준으로 (S)", disabled: laneCurrent("a") ? null : "", html: `${icon("swap", 14)}<span>바꾸기</span>` }) : null,
+        side === "b" && id && cmp.lane.right === "pick" && finishCount(id) ? el("button", { class: "cmp-swap cmp-finish", type: "button", "data-finish": "1", title: "이 그림만 채택으로 남기고, 이 칸의 나머지(채택·미분류)는 전부 B컷으로", html: `${icon("check", 14)}<span>이걸로 확정 · 나머지 ${finishCount(id)}장 B컷</span>` }) : null,
         el("span", { class: "cmp-lane-count", text: list.length ? `${at + 1} / ${list.length}` : "0장" }),
         el("button", { class: "cmp-roll", type: "button", "data-roll": "-1", "aria-label": "이전", disabled: list.length < 2 ? "" : null, text: "‹" }),
         el("button", { class: "cmp-roll", type: "button", "data-roll": "1", "aria-label": "다음", disabled: list.length < 2 ? "" : null, text: "›" }),
@@ -2628,6 +2648,7 @@
         return;
       }
       if (event.target.closest("[data-swap]")) { swapLanes(); return; }
+      if (event.target.closest("[data-finish]")) { finishGroup(); return; }
       if (event.target.closest("[data-next-group]")) { stepGroup(1); return; }
       const cell = event.target.closest(".cmp-cell");
       if (cell && cmp.mode === "pair") {
