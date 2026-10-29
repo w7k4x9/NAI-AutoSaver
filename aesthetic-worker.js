@@ -5,13 +5,14 @@
 // CHW, (x - 0.5) / 0.5.
 /* global ort */
 "use strict";
-importScripts("vendor/ort/ort.wasm.min.js");
+importScripts("vendor/ort/ort.wasm.min.js", "onnx-tap.js");
 
 let session = null;
 let inputName = "input";
 let outputName = "output";
 let size = 384;
 let stages = null;
+let embName = null; // the picture fingerprint (features before the head), when found
 
 function shape(meta) {
   const dims = meta?.shape || meta?.dimensions;
@@ -21,13 +22,29 @@ function shape(meta) {
 async function init({ model, wasmBase, threads, preprocess, fallbackSize }) {
   ort.env.wasm.wasmPaths = wasmBase;
   ort.env.wasm.numThreads = Math.max(1, threads | 0);
-  session = await ort.InferenceSession.create(model, { executionProviders: ["wasm"], graphOptimizationLevel: "all" });
+  // one run gives the class scores and the picture's fingerprint
+  let bytes = new Uint8Array(model);
+  try {
+    const tapped = self.OnnxTap.tapPreLogits(bytes);
+    bytes = tapped.model;
+    embName = tapped.name;
+  } catch (error) {
+    embName = null;
+  }
+  try {
+    session = await ort.InferenceSession.create(bytes, { executionProviders: ["wasm"], graphOptimizationLevel: "all" });
+  } catch (error) {
+    if (!embName) throw error;
+    embName = null; // the extra output upset the runtime: scores only
+    session = await ort.InferenceSession.create(new Uint8Array(model), { executionProviders: ["wasm"], graphOptimizationLevel: "all" });
+  }
+  if (embName && !session.outputNames.includes(embName)) embName = null;
   inputName = session.inputNames[0];
   outputName = session.outputNames.includes("output") ? "output" : session.outputNames[0];
   const dims = shape(session.inputMetadata?.[0]);
   size = dims && typeof dims[2] === "number" && dims[2] > 0 ? dims[2] : fallbackSize || 384;
   stages = Array.isArray(preprocess?.stages) ? preprocess.stages : null;
-  return { size, threads: ort.env.wasm.numThreads };
+  return { size, threads: ort.env.wasm.numThreads, embName };
 }
 
 // A picture as an OffscreenCanvas on white (transparent parts count as white).
@@ -99,7 +116,15 @@ async function score(blob) {
   try {
     const input = (stages && runStages(bitmap)) || encode(toCanvas(bitmap, size, size), [0.5, 0.5, 0.5], [0.5, 0.5, 0.5]);
     const result = await session.run({ [inputName]: new ort.Tensor("float32", input, [1, 3, size, size]) });
-    return Array.from(result[outputName].data);
+    const probs = Array.from(result[outputName].data);
+    let emb = null;
+    if (embName && result[embName]) {
+      const data = result[embName].data;
+      // a fingerprint is a modest vector; anything else is not what we wanted
+      if (data.length >= 32 && data.length <= 8192) emb = Float32Array.from(data);
+      else embName = null;
+    }
+    return { probs, emb };
   } finally {
     bitmap.close();
   }
@@ -110,7 +135,8 @@ self.onmessage = async ({ data }) => {
     if (data.type === "init") {
       self.postMessage({ type: "ready", ...(await init(data)) });
     } else if (data.type === "score") {
-      self.postMessage({ type: "score", id: data.id, probs: await score(data.blob) });
+      const { probs, emb } = await score(data.blob);
+      self.postMessage({ type: "score", id: data.id, probs, emb }, emb ? [emb.buffer] : []);
     }
   } catch (error) {
     self.postMessage({ type: data.type === "init" ? "init-error" : "score-error", id: data.id, error: String(error?.message || error) });

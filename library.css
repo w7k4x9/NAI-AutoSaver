@@ -568,3 +568,10 @@ body { word-break: keep-all; overflow-wrap: anywhere; }
 .aes-report { padding: 12px 14px; border-radius: 12px; background: var(--elev); display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
 .aes-report p { margin: 0; }
 .aes-report .btn { align-self: flex-start; margin-top: 4px; }
+.aes-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+.aes-actions .btn { margin-top: 0; }
+.aes-table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 4px; }
+.aes-table th { font-weight: 600; color: var(--text2); text-align: right; padding: 4px 6px; }
+.aes-table td { padding: 5px 6px; border-top: 0.5px solid var(--border); text-align: right; font-variant-numeric: tabular-nums; }
+.aes-table td:first-child { text-align: left; color: var(--text2); }
+.aes-table td.better { color: var(--accent); font-weight: 650; }

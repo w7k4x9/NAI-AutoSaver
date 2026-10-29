@@ -31,7 +31,81 @@
   let busy = false;
   let saveTimer = null;
   const listeners = new Set();
-  const status = { phase: "off", progress: 0, error: "", threads: 1, done: 0 };
+  const status = { phase: "off", progress: 0, error: "", threads: 1, done: 0, fingerprints: null };
+
+  // ---- 그림 지문 (fingerprints): one Float32Array per picture, in their own
+  // IndexedDB (they are big next to everything else).
+  const FP_DB = "nai-autosaver-fp";
+  const FP_STORE = `fp:${MODEL.name}`;
+  let fpDb = null;
+  const fpIds = new Set();
+  let fpSupported = null; // null = not known yet (before the model ran)
+  function openFp() {
+    if (fpDb) return fpDb;
+    fpDb = new Promise((resolve, reject) => {
+      const req = indexedDB.open(FP_DB, 1);
+      req.onupgradeneeded = () => { if (!req.result.objectStoreNames.contains(FP_STORE)) req.result.createObjectStore(FP_STORE); };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    return fpDb;
+  }
+  const fpTx = async (mode, run) => {
+    const db = await openFp();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(FP_STORE, mode);
+      const out = run(tx.objectStore(FP_STORE));
+      tx.oncomplete = () => resolve(out && "result" in out ? out.result : out);
+      tx.onerror = () => reject(tx.error);
+    });
+  };
+  async function loadFpIds() {
+    try {
+      const keys = await fpTx("readonly", (st) => st.getAllKeys());
+      for (const k of keys || []) fpIds.add(String(k));
+    } catch (error) {
+      void error;
+    }
+  }
+  async function fingerprints(ids) {
+    const out = new Map();
+    const want = ids.filter((id) => fpIds.has(id));
+    for (let i = 0; i < want.length; i += 500) {
+      const part = want.slice(i, i + 500);
+      const got = await fpTx("readonly", (st) => part.map((id) => st.get(id)));
+      part.forEach((id, j) => { const v = got[j]?.result; if (v) out.set(id, new Float32Array(v)); });
+    }
+    return out;
+  }
+
+  // ---- 내 점수: the user's own taste, learned from their 셀렉 (taste.js).
+  const TASTE_KEY = `tasteModel:${MODEL.name}`;
+  let taste = null; // { model, personal, generic, groups, pictures, better, at }
+  let useTaste = false;
+  const personal = new Map(); // id → 0–100
+  async function loadTaste() {
+    try {
+      const saved = await root.LibDB.getKv(TASTE_KEY);
+      if (saved?.model?.theta) {
+        taste = saved;
+        useTaste = saved.use !== false && Boolean(saved.better);
+        await scorePersonalAll();
+      }
+    } catch (error) {
+      void error;
+    }
+  }
+  async function scorePersonalAll() {
+    personal.clear();
+    if (!taste) return;
+    const ids = [...fpIds].filter((id) => scores.has(id));
+    const fps = await fingerprints(ids);
+    for (const [id, x] of fps) personal.set(id, root.Taste.apply(taste.model, x, scores.get(id)));
+  }
+  const tasteOn = () => Boolean(useTaste && taste && fpSupported !== false);
+  function personalOne(id, x) {
+    if (taste && x && scores.has(id)) personal.set(id, root.Taste.apply(taste.model, x, scores.get(id)));
+  }
 
   function emit(event) {
     for (const fn of listeners) {
@@ -89,12 +163,14 @@
   async function loadScores() {
     if (loaded) return;
     loaded = true;
+    await loadFpIds();
     try {
       const saved = await root.LibDB.getKv(SCORES_KEY);
       if (saved && typeof saved === "object") for (const [id, s] of Object.entries(saved)) if (typeof s === "number") scores.set(id, s);
     } catch (error) {
       void error;
     }
+    await loadTaste();
   }
   function saveScores() {
     clearTimeout(saveTimer);
@@ -132,7 +208,8 @@
         worker.postMessage({ type: "init", model, wasmBase: chrome.runtime.getURL("vendor/ort/"), threads, preprocess, fallbackSize: /_448/.test(MODEL.name) ? 448 : 384 }, [model]);
       });
       worker.onmessage = null;
-      setPhase("ready", { threads: info.threads });
+      fpSupported = Boolean(info.embName);
+      setPhase("ready", { threads: info.threads, fingerprints: fpSupported });
       void pump();
       return true;
     })().catch((error) => {
@@ -168,7 +245,7 @@
     return new Promise((resolve, reject) => {
       worker.onmessage = ({ data }) => {
         if (data.id !== id) return;
-        if (data.type === "score") resolve(data.probs);
+        if (data.type === "score") resolve(data);
         else reject(new Error(data.error));
       };
       worker.postMessage({ type: "score", id, blob });
@@ -188,7 +265,7 @@
         queued.delete(id);
         const get = blobs.get(id);
         blobs.delete(id);
-        if (scores.has(id) || !get) continue;
+        if (!needs(id) || !get) continue;
         let blob = null;
         try {
           blob = await get();
@@ -197,8 +274,16 @@
         }
         if (!blob) continue;
         try {
-          const s = toScore(await runOne(id, blob));
+          const out = await runOne(id, blob);
+          const s = toScore(out.probs);
           scores.set(id, s);
+          if (out.emb) {
+            fpIds.add(id);
+            void fpTx("readwrite", (st) => st.put(out.emb.buffer, id)).catch(() => fpIds.delete(id));
+            personalOne(id, out.emb);
+          } else if (fpSupported) {
+            fpSupported = false; // the model stopped giving fingerprints
+          }
           status.done += 1;
           saveScores();
           emit({ type: "score", id, score: s, queued: queue.length });
@@ -211,11 +296,13 @@
       emit({ type: "idle", queued: queue.length });
     }
   }
+  // Done with a picture: it has a score, and its fingerprint when the model gives one.
+  const needs = (id) => !scores.has(id) || (fpSupported !== false && !fpIds.has(id));
   // Ask for scores. items: [{ id, blob: () => Blob }]. front: before the rest.
   function want(items, { front = false } = {}) {
     const fresh = [];
     for (const it of items) {
-      if (!it || scores.has(it.id)) continue;
+      if (!it || !needs(it.id)) continue;
       blobs.set(it.id, it.blob);
       if (queued.has(it.id)) {
         if (front) {
@@ -244,6 +331,35 @@
     want,
     score: (id) => (scores.has(id) ? scores.get(id) : null),
     has: (id) => scores.has(id),
+    // the score that orders a 칸: 내 점수 when it is in use, else the general one
+    rank: (id) => (tasteOn() ? (personal.has(id) ? personal.get(id) : null) : (scores.has(id) ? scores.get(id) : null)),
+    hasRank: (id) => (tasteOn() ? personal.has(id) : scores.has(id)),
+    personal: (id) => (personal.has(id) ? personal.get(id) : null),
+    needs,
+    hasFingerprint: (id) => fpIds.has(id),
+    fingerprintsSupported: () => fpSupported,
+    fingerprints,
+    taste: () => taste,
+    usingTaste: () => tasteOn(),
+    async setUseTaste(on) {
+      useTaste = Boolean(on) && Boolean(taste);
+      if (taste) { taste.use = useTaste; await root.LibDB.setKv(TASTE_KEY, taste); }
+      emit({ type: "taste" });
+    },
+    async setTaste(result) {
+      taste = { ...result, at: Date.now(), use: Boolean(result.better) };
+      useTaste = taste.use;
+      await root.LibDB.setKv(TASTE_KEY, taste);
+      await scorePersonalAll();
+      emit({ type: "taste" });
+    },
+    async clearTaste() {
+      taste = null;
+      useTaste = false;
+      personal.clear();
+      await root.LibDB.delKv(TASTE_KEY).catch(() => {});
+      emit({ type: "taste" });
+    },
     forget: (id) => { scores.delete(id); saveScores(); },
     pending: () => queue.length,
     status: () => ({ ...status, queued: queue.length }),

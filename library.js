@@ -327,7 +327,7 @@
   }
   function sortByName(list) {
     if (state.sort === "aes" && aes.on) {
-      const sc = (e) => { const v = Aesthetic.score(e.id); return v == null ? -1 : v; };
+      const sc = (e) => { const v = Aesthetic.rank(e.id); return v == null ? -1 : v; };
       return list.sort((a, b) => sc(b) - sc(a) || b.savedAt - a.savedAt);
     }
     if (state.sort === "old") return list.sort((a, b) => a.savedAt - b.savedAt);
@@ -406,18 +406,22 @@
     const e = byId(id);
     return e && e.thumb ? { id, blob: () => e.thumb } : null;
   };
+  function scoreText(id) {
+    const s = Aesthetic.rank(id);
+    const label = Aesthetic.usingTaste() ? "내 점수" : "점수";
+    return s == null ? `${label} …` : `${label} ${Math.round(s)}`;
+  }
   function aesBadge(id) {
     if (!aes.on) return null;
-    const s = Aesthetic.score(id);
-    return el("span", { class: "cmp-score", "data-score-id": id, title: "미적 점수 (0–100)", text: s == null ? "점수 …" : `점수 ${Math.round(s)}` });
+    return el("span", { class: "cmp-score", "data-score-id": id, title: Aesthetic.usingTaste() ? "내 점수: 내 셀렉으로 배운 점수 (0–100)" : "미적 점수 (0–100)", text: scoreText(id) });
   }
   // Best first, and the bottom N% of the not-yet-sorted ones out of the way —
   // once every picture of the 칸 has a score, and only before the user started.
   function applyAesOrder() {
     if (!aes.on || cmp.aesApplied) return;
-    if (!cmp.ids.every((id) => Aesthetic.has(id))) return;
+    if (!cmp.ids.every((id) => Aesthetic.hasRank(id))) return;
     cmp.aesApplied = true;
-    const s = (id) => Aesthetic.score(id);
+    const s = (id) => Aesthetic.rank(id);
     cmp.ids.sort((a, b) => s(b) - s(a));
     if (aes.skip) {
       const ranked = cmp.ids.slice(); // best → worst
@@ -434,7 +438,7 @@
     const chip = $(".cmp-aes");
     if (!chip) return;
     const n = cmp.skipped.size;
-    const waiting = aes.on && !cmp.aesApplied ? cmp.ids.filter((id) => !Aesthetic.has(id)).length : 0;
+    const waiting = aes.on && !cmp.aesApplied ? cmp.ids.filter((id) => !Aesthetic.hasRank(id)).length : 0;
     chip.hidden = !(n || waiting);
     chip.innerHTML = "";
     if (waiting) {
@@ -473,9 +477,9 @@
   function onAesEvent(event) {
     if (event.type === "score") {
       // the 점수 badge in the compare view, if it is showing that picture
-      document.querySelectorAll(`.cmp-score[data-score-id="${CSS.escape(event.id)}"]`).forEach((b) => { b.textContent = `점수 ${Math.round(event.score)}`; });
+      document.querySelectorAll(`.cmp-score[data-score-id="${CSS.escape(event.id)}"]`).forEach((b) => { b.textContent = scoreText(event.id); });
       if (!$(".compare").hidden && cmp.ids.includes(event.id)) {
-        if (!cmp.aesApplied && !cmp.touched && cmp.ids.every((id) => Aesthetic.has(id))) {
+        if (!cmp.aesApplied && !cmp.touched && cmp.ids.every((id) => Aesthetic.hasRank(id))) {
           applyAesOrder();
           renderCompare({ keepImages: true });
         } else {
@@ -520,39 +524,152 @@
     if (st.phase === "downloading") box.append(el("div", { class: "progress", html: `<span style="width:${pct}%"></span>` }));
   }
 
-  // 「내 셀렉과 맞춰 보기」: in the 칸 where the user already chose a 채택,
-  // where did that 채택 land in the 점수 order?
-  function aesReport() {
+  // The 칸 the user already chose in: same name, 3+ pictures, at least one
+  // 채택 and one not. Those that have every score and fingerprint can be learned from.
+  function learnableGroups() {
     const groups = new Map();
     for (const e of state.entries) {
       const k = groupKeyOf(e);
       if (!groups.has(k)) groups.set(k, []);
       groups.get(k).push(e.id);
     }
-    const ranks = []; // 0 = best of its 칸, 1 = worst
+    const ready = [];
     const need = [];
-    let groupsUsed = 0;
-    for (const ids of groups.values()) {
-      if (ids.length < 4) continue;
-      const picks = ids.filter((id) => cullOf(id).label === "pick");
-      if (!picks.length || picks.length > ids.length / 2) continue;
-      const missing = ids.filter((id) => !Aesthetic.has(id));
-      if (missing.length) {
-        need.push(...missing);
-        continue;
-      }
-      groupsUsed += 1;
-      const sorted = ids.slice().sort((a, b) => Aesthetic.score(b) - Aesthetic.score(a));
-      for (const id of picks) ranks.push(sorted.indexOf(id) / (sorted.length - 1));
+    let total = 0;
+    let pictures = 0;
+    for (const [key, ids] of groups) {
+      if (ids.length < 3) continue;
+      const picks = ids.filter((id) => cullOf(id).label === "pick").length;
+      if (!picks || picks === ids.length) continue;
+      total += 1;
+      pictures += ids.length;
+      const missing = ids.filter((id) => Aesthetic.needs(id));
+      if (missing.length) need.push(...missing);
+      else ready.push({ key, ids });
     }
-    const share = (f) => (ranks.length ? Math.round((ranks.filter(f).length / ranks.length) * 100) : 0);
-    return {
-      picks: ranks.length,
-      groups: groupsUsed,
-      need,
-      top30: share((r) => r <= 0.3),
-      lost: { 30: share((r) => r > 0.7), 50: share((r) => r > 0.5), 70: share((r) => r > 0.3) },
-    };
+    return { ready, need, total, pictures };
+  }
+  let tasteRun = null; // { p } while training
+  async function trainTaste(redraw) {
+    const { ready } = learnableGroups();
+    tasteRun = { p: 0 };
+    redraw();
+    try {
+      const fps = await Aesthetic.fingerprints(ready.flatMap((g) => g.ids));
+      const groups = ready.map((g) => ({
+        key: g.key,
+        items: g.ids.filter((id) => fps.has(id)).map((id) => ({ id, label: cullOf(id).label || "none", x: fps.get(id), base: Aesthetic.score(id) })),
+      }));
+      const result = await new Promise((resolve, reject) => {
+        const w = new Worker(chrome.runtime.getURL("taste-worker.js"));
+        w.onmessage = ({ data }) => {
+          if (data.type === "progress") {
+            tasteRun.p = data.p;
+            redraw();
+          } else if (data.type === "done") {
+            w.terminate();
+            resolve(data.result);
+          } else {
+            w.terminate();
+            reject(new Error(data.error));
+          }
+        };
+        w.onerror = (e) => { w.terminate(); reject(new Error(e.message || "학습하지 못했어요.")); };
+        w.postMessage({ groups });
+      });
+      if (!result.ok) {
+        toast(result.reason === "few" ? "학습할 칸이 아직 적어요. 채택해 둔 칸이 8개 이상 필요해요." : "학습하지 못했어요.", "warn");
+      } else {
+        await Aesthetic.setTaste(result);
+        toast(result.better ? "내 점수를 만들었어요. 이제 칸을 열면 내 점수 순서로 나와요." : "학습했지만 아직은 일반 점수가 더 맞아요. 셀렉을 더 하고 다시 해 보세요.", result.better ? "ok" : "warn");
+      }
+    } catch (error) {
+      toast(`학습하지 못했어요: ${error.message || error}`, "warn");
+    } finally {
+      tasteRun = null;
+      redraw();
+      if (!$(".compare").hidden) { cmp.aesApplied = false; if (!cmp.touched) { applyAesOrder(); renderCompare({ keepImages: true }); } }
+    }
+  }
+  function tasteSection(redraw) {
+    const box = el("div", { class: "aes-report" });
+    if (Aesthetic.fingerprintsSupported() === false) {
+      box.append(el("p", { class: "sheet-note", text: "이 모델에서는 그림 지문을 꺼내지 못해서 내 점수를 만들 수 없어요. 일반 점수는 그대로 쓸 수 있어요." }));
+      // how the general score does on the 칸 already chosen
+      const ranks = [];
+      for (const g of learnableGroups().ready) {
+        const sorted = g.ids.slice().sort((a, b) => Aesthetic.score(b) - Aesthetic.score(a));
+        for (const id of g.ids) if (cullOf(id).label === "pick") ranks.push(sorted.indexOf(id) / (sorted.length - 1));
+      }
+      if (ranks.length >= 5) {
+        const share = (f) => Math.round((ranks.filter(f).length / ranks.length) * 100);
+        box.append(el("p", {}, [el("b", { text: `채택 ${ranks.length}장 중 ${share((r) => r <= 0.3)}%` }), document.createTextNode("가 같은 칸에서 점수 위쪽 30% 안에 있었어요. (점수가 아무 의미 없으면 30% 정도)")]),
+          el("p", { class: "sheet-note", text: `건너뛰었다면 놓쳤을 채택: 아래쪽 30% → ${share((r) => r > 0.7)}% · 50% → ${share((r) => r > 0.5)}% · 70% → ${share((r) => r > 0.3)}%` }));
+      }
+      const need = learnableGroups().need;
+      if (need.length) {
+        const go = el("button", { class: "btn small secondary", type: "button", text: `채택해 둔 칸 점수 매기기 (${need.length.toLocaleString("ko-KR")}장)` });
+        go.addEventListener("click", () => { Aesthetic.want(need.map(aesItem).filter(Boolean), { front: true }); go.disabled = true; go.textContent = "점수 매기는 중…"; });
+        box.append(el("div", { class: "aes-actions" }, [go]));
+      }
+      return box;
+    }
+    const lg = learnableGroups();
+    const fmt = (n) => n.toLocaleString("ko-KR");
+    box.append(el("p", { class: "sheet-note", text: "채택해 둔 칸에서 「같은 칸 안에서 무엇을 골랐나」를 배워요 (채택 > B컷 > 미분류 > 탈락). 학습에 안 쓴 칸으로 확인해서, 일반 점수보다 나을 때만 써요." }));
+    box.append(el("p", {}, [el("b", { text: `배울 수 있는 칸 ${fmt(lg.total)}개` }), document.createTextNode(` · 준비된 칸 ${fmt(lg.ready.length)}개${lg.need.length ? ` · 지문 모을 그림 ${fmt(lg.need.length)}장` : ""}`)]));
+    const row = el("div", { class: "aes-actions" });
+    if (lg.need.length) {
+      const queuedAll = lg.need.every((id) => !Aesthetic.needs(id)) || Aesthetic.pending() >= lg.need.length;
+      const go = el("button", { class: "btn small secondary", type: "button", text: queuedAll ? "지문 모으는 중…" : `지문 모으기 (${fmt(lg.need.length)}장)` });
+      go.disabled = queuedAll;
+      go.addEventListener("click", () => {
+        Aesthetic.want(lg.need.map(aesItem).filter(Boolean), { front: true });
+        go.disabled = true;
+        go.textContent = "지문 모으는 중…";
+      });
+      row.append(go);
+    }
+    const trainBtn = el("button", { class: "btn small", type: "button", text: tasteRun ? `학습 중… ${Math.round(tasteRun.p * 100)}%` : Aesthetic.taste() ? "다시 학습하기" : "학습하기" });
+    trainBtn.disabled = Boolean(tasteRun) || lg.ready.length < 8;
+    trainBtn.title = lg.ready.length < 8 ? "준비된 칸이 8개 이상 있어야 해요 (30개 이상 권장)" : "";
+    trainBtn.addEventListener("click", () => void trainTaste(redraw));
+    row.append(trainBtn);
+    box.append(row);
+    if (lg.ready.length && lg.ready.length < 30 && !tasteRun) box.append(el("p", { class: "sheet-note", text: "칸이 30개 이상 모이면 더 믿을 만해요. 지문 모으기는 뒤에서 계속돼요." }));
+    const t = Aesthetic.taste();
+    if (t) {
+      const pct = (v) => `${Math.round(v)}%`;
+      const table = el("table", { class: "aes-table" }, [
+        el("thead", {}, [el("tr", {}, [el("th", { text: "" }), el("th", { text: "일반 점수" }), el("th", { text: "내 점수" })])]),
+        el("tbody", {}, [
+          ["같은 칸 두 장 중 채택을 위로 본 비율", t.generic.pairAcc, t.personal.pairAcc, true],
+          ["채택이 위쪽 30% 안에 든 비율", t.generic.top30, t.personal.top30, true],
+          ["아래쪽 30% 건너뛰면 놓치는 채택", t.generic.lost[30], t.personal.lost[30], false],
+          ["아래쪽 50% 건너뛰면 놓치는 채택", t.generic.lost[50], t.personal.lost[50], false],
+          ["아래쪽 70% 건너뛰면 놓치는 채택", t.generic.lost[70], t.personal.lost[70], false],
+        ].map(([label, g, p, up]) => el("tr", {}, [
+          el("td", { text: label }),
+          el("td", { text: pct(g) }),
+          el("td", { class: (up ? p > g : p < g) ? "better" : "", text: pct(p) }),
+        ]))),
+      ]);
+      box.append(
+        el("p", { class: "sheet-note", text: `${new Date(t.at).toLocaleString("ko-KR")} · 칸 ${fmt(t.groups)}개 · 그림 ${fmt(t.pictures)}장으로 학습 · 숫자는 학습에 안 쓴 칸으로 잰 거예요` }),
+        table,
+        el("p", { class: "sheet-note", text: t.better ? "내 점수가 네 셀렉을 더 잘 맞혀요." : "아직은 일반 점수가 더 맞아요. 셀렉을 더 하고 다시 학습해 보세요." }),
+      );
+      const use = el("input", { type: "checkbox", id: "aes-taste", checked: Aesthetic.usingTaste() });
+      use.classList.add("ios-switch");
+      use.addEventListener("change", async () => {
+        await Aesthetic.setUseTaste(use.checked);
+        if (!$(".compare").hidden) { cmp.aesApplied = false; if (!cmp.touched) { applyAesOrder(); renderCompare({ keepImages: true }); } }
+        redraw();
+      });
+      box.append(el("div", { class: "ios-group" }, [el("label", { class: "ios-row", for: "aes-taste" }, [el("span", { class: "grow" }, [document.createTextNode("칸 순서·건너뛰기에 내 점수 쓰기"), el("small", { text: "끄면 일반 점수로 해요" })]), use])]));
+      box.append(el("button", { class: "btn small plain", type: "button", text: "내 점수 지우기", onclick: async () => { await Aesthetic.clearTaste(); redraw(); } }));
+    }
+    return box;
   }
   let refreshAesSheet = () => {};
   async function openAesSettings() {
@@ -596,29 +713,9 @@
           group.append(el("label", { class: "ios-row", for: `aes-skip-${v}` }, [el("span", { class: "grow" }, [document.createTextNode(label), hint ? el("small", { text: hint }) : null]), r]));
         }
         body.append(group, el("p", { class: "sheet-note", text: "건너뛴 그림은 미분류로 남고, 비교 화면 위의 「보기」로 다시 볼 수 있어요. 「B컷으로」를 누르면 한꺼번에 B컷이 돼요." }));
-        // report
-        body.append(el("div", { class: "ios-group-label", text: "내 셀렉과 맞는지" }));
-        const rep = aesReport();
-        const box = el("div", { class: "aes-report" });
-        if (rep.picks >= 5) {
-          box.append(
-            el("p", {}, [el("b", { text: `채택 ${rep.picks}장 중 ${rep.top30}%` }), document.createTextNode(`가 같은 칸에서 점수 위쪽 30% 안에 있었어요. (점수가 아무 의미 없으면 30% 정도가 나와요)`)]),
-            el("p", { class: "sheet-note", text: `건너뛰었다면 놓쳤을 채택: 아래쪽 30% → ${rep.lost[30]}% · 50% → ${rep.lost[50]}% · 70% → ${rep.lost[70]}%` }),
-            el("p", { class: "sheet-note", text: rep.top30 >= 55 ? "꽤 잘 맞아요. 놓치는 비율을 보고 건너뛰기를 정하면 돼요." : rep.top30 >= 40 ? "조금 맞아요. 건너뛰기는 30% 정도까지만 권해요." : "잘 안 맞아요. 순서만 참고하고 건너뛰기는 끄는 게 좋아요." }),
-          );
-        } else {
-          box.append(el("p", { class: "sheet-note", text: "채택해 둔 칸에 점수가 매겨지면 여기에 결과가 나와요." }));
-        }
-        if (rep.need.length) {
-          const go = el("button", { class: "btn small", type: "button", text: `채택해 둔 칸 점수 매기기 (${rep.need.length.toLocaleString("ko-KR")}장)` });
-          go.addEventListener("click", () => {
-            Aesthetic.want(rep.need.map(aesItem).filter(Boolean), { front: true });
-            go.disabled = true;
-            go.textContent = "점수 매기는 중…";
-          });
-          box.append(go);
-        }
-        body.append(box);
+        // 내 셀렉으로 학습
+        body.append(el("div", { class: "ios-group-label", text: "내 셀렉으로 학습 (내 점수)" }));
+        body.append(tasteSection(draw));
         body.append(el("p", { class: "sheet-note", text: `모델: ${Aesthetic.MODEL.repo} (${Aesthetic.MODEL.license}). 많은 사람이 좋아하는 평균 취향이라 네 기준과 다를 수 있어요.` }));
         body.append(el("button", { class: "sheet-danger", type: "button", text: "미적 점수 끄고 모델 지우기", onclick: async () => {
           aes.on = false;
