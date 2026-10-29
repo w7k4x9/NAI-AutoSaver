@@ -187,6 +187,7 @@
     });
     renderFolderBox();
     renderNotionBox();
+    renderAesBox();
   }
   const isCullKey = (key) => key.startsWith("cull:");
   function navButton(key, label, iconName, count) {
@@ -278,6 +279,7 @@
     renderBoardButton();
     if (state.board) renderBoard();
     else renderMoreTiles();
+    feedAesFromView();
     const empty = $(".empty");
     if (!state.shown.length) {
       empty.hidden = false;
@@ -296,6 +298,7 @@
     ["old", "오래된 순", "먼저 저장한 그림이 위로"],
     ["group", "같은 이름끼리", "같은 이름 그림을 붙여서 · 묶음은 최근 순"],
     ["name", "이름순", "가나다 · (1) (2) (10) 순서로"],
+    ["aes", "미적 점수순", "점수 높은 그림이 위로 · 미적 점수를 켜면 돼요"],
   ];
   const SORT_KEY = "naiAutoSaver.librarySort";
   state.sort = "new";
@@ -323,6 +326,10 @@
     return sortByName(list);
   }
   function sortByName(list) {
+    if (state.sort === "aes" && aes.on) {
+      const sc = (e) => { const v = Aesthetic.score(e.id); return v == null ? -1 : v; };
+      return list.sort((a, b) => sc(b) - sc(a) || b.savedAt - a.savedAt);
+    }
     if (state.sort === "old") return list.sort((a, b) => a.savedAt - b.savedAt);
     if (state.sort !== "name" && state.sort !== "group") return list.sort((a, b) => b.savedAt - a.savedAt);
     // work out each name's group / number once (a big library sorts fast)
@@ -375,6 +382,264 @@
       ]));
     }
     wrap.append(menu);
+  }
+
+  // ---- 미적 점수: an anime aesthetic model scores each picture (0–100) in
+  // the background; a 칸 then opens best-first, and the bottom N% can be
+  // skipped. The user decides how far to trust it with 「내 셀렉과 맞춰 보기」.
+  const AES_KEY = "aesSettings";
+  const aes = { on: false, skip: 0 };
+  async function loadAes() {
+    try {
+      const saved = await LibDB.getKv(AES_KEY);
+      if (saved && typeof saved === "object") Object.assign(aes, { on: Boolean(saved.on), skip: [0, 30, 50, 70].includes(saved.skip) ? saved.skip : 0 });
+    } catch (error) {
+      void error;
+    }
+    if (aes.on) await Aesthetic.loadScores();
+  }
+  function saveAes() {
+    void LibDB.setKv(AES_KEY, { ...aes }).catch(() => {});
+  }
+  const aesReady = () => aes.on && Aesthetic.status().phase === "ready";
+  const aesItem = (id) => {
+    const e = byId(id);
+    return e && e.thumb ? { id, blob: () => e.thumb } : null;
+  };
+  function aesBadge(id) {
+    if (!aes.on) return null;
+    const s = Aesthetic.score(id);
+    return el("span", { class: "cmp-score", "data-score-id": id, title: "미적 점수 (0–100)", text: s == null ? "점수 …" : `점수 ${Math.round(s)}` });
+  }
+  // Best first, and the bottom N% of the not-yet-sorted ones out of the way —
+  // once every picture of the 칸 has a score, and only before the user started.
+  function applyAesOrder() {
+    if (!aes.on || cmp.aesApplied) return;
+    if (!cmp.ids.every((id) => Aesthetic.has(id))) return;
+    cmp.aesApplied = true;
+    const s = (id) => Aesthetic.score(id);
+    cmp.ids.sort((a, b) => s(b) - s(a));
+    if (aes.skip) {
+      const ranked = cmp.ids.slice(); // best → worst
+      const cut = Math.floor((ranked.length * aes.skip) / 100);
+      const keepAtLeast = 2;
+      const bottom = ranked.slice(Math.max(keepAtLeast, ranked.length - cut));
+      cmp.skipped = new Set(bottom.filter((id) => !cullOf(id).label));
+    }
+    cmp.lane.a = 0;
+    cmp.lane.aId = null;
+    pickLeftLane();
+  }
+  function renderAesChip() {
+    const chip = $(".cmp-aes");
+    if (!chip) return;
+    const n = cmp.skipped.size;
+    const waiting = aes.on && !cmp.aesApplied ? cmp.ids.filter((id) => !Aesthetic.has(id)).length : 0;
+    chip.hidden = !(n || waiting);
+    chip.innerHTML = "";
+    if (waiting) {
+      chip.append(el("span", { class: "cmp-aes-text", text: Aesthetic.status().phase === "ready" ? `점수 매기는 중 · ${waiting}장 남음` : "미적 점수 준비 중…" }));
+    } else if (n) {
+      chip.append(
+        el("span", { class: "cmp-aes-text", text: `점수 아래쪽 ${n}장 건너뜀` }),
+        el("button", { type: "button", "data-aes": "show", text: "보기" }),
+        el("button", { type: "button", "data-aes": "hold", text: "B컷으로" }),
+      );
+    }
+  }
+  function feedAesFromCompare() {
+    if (!aes.on) return;
+    Aesthetic.want(cmp.ids.map(aesItem).filter(Boolean), { front: true });
+    // the next 칸 to do, so it is ready by the time the user gets there
+    const seq = groupSequence().filter((g) => g.ids.length > 1);
+    const at = seq.findIndex((g) => g.key === cmp.group);
+    const next = [];
+    for (let i = 1; i < seq.length && next.length < 3; i += 1) {
+      const g = seq[(at + i) % seq.length];
+      if (!groupDone(g.ids)) next.push(...g.ids);
+    }
+    Aesthetic.want(next.map(aesItem).filter(Boolean), { front: false });
+  }
+  let feedTimer = null;
+  function feedAesFromView() {
+    if (!aes.on) return;
+    clearTimeout(feedTimer);
+    feedTimer = setTimeout(() => {
+      const ids = state.board ? boardOrder.flatMap((g) => (groupDone(g.ids) ? [] : g.ids)) : (state.shown || []).map((e) => e.id);
+      Aesthetic.want(ids.slice(0, 5000).map(aesItem).filter(Boolean));
+    }, 1500);
+  }
+  let aesBoxTimer = null;
+  function onAesEvent(event) {
+    if (event.type === "score") {
+      // the 점수 badge in the compare view, if it is showing that picture
+      document.querySelectorAll(`.cmp-score[data-score-id="${CSS.escape(event.id)}"]`).forEach((b) => { b.textContent = `점수 ${Math.round(event.score)}`; });
+      if (!$(".compare").hidden && cmp.ids.includes(event.id)) {
+        if (!cmp.aesApplied && !cmp.touched && cmp.ids.every((id) => Aesthetic.has(id))) {
+          applyAesOrder();
+          renderCompare({ keepImages: true });
+        } else {
+          renderAesChip();
+        }
+      }
+      if (sortNeedsScores()) scheduleScoreSort();
+    }
+    clearTimeout(aesBoxTimer);
+    aesBoxTimer = setTimeout(() => { renderAesBox(); refreshAesSheet(); }, event.type === "score" ? 400 : 0);
+  }
+  const sortNeedsScores = () => state.sort === "aes" && !state.board;
+  let scoreSortTimer = null;
+  function scheduleScoreSort() {
+    // redraw for the new order only when the user is not busy in the grid
+    clearTimeout(scoreSortTimer);
+    scoreSortTimer = setTimeout(() => {
+      if (Date.now() - lastInput < 3000 || !$(".compare").hidden || !$(".lightbox").hidden) return scheduleScoreSort();
+      const y = $(".gallery").scrollTop;
+      render();
+      $(".gallery").scrollTop = y;
+    }, 4000);
+  }
+  function renderAesBox() {
+    const box = $(".aes-box");
+    if (!box) return;
+    box.innerHTML = "";
+    const st = Aesthetic.status();
+    const pct = Math.round((st.progress || 0) * 100);
+    if (!aes.on) {
+      box.dataset.state = "none";
+      box.append(connRow({ iconName: "sparkle", title: "미적 점수", sub: "점수 높은 그림부터 보기", action: () => void openAesSettings(), actionTitle: "애니 미적 점수 모델로 그림마다 점수를 매겨요" }));
+      return;
+    }
+    box.dataset.state = st.phase === "error" ? "warn" : "ok";
+    const sub = st.phase === "downloading" ? `모델 받는 중 · ${pct}%`
+      : st.phase === "loading" ? "준비하는 중…"
+        : st.phase === "error" ? "시작하지 못했어요 · 눌러서 보기"
+          : st.queued ? `점수 매기는 중 · 남은 ${st.queued.toLocaleString("ko-KR")}장`
+            : `준비됨${aes.skip ? ` · 아래쪽 ${aes.skip}% 건너뛰기` : ""}`;
+    box.append(connRow({ iconName: "sparkle", title: "미적 점수", sub, meta: st.phase === "ready" ? '<i class="dot"></i>켜짐' : "", action: () => void openAesSettings(), actionTitle: "미적 점수 설정" }));
+    if (st.phase === "downloading") box.append(el("div", { class: "progress", html: `<span style="width:${pct}%"></span>` }));
+  }
+
+  // 「내 셀렉과 맞춰 보기」: in the 칸 where the user already chose a 채택,
+  // where did that 채택 land in the 점수 order?
+  function aesReport() {
+    const groups = new Map();
+    for (const e of state.entries) {
+      const k = groupKeyOf(e);
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(e.id);
+    }
+    const ranks = []; // 0 = best of its 칸, 1 = worst
+    const need = [];
+    let groupsUsed = 0;
+    for (const ids of groups.values()) {
+      if (ids.length < 4) continue;
+      const picks = ids.filter((id) => cullOf(id).label === "pick");
+      if (!picks.length || picks.length > ids.length / 2) continue;
+      const missing = ids.filter((id) => !Aesthetic.has(id));
+      if (missing.length) {
+        need.push(...missing);
+        continue;
+      }
+      groupsUsed += 1;
+      const sorted = ids.slice().sort((a, b) => Aesthetic.score(b) - Aesthetic.score(a));
+      for (const id of picks) ranks.push(sorted.indexOf(id) / (sorted.length - 1));
+    }
+    const share = (f) => (ranks.length ? Math.round((ranks.filter(f).length / ranks.length) * 100) : 0);
+    return {
+      picks: ranks.length,
+      groups: groupsUsed,
+      need,
+      top30: share((r) => r <= 0.3),
+      lost: { 30: share((r) => r > 0.7), 50: share((r) => r > 0.5), 70: share((r) => r > 0.3) },
+    };
+  }
+  let refreshAesSheet = () => {};
+  async function openAesSettings() {
+    const { dialog, body, right: save } = notionDialogShell("미적 점수", { leftLabel: "닫기", rightLabel: "" });
+    save.hidden = true;
+    const draw = () => {
+      body.innerHTML = "";
+      const st = Aesthetic.status();
+      const on = el("input", { type: "checkbox", id: "aes-on", checked: aes.on });
+      on.classList.add("ios-switch");
+      on.addEventListener("change", async () => {
+        aes.on = on.checked;
+        saveAes();
+        if (aes.on) {
+          await Aesthetic.loadScores();
+          void Aesthetic.start().then(() => { feedAesFromView(); }, () => {});
+          feedAesFromView();
+        } else {
+          Aesthetic.stop();
+        }
+        renderAesBox();
+        draw();
+      });
+      body.append(
+        el("p", { class: "sheet-note", text: "애니 그림 미적 점수 모델로 그림마다 0–100점을 매겨요. 칸을 열면 점수 높은 그림부터 나오고, 원하면 점수 아래쪽은 건너뛰어요. 고르는 건 그대로 네가 해요." }),
+        el("div", { class: "ios-group" }, [el("label", { class: "ios-row", for: "aes-on" }, [el("span", { class: "grow" }, [document.createTextNode("미적 점수 켜기"), el("small", { text: `처음 켤 때 모델을 한 번 받아요 (약 ${Aesthetic.MODEL.sizeMB}MB) · 그림은 밖으로 안 나가요` })]), on])]),
+      );
+      if (aes.on) {
+        const phaseText = st.phase === "downloading" ? `모델 받는 중 · ${Math.round(st.progress * 100)}%`
+          : st.phase === "loading" ? "준비하는 중…"
+            : st.phase === "error" ? `시작하지 못했어요: ${st.error}`
+              : st.phase === "ready" ? (st.queued ? `점수 매기는 중 · 남은 ${st.queued.toLocaleString("ko-KR")}장 (한 번에 ${st.threads}개씩)` : "준비됐어요. 보는 그림부터 뒤에서 점수를 매겨요.") : "";
+        if (phaseText) body.append(el("p", { class: st.phase === "error" ? "sheet-warn" : "sheet-note", text: phaseText }));
+        const radios = [[0, "건너뛰지 않기", "순서만 점수 높은 순으로"], [30, "아래쪽 30%", ""], [50, "아래쪽 50%", ""], [70, "아래쪽 70%", "과감하게"]];
+        body.append(el("div", { class: "ios-group-label", text: "칸을 열 때 점수 아래쪽 건너뛰기" }));
+        const group = el("div", { class: "ios-group" });
+        for (const [v, label, hint] of radios) {
+          const r = el("input", { type: "radio", name: "aes-skip", id: `aes-skip-${v}`, checked: aes.skip === v });
+          r.classList.add("ios-check");
+          r.addEventListener("change", () => { aes.skip = v; saveAes(); renderAesBox(); });
+          group.append(el("label", { class: "ios-row", for: `aes-skip-${v}` }, [el("span", { class: "grow" }, [document.createTextNode(label), hint ? el("small", { text: hint }) : null]), r]));
+        }
+        body.append(group, el("p", { class: "sheet-note", text: "건너뛴 그림은 미분류로 남고, 비교 화면 위의 「보기」로 다시 볼 수 있어요. 「B컷으로」를 누르면 한꺼번에 B컷이 돼요." }));
+        // report
+        body.append(el("div", { class: "ios-group-label", text: "내 셀렉과 맞는지" }));
+        const rep = aesReport();
+        const box = el("div", { class: "aes-report" });
+        if (rep.picks >= 5) {
+          box.append(
+            el("p", {}, [el("b", { text: `채택 ${rep.picks}장 중 ${rep.top30}%` }), document.createTextNode(`가 같은 칸에서 점수 위쪽 30% 안에 있었어요. (점수가 아무 의미 없으면 30% 정도가 나와요)`)]),
+            el("p", { class: "sheet-note", text: `건너뛰었다면 놓쳤을 채택: 아래쪽 30% → ${rep.lost[30]}% · 50% → ${rep.lost[50]}% · 70% → ${rep.lost[70]}%` }),
+            el("p", { class: "sheet-note", text: rep.top30 >= 55 ? "꽤 잘 맞아요. 놓치는 비율을 보고 건너뛰기를 정하면 돼요." : rep.top30 >= 40 ? "조금 맞아요. 건너뛰기는 30% 정도까지만 권해요." : "잘 안 맞아요. 순서만 참고하고 건너뛰기는 끄는 게 좋아요." }),
+          );
+        } else {
+          box.append(el("p", { class: "sheet-note", text: "채택해 둔 칸에 점수가 매겨지면 여기에 결과가 나와요." }));
+        }
+        if (rep.need.length) {
+          const go = el("button", { class: "btn small", type: "button", text: `채택해 둔 칸 점수 매기기 (${rep.need.length.toLocaleString("ko-KR")}장)` });
+          go.addEventListener("click", () => {
+            Aesthetic.want(rep.need.map(aesItem).filter(Boolean), { front: true });
+            go.disabled = true;
+            go.textContent = "점수 매기는 중…";
+          });
+          box.append(go);
+        }
+        body.append(box);
+        body.append(el("p", { class: "sheet-note", text: `모델: ${Aesthetic.MODEL.repo} (${Aesthetic.MODEL.license}). 많은 사람이 좋아하는 평균 취향이라 네 기준과 다를 수 있어요.` }));
+        body.append(el("button", { class: "sheet-danger", type: "button", text: "미적 점수 끄고 모델 지우기", onclick: async () => {
+          aes.on = false;
+          saveAes();
+          await Aesthetic.removeModel();
+          renderAesBox();
+          dialog.close();
+          toast("미적 점수를 끄고 모델을 지웠어요. 매긴 점수는 남아 있어요.");
+        } }));
+      }
+    };
+    let last = 0;
+    refreshAesSheet = () => {
+      if (!dialog.open) return;
+      if (Date.now() - last < 1500) return; // not on every score
+      last = Date.now();
+      if (dialog.contains(document.activeElement) && document.activeElement.matches("input")) return;
+      draw();
+    };
+    dialog.addEventListener("close", () => { refreshAesSheet = () => {}; }, { once: true });
+    draw();
   }
 
   // ---- 셀렉 현황: 캐릭터마다 배경 × 표정 칸. A cell is one same-name group
@@ -1008,6 +1273,7 @@
   // A plain choice, like a segmented control: 미분류 is its own option.
   function applyCullAction(ids, action) {
     if (!ids.length || !action || !("label" in action)) return;
+    if (!$(".compare").hidden) cmp.touched = true;
     setCull(ids, { label: action.label || null });
   }
   function cullAction(event) {
@@ -1652,7 +1918,7 @@
   // down to B컷 one by one against the best". Click a lane (or Tab) to choose
   // which one ←/→ rolls; Q/W/E/R mark the picture in that lane; S swaps the
   // two (the left picture becomes the 기준).
-  const cmp = { ids: [], focus: 0, filter: "all", group: null, urls: new Map(), token: 0, mode: "pair", actual: false, lane: { side: "a", a: 0, b: 0, aId: null, bId: null, left: "none", right: "pick" } };
+  const cmp = { ids: [], focus: 0, filter: "all", group: null, urls: new Map(), token: 0, mode: "pair", actual: false, lane: { side: "a", a: 0, b: 0, aId: null, bId: null, left: "none", right: "pick" }, skipped: new Set(), order: [], aesApplied: false, touched: false };
   const CMP_MODE_KEY = "naiAutoSaver.compareMode2";
   try {
     cmp.mode = localStorage.getItem(CMP_MODE_KEY) === "grid" ? "grid" : "pair";
@@ -1668,7 +1934,7 @@
     const want = laneLabelOf(side === "a" ? cmp.lane.left : cmp.lane.right);
     // the 기준 on the right never shows up on the left as well
     const skip = side === "a" ? laneCurrent("b") : null;
-    return cmp.ids.filter((id) => (cullOf(id).label || null) === want && id !== skip);
+    return cmp.ids.filter((id) => (cullOf(id).label || null) === want && id !== skip && !cmp.skipped.has(id));
   }
   // Each lane holds on to the picture it shows (by id): marking another
   // picture never swaps the 기준 out. When a lane's picture leaves the lane,
@@ -1695,6 +1961,7 @@
     return cmp.lane[key];
   }
   function rollLane(side, step) {
+    cmp.touched = true;
     const list = laneList(side);
     cmp.lane.side = side;
     if (list.length) {
@@ -1798,6 +2065,7 @@
   }
   function compareVisible() {
     return cmp.ids.filter((id) => {
+      if (cmp.skipped.has(id)) return false;
       const label = cullOf(id).label;
       if (cmp.filter === "keep") return label !== "reject";
       if (cmp.filter === "pick") return label === "pick";
@@ -1825,8 +2093,14 @@
   function openCompare(ids, { group = null, sequence = undefined } = {}) {
     if (ids.length < 2) return;
     if (sequence !== undefined) cmp.sequence = sequence;
-    cmp.ids = ids.slice(0, 48);
+    cmp.ids = ids.slice(0, 60);
     cmp.group = group;
+    cmp.order = cmp.ids.slice(); // as given, before 미적 점수
+    cmp.skipped = new Set();
+    cmp.aesApplied = false;
+    cmp.touched = false;
+    applyAesOrder();
+    feedAesFromCompare();
     cmp.focus = 0;
     cmp.lane = { side: "a", a: 0, b: 0, aId: null, bId: null, left: cmp.lane.left || "none", right: cmp.lane.right || "pick" };
     pickLeftLane();
@@ -1879,6 +2153,7 @@
     box.dataset.mode = cmp.mode;
     box.dataset.actual = String(cmp.actual);
     $(".cmp-hint").textContent = CMP_HINTS[cmp.mode];
+    renderAesChip();
     if (cmp.mode === "pair") {
       renderPair(grid);
       return;
@@ -1906,6 +2181,7 @@
       cell.append(img, el("div", { class: "cmp-cap" }, [
         el("span", { class: "cmp-name", text: counterOf(entry) || entry.name }),
         el("span", { class: "tile-cull", html: tileCullHtml(id) }),
+        aesBadge(id),
       ]));
       const quick = el("div", { class: "cmp-quick", role: "group", "aria-label": "셀렉" });
       for (const [l, text] of CULL_CHOICES) quick.append(el("button", { type: "button", "data-quick": l, "aria-pressed": String((label || "none") === l), text }));
@@ -1944,6 +2220,7 @@
         cell.append(el("div", { class: "cmp-scroll" }, [img]), el("div", { class: "cmp-cap" }, [
           el("span", { class: "cmp-name", text: counterOf(entry) || entry.name }),
           el("span", { class: "tile-cull", html: tileCullHtml(id) }),
+          aesBadge(id),
         ]));
         const quick = el("div", { class: "cmp-quick", role: "group", "aria-label": "셀렉" });
         const label = cullOf(id).label;
@@ -3530,7 +3807,7 @@
       state.query = q;
       $(".search-input").value = q;
     }
-    await Promise.all([loadEntries(), restoreFolder(), loadNotion(), loadCull(), loadComboNames()]);
+    await Promise.all([loadEntries(), restoreFolder(), loadNotion(), loadCull(), loadComboNames(), loadAes()]);
     await dropDuplicateEntries();
     // nothing selected at first: the first click shows that picture
     render();
@@ -3547,6 +3824,22 @@
     });
     $(".sort-btn").addEventListener("click", openSortMenu);
     $(".board-btn").addEventListener("click", () => setBoard(!state.board));
+    $(".cmp-aes").addEventListener("click", (event) => {
+      const b = event.target.closest("[data-aes]");
+      if (!b) return;
+      if (b.dataset.aes === "show") {
+        cmp.skipped = new Set();
+        renderCompare({ keepImages: true });
+      } else if (b.dataset.aes === "hold") {
+        const ids = [...cmp.skipped];
+        cmp.skipped = new Set();
+        applyCullAction(ids, { label: "hold" });
+        renderCompare({ keepImages: true });
+        toast(`점수 아래쪽 ${ids.length}장을 B컷으로 넣었어요.`, "ok", { label: "되돌리기", run: () => { applyCullAction(ids, { label: null }); renderCompare({ keepImages: true }); } });
+      }
+    });
+    Aesthetic.on(onAesEvent);
+    if (aes.on) void Aesthetic.start().catch(() => {});
     $(".board").addEventListener("click", (event) => {
       const cell = event.target.closest("[data-board-group]");
       if (!cell) return;

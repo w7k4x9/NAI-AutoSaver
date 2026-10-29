@@ -560,3 +560,11 @@ body { word-break: keep-all; overflow-wrap: anywhere; }
 .nt-step[data-ok="false"] { color: var(--warn-text); font-weight: 600; }
 .app[data-board] .body { grid-template-columns: minmax(0, 1fr); }
 .app[data-board] .inspector { display: none; }
+/* 미적 점수 */
+.cmp-score { font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 9px; background: rgba(0,0,0,0.55); color: rgba(255,255,255,0.8); font-variant-numeric: tabular-nums; }
+.cmp-aes { display: inline-flex; align-items: center; gap: 6px; margin-left: 12px; padding: 3px 4px 3px 10px; border-radius: 9px; background: rgba(255,255,255,0.1); font-size: 12px; color: rgba(255,255,255,0.8); }
+.cmp-aes button { height: 22px; padding: 0 9px; border: none; border-radius: 6px; background: rgba(255,255,255,0.14); color: #fff; font: inherit; font-size: 12px; cursor: pointer; }
+.cmp-aes button:hover { background: rgba(255,255,255,0.24); }
+.aes-report { padding: 12px 14px; border-radius: 12px; background: var(--elev); display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.aes-report p { margin: 0; }
+.aes-report .btn { align-self: flex-start; margin-top: 4px; }

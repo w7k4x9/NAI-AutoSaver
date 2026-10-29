@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "NAI 자동저장",
-  "version": "1.15.8",
+  "version": "1.16.0",
   "description": "NovelAI 이미지 생성 보조(비공식): 자동 생성·대기열·조합 생성, 날짜/캐릭터별 자동 저장, 프롬프트 메모 자동 백업.",
   "permissions": [
     "downloads",
@@ -68,6 +68,8 @@
       ]
     }
   ],
+  "cross_origin_embedder_policy": { "value": "require-corp" },
+  "cross_origin_opener_policy": { "value": "same-origin" },
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"
   },
