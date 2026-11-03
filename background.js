@@ -33,8 +33,8 @@ async function ensureOffscreenAudioDocument() {
   if (!creatingOffscreenDocument) {
     creatingOffscreenDocument = chrome.offscreen.createDocument({
       url: OFFSCREEN_AUDIO_PATH,
-      reasons: ["AUDIO_PLAYBACK"],
-      justification: "Play automatic generation start and completion sounds.",
+      reasons: ["BLOBS", "AUDIO_PLAYBACK"],
+      justification: "Hand saved pictures to the downloads API as short blob URLs, and play generation start/finish sounds.",
     }).finally(() => {
       creatingOffscreenDocument = null;
     });
@@ -337,24 +337,31 @@ async function retireIfDevCopy() {
 // folder, keep counting after the highest number there ("이름 (6)") instead of
 // letting Chrome make "이름 (1) (1)". Looks only at files Chrome still knows
 // about; if it misses one, Chrome's own renaming is the fallback.
+const recentNames = new Map(); // "folder/name" → when it was handed out
 async function freeCounterName(folder, base) {
   const m = String(base).match(/^(.*?) \((\d+)\)$/);
   if (!m) return base;
   const stem = m[1];
   try {
-    const items = await chrome.downloads.search({ query: [stem], exists: true, limit: 1000 });
-    const tail = `/${folder}/`.replace(/\/+/g, "/");
+    // From the 보관함's own list of saved paths — never from chrome.downloads:
+    // searching Chrome's download list each save was what froze Chrome.
+    const prefix = `${folder}/${stem} (`.replace(/\/+/g, "/");
+    const keys = globalThis.LibDB?.keysWithPrefix ? await LibDB.keysWithPrefix(prefix) : [];
+    // + names handed out a moment ago that the 보관함 has not filed yet
+    const now = Date.now();
+    for (const [path, at] of recentNames) {
+      if (now - at > 120000) recentNames.delete(path);
+      else if (path.startsWith(prefix)) keys.push(path);
+    }
     const used = new Set();
-    for (const item of items) {
-      const path = String(item.filename || "").replace(/\\/g, "/");
-      const at = path.lastIndexOf("/");
-      if (at < 0 || !path.slice(0, at + 1).endsWith(tail)) continue;
-      const name = path.slice(at + 1).replace(/\.(png|webp)$/i, "");
-      const hit = name.match(/^(.*?) \((\d+)\)(?: \(\d+\))*$/);
+    for (const key of keys) {
+      const name = String(key).split("/").pop().replace(/\.(png|webp)$/i, "");
+      const hit = name.match(/^(.*?) \((\d+)\)(?:[ _].*)?$/);
       if (hit && hit[1] === stem) used.add(Number(hit[2]));
     }
-    if (!used.has(Number(m[2]))) return base;
-    return `${stem} (${Math.max(...used) + 1})`;
+    const pick = used.has(Number(m[2])) ? `${stem} (${Math.max(...used) + 1})` : base;
+    recentNames.set(`${folder}/${pick}`.replace(/\/+/g, "/"), now);
+    return pick;
   } catch (error) {
     return base;
   }
@@ -384,15 +391,75 @@ async function saveGeneratedImage(request) {
   }
   base = await freeCounterName(folder, base);
   const filename = `${folder}/${base}.${converted.ext}`;
-  const downloadId = await new Promise((resolve, reject) => {
-    chrome.downloads.download({ url: converted.url, filename, saveAs: false }, (id) => {
+  // A short blob: URL, not the multi-MB data: URL: Chrome keeps every
+  // download's URL in its download list and history for good.
+  const blobUrl = String(converted.url).startsWith("data:") ? await makeBlobUrl(converted.url) : null;
+  const start = (url) => new Promise((resolve, reject) => {
+    chrome.downloads.download({ url, filename, saveAs: false }, (id) => {
       if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
       else resolve(id);
     });
   });
+  let downloadId;
+  try {
+    downloadId = await start(blobUrl || converted.url);
+  } catch (error) {
+    if (!blobUrl) throw error;
+    downloadId = await start(converted.url);
+  }
+  void afterDownload(downloadId, blobUrl, converted.url, filename);
   if (converted.bytes) void indexSavedImage(converted.bytes, filename, downloadId, request.axes);
   return { ok: true, downloadId, filename, format: converted.ext, warning: converted.warning || null };
 }
+
+async function makeBlobUrl(dataUrl) {
+  try {
+    await ensureOffscreenAudioDocument();
+    const res = await chrome.runtime.sendMessage({ target: "nai-offscreen-blob", action: "makeBlobUrl", dataUrl });
+    return res?.ok ? res.url : null;
+  } catch (error) {
+    return null;
+  }
+}
+// When the download is over: let go of the blob URL. If it failed with a
+// blob URL (the helper page went away), save once more from the data, and
+// keep that heavy entry out of Chrome's download list.
+async function afterDownload(id, blobUrl, dataUrl, filename) {
+  let state = "in_progress";
+  for (let i = 0; i < 240 && state === "in_progress"; i += 1) {
+    await new Promise((r) => setTimeout(r, 250));
+    const [item] = await chrome.downloads.search({ id }).catch(() => []);
+    state = item ? item.state : "gone";
+  }
+  if (blobUrl) chrome.runtime.sendMessage({ target: "nai-offscreen-blob", action: "revokeBlobUrl", url: blobUrl }).catch(() => {});
+  if (state === "interrupted" && blobUrl) {
+    chrome.downloads.erase({ id }).catch(() => {});
+    chrome.downloads.download({ url: dataUrl, filename, saveAs: false }, (retry) => {
+      if (chrome.runtime.lastError || retry == null) return;
+      void (async () => {
+        for (let i = 0; i < 240; i += 1) {
+          await new Promise((r) => setTimeout(r, 250));
+          const [item] = await chrome.downloads.search({ id: retry }).catch(() => []);
+          if (!item || item.state !== "in_progress") break;
+        }
+        chrome.downloads.erase({ id: retry }).catch(() => {});
+      })();
+    });
+  }
+}
+// Older versions left a multi-MB data: URL in Chrome's download list for every
+// saved picture. Take those entries out once (the files stay where they are).
+const DL_CLEANUP_KEY = "naiAutoSaver.dlCleanup1";
+async function cleanOldDownloadEntries() {
+  try {
+    if ((await chrome.storage.local.get(DL_CLEANUP_KEY))[DL_CLEANUP_KEY]) return;
+    const ids = await chrome.downloads.erase({ urlRegex: "^data:image/" });
+    await chrome.storage.local.set({ [DL_CLEANUP_KEY]: { at: Date.now(), erased: (ids || []).length } });
+  } catch (error) {
+    console.warn("download list cleanup failed", error);
+  }
+}
+setTimeout(() => void cleanOldDownloadEntries(), 3000);
 
 // ---------------------------------------------------------------------------
 // 보관함: every saved picture is indexed (metadata + thumbnail + real path)

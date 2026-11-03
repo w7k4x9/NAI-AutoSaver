@@ -164,6 +164,8 @@
     remove: (id) => tx("images", "readwrite", (s) => req(s.delete(id))),
     all: () => tx("images", "readonly", (s) => req(s.getAll())),
     keys: () => tx("images", "readonly", (s) => req(s.getAllKeys())),
+    // ids (paths) starting with `prefix`, e.g. "NovelAI/2026-11-03/김춘자/김춘자_교실 ("
+    keysWithPrefix: (prefix) => tx("images", "readonly", (s) => req(s.getAllKeys(IDBKeyRange.bound(prefix, `${prefix}\uffff`)))),
     count: () => tx("images", "readonly", (s) => req(s.count())),
     getKv: (key) => tx("kv", "readonly", (s) => req(s.get(key))),
     setKv: (key, value) => tx("kv", "readwrite", (s) => req(s.put(value, key))),
