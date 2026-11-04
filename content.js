@@ -4087,21 +4087,56 @@
   // One combo "character" can hold several NovelAI characters: the main
   // fields are person 1, each added member is the next person. The old ";;"
   // habit also works inside the main fields.
+  // 2인 짝: a person can be another character ("인물 2 = 코코"): its 외형 and
+  // 네거티브 come from that character, so they are written once.
+  function genCharByName(name, all = genState.chars) {
+    const key = String(name || "").trim();
+    return key ? (all || []).find((c) => String(c.code || "").trim() === key) || null : null;
+  }
+  function genResolveLook(src, all, depth = 0) {
+    const splitSemi = (value) => String(value == null ? "" : value).split(/\s*(?:;;|；；)\s*/u);
+    const ref = src.ref ? genCharByName(src.ref, all) : null;
+    if (ref && ref !== src && depth < 3) {
+      const look = genResolveLook(ref, all, depth + 1);
+      return { appearance: splitSemi(look.appearance)[0] || "", negative: splitSemi(look.negative)[0] || "", linked: src.ref };
+    }
+    return { appearance: String(src.appearance || ""), negative: String(src.negative || ""), linked: "" };
+  }
+  // Names of a combo character's people: 인물 1 = its link or its own name.
+  function genPeopleNames(ch, all = genState.chars) {
+    if (!ch) return ["인물 1"];
+    const n = genPeopleCount(ch, all);
+    const names = [];
+    const splitSemi = (value) => String(value == null ? "" : value).split(/\s*(?:;;|；；)\s*/u);
+    const mainCount = ch.ref ? 1 : Math.max(splitSemi(ch.appearance).length, splitSemi(ch.negative).length, 1);
+    for (let j = 0; j < mainCount; j += 1) names.push(j === 0 ? (ch.ref || String(ch.code || "").trim() || "인물 1") : `인물 ${j + 1}`);
+    for (const m of genLiveMembers(ch)) names.push(m.ref || `인물 ${names.length + 1}`);
+    while (names.length < n) names.push(`인물 ${names.length + 1}`);
+    return names.slice(0, n);
+  }
+  function genLiveMembers(ch) {
+    return (Array.isArray(ch.members) ? ch.members : []).filter((m) => String(m.ref || "").trim() || String(m.appearance || "").trim() || String(m.expressions || "").trim() || String(m.negative || "").trim());
+  }
+
   // A 표정 line can hold one part per person, split by ";;" ("smile ;; blush"
   // = person 1 smiles, person 2 blushes): the 표정 screen's 「인물 2 표정」
   // writes it that way. Parts past the people made by the main fields go to
   // the added people (같은 그림에 인물 추가), ahead of their own 표정 list.
-  function genCharacterMembers(ch) {
+  function genCharacterMembers(ch, all = genState.chars) {
     const splitSemi = (value) => String(value == null ? "" : value).split(/\s*(?:;;|；；)\s*/u);
     const members = [];
-    const appearParts = splitSemi(ch.appearance);
-    const negParts = splitSemi(ch.negative);
+    const mainLook = genResolveLook(ch, all);
+    const appearParts = splitSemi(mainLook.appearance);
+    const negParts = splitSemi(mainLook.negative);
     const exprLines = parseExpressionSet(ch.expressions).map(splitSemi);
-    const extras = (Array.isArray(ch.members) ? ch.members : []).map((extra) => ({
-      appearance: String(extra.appearance || "").trim(),
-      expressions: parseExpressionSet(extra.expressions),
-      negative: String(extra.negative || "").trim(),
-    })).filter((m) => m.appearance || m.expressions.length || m.negative);
+    const extras = genLiveMembers(ch).map((extra) => {
+      const look = genResolveLook(extra, all);
+      return {
+        appearance: look.appearance.trim(),
+        expressions: parseExpressionSet(extra.expressions),
+        negative: look.negative.trim(),
+      };
+    }).filter((m) => m.appearance || m.expressions.length || m.negative);
     // people from the main fields: as many as their ";;" parts. A 표정 part
     // for a person the character does not have is left out (a one-person
     // character sharing a 2인 표정 just uses part 1).
@@ -4127,11 +4162,9 @@
     return members;
   }
   // How many people a combo character draws (for the 표정 screen's fields).
-  function genPeopleCount(ch) {
+  function genPeopleCount(ch, all = genState.chars) {
     if (!ch) return 1;
-    const splitSemi = (value) => String(value == null ? "" : value).split(/\s*(?:;;|；；)\s*/u);
-    const extras = (Array.isArray(ch.members) ? ch.members : []).filter((m) => String(m.appearance || "").trim() || String(m.expressions || "").trim() || String(m.negative || "").trim()).length;
-    return Math.max(splitSemi(ch.appearance).length, splitSemi(ch.negative).length, 1) + extras;
+    return genCharacterMembers({ ...ch, expressions: "" }, all).length;
   }
 
   // Emotion numbers follow person 1's lines; if person 1 has none, the longest
@@ -4204,13 +4237,18 @@
         appearance: str(c && c.appearance),
         expressions: str(c && c.expressions),
         negative: str(c && c.negative),
+        // 인물 1 from another character (its 외형 · 네거티브 follow that one)
+        ref: str(c && c.ref).trim(),
+        // only lends itself to others (2인 짝), no pictures of its own
+        noSolo: Boolean(c && c.noSolo),
         members: (Array.isArray(c && c.members) ? c.members : []).map((m) => ({
           appearance: str(m && m.appearance),
           expressions: str(m && m.expressions),
           negative: str(m && m.negative),
+          ref: str(m && m.ref).trim(),
         })),
       }))
-      .filter((c) => c.code.trim() || c.appearance.trim() || c.expressions.trim());
+      .filter((c) => c.code.trim() || c.appearance.trim() || c.expressions.trim() || c.ref);
     const bgs = bgList(s.bgs);
     const hadData = Array.isArray(s.chars) && s.chars.some((c) => c && String(c.code || "").trim());
     return {
@@ -4323,7 +4361,7 @@
     const chars = effectiveChars(raw).map((ch, i) => ({
       name: Store.sanitizeFileName(ch.code, "").trim() || charDisplayName(ch, i),
       emotionNames: genEmotionNames(ch),
-      emotionCount: genEmotionCount(genCharacterMembers(ch)),
+      emotionCount: ch.noSolo ? 0 : genEmotionCount(genCharacterMembers(ch, raw.chars)),
     }));
     const bgName = (bg, i) => ({ name: Store.sanitizeFileName(bg.code, "").trim() || bgDisplayName(bg, i) });
     const bgs = raw.bgs.map(bgName);
@@ -4357,7 +4395,7 @@
     const base = raw.base;
     const baseNeg = String(raw.baseNeg || "").trim();
     const count = Math.max(1, Number.parseInt(raw.count, 10) || 1);
-    const membersByChar = effectiveChars(raw).map((ch) => genCharacterMembers(ch));
+    const membersByChar = effectiveChars(raw).map((ch) => genCharacterMembers(ch, raw.chars));
     const items = [];
     for (const entry of genPlan(raw)) {
       if (entry.excluded) {
@@ -4369,7 +4407,12 @@
       const bgNeg = String(bg.negative || "").trim();
       const index = entry.ei;
       // Background tags / negative go to person 1 only (it is one scene).
-      const prompts = members.map((member, m) => [member.appearance, genMemberExpression(member, index), m === 0 ? bgTags : ""]
+      // a one-person picture has nobody to kiss: drop source#/target#/mutual#
+      const exprFor = (member) => {
+        const e = genMemberExpression(member, index);
+        return members.length > 1 ? e : String(e || "").replace(/(^|,)\s*(source|target|mutual)#[^,]+/gi, "").replace(/^\s*,\s*|\s*,\s*$/g, "").trim();
+      };
+      const prompts = members.map((member, m) => [member.appearance, exprFor(member), m === 0 ? bgTags : ""]
         .map(ensureTrailingComma)
         .filter(Boolean)
         .join("\n"));
@@ -4525,7 +4568,7 @@
     const included = plan.filter((e) => !e.excluded);
     const perChar = genState.chars.map((_, ci) => included.filter((e) => e.ci === ci).length);
 
-    const charChips = genState.chars.map((ch, i) => `<button type="button" class="ias-chip ias-chip-round" data-kind="char" data-index="${i}" data-active="${i === genActiveChar}" data-selected="${isSelected("char", i)}">${escapeHtml(charDisplayName(ch, i))}<span class="ias-chip-count">${perChar[i]}</span></button>`).join("");
+    const charChips = genState.chars.map((ch, i) => `<button type="button" class="ias-chip ias-chip-round" data-kind="char" data-index="${i}" data-active="${i === genActiveChar}" data-selected="${isSelected("char", i)}">${escapeHtml(charDisplayName(ch, i))}<span class="ias-chip-count" ${ch.noSolo ? 'title="혼자 뽑지 않고 2인 짝에 불러오는 용도"' : ""}>${ch.noSolo ? "짝용" : perChar[i]}</span></button>`).join("");
     const bgOwner = bgOwnerList();
     const bgShared = genState.bgShared !== false;
     const bgChips = (bgOwner || []).map((bg, i) => `<button type="button" class="ias-chip ias-chip-round" data-kind="bg" data-index="${i}" data-selected="${isSelected("bg", i)}">${escapeHtml(bgDisplayName(bg, i))}</button>`).join("");
@@ -4624,19 +4667,116 @@
   let genEmoTwoUp = ""; // "emo:3" after 「2인 표정」 was pressed for that 표정
   // The 표정's tags, one field per person when a character has 2+ people
   // (stored as "person1 ;; person2" in the line).
-  function emotionTagFields(entry) {
-    const people = genState.emoShared ? Math.max(1, ...genState.chars.map((ch) => genPeopleCount(ch))) : genPeopleCount(emoOwner());
+  // 2인 장면: the 표정's tags, one field per person (stored as
+  // "person1 ;; person2" in the line), named after the pair's people, with a
+  // 행동 helper for NovelAI's source#/target#/mutual# and a preview of what
+  // goes into each person's character prompt.
+  const ACTION_TAG = /(^|,)\s*(source|target|mutual)#([^,]+)/gi;
+  function emotionPair() {
+    // whose people the fields are named after: the 표정 owner, or with shared
+    // 표정 the one character that draws 2+ people
+    if (!genState.emoShared) return genPeopleCount(emoOwner()) > 1 ? { ch: emoOwner(), index: genActiveChar } : null;
+    const pairs = genState.chars.map((ch, i) => ({ ch, index: i })).filter(({ ch }) => !ch.noSolo && genPeopleCount(ch) > 1);
+    return pairs.length === 1 ? pairs[0] : pairs.length ? { many: pairs } : null;
+  }
+  function readAction(parts) {
+    const found = [0, 1].map((j) => {
+      const m = [...String(parts[j] || "").matchAll(ACTION_TAG)][0];
+      return m ? { kind: m[2].toLowerCase(), word: m[3].trim() } : null;
+    });
+    const word = found[0]?.word || found[1]?.word || "";
+    let dir = "";
+    if (found[0]?.kind === "source" || found[1]?.kind === "target") dir = "12";
+    else if (found[0]?.kind === "target" || found[1]?.kind === "source") dir = "21";
+    else if (found[0]?.kind === "mutual" || found[1]?.kind === "mutual") dir = "both";
+    return { word, dir };
+  }
+  function writeAction(parts, word, dir) {
+    const strip = (t) => String(t || "").replace(ACTION_TAG, "").replace(/^\s*,\s*|\s*,\s*$/g, "").replace(/,\s*,/g, ",").trim();
+    const out = [strip(parts[0]), strip(parts[1])];
+    const w = String(word || "").replace(/[#,;=\n]/g, " ").trim();
+    if (w && dir) {
+      const tag = (kind) => `${kind}#${w}`;
+      const add = (j, kind) => { out[j] = [out[j], tag(kind)].filter(Boolean).join(", "); };
+      if (dir === "12") { add(0, "source"); add(1, "target"); }
+      if (dir === "21") { add(0, "target"); add(1, "source"); }
+      if (dir === "both") { add(0, "mutual"); add(1, "mutual"); }
+    }
+    return [...out, ...parts.slice(2)];
+  }
+  function emotionTagFields(entry, index) {
+    const pair = emotionPair();
+    const names = pair?.ch ? genPeopleNames(pair.ch) : null;
+    const people = pair?.ch ? names.length : pair?.many ? Math.max(...pair.many.map(({ ch }) => genPeopleCount(ch))) : 1;
     const parts = String(entry.tags || "").split(/\s*(?:;;|；；)\s*/u);
     const shown = Math.max(people, parts.length, genEmoTwoUp === `${genSelection.type}:${genSelection.index}` ? 2 : 1);
     if (shown < 2) {
       return `${inspectorField("태그", 'data-efield="tags"', entry.tags, { rows: 3, placeholder: "예: smiling, open mouth" })}
-        <button type="button" class="ias-btn secondary small" data-emo-two="1" title="같은 그림에 두 사람이 나오는 캐릭터용: 사람마다 표정을 따로 써요">${icon("add", 13)}<span>2인 표정 (인물 2 따로 쓰기)</span></button>`;
+        <button type="button" class="ias-btn secondary small" data-emo-two="1" title="두 사람이 나오는 그림용: 사람마다 표정을 따로 써요">${icon("add", 13)}<span>2인 장면으로 쓰기 (인물 2 따로)</span></button>`;
     }
+    const who = (j) => (names?.[j] ? names[j] : `인물 ${j + 1}`);
     let html = "";
     for (let j = 0; j < shown; j += 1) {
-      html += inspectorField(j === 0 ? "인물 1 표정" : `인물 ${j + 1} 표정`, `data-efield="tags" data-eperson="${j}"`, parts[j] || "", { rows: 2, placeholder: j === 0 ? "예: smiling, open mouth" : "비우면 이 사람의 표정 목록을 써요" });
+      html += inspectorField(`${who(j)} 표정·포즈`, `data-efield="tags" data-eperson="${j}"`, parts[j] || "", { rows: 2, placeholder: j === 0 ? "예: closed eyes, blush" : "비우면 이 사람의 표정 목록을 써요" });
     }
-    return `${html}<p class="ias-hint">인물 순서는 캐릭터 카드 순서예요 (외형 태그 = 인물 1, 같은 그림에 인물 추가 = 인물 2…). 혼자인 캐릭터에는 인물 1 표정만 들어가요.</p>`;
+    // 행동: who does it to whom
+    const act = readAction(parts);
+    const a = who(0);
+    const b = who(1);
+    html += `<div class="ias-field ias-action-field"><label>행동 (두 사람 사이)</label>
+      <input class="ias-input" type="text" data-eaction="word" value="${escapeAttr(act.word)}" placeholder="예: kiss, hug, hand holding">
+      <div class="ias-seg ias-action-dir" role="radiogroup" aria-label="누가 누구에게">
+        <button class="ias-seg-btn" type="button" role="radio" data-eactdir="12" aria-checked="${act.dir === "12"}">${escapeHtml(a)} → ${escapeHtml(b)}</button>
+        <button class="ias-seg-btn" type="button" role="radio" data-eactdir="21" aria-checked="${act.dir === "21"}">${escapeHtml(b)} → ${escapeHtml(a)}</button>
+        <button class="ias-seg-btn" type="button" role="radio" data-eactdir="both" aria-checked="${act.dir === "both"}">서로</button>
+      </div>
+      <small class="ias-hint">NovelAI 문법(source# · target# · mutual#)으로 각자 칸에 넣어 줘요. 늘 잘 되진 않으니 몇 장 뽑아 확인해 보세요.</small></div>`;
+    html += emotionPreviewHtml(index, pair);
+    return html;
+  }
+  function emotionPreviewHtml(index, pair = emotionPair()) {
+    let html = "";
+    // what goes into each character prompt
+    const previewOf = (ch) => {
+      const members = genCharacterMembers(genState.emoShared ? { ...ch, expressions: genState.sharedExpressions } : ch);
+      const nm = genPeopleNames(ch);
+      return members.map((m, j) => `<div class="ias-pp-row"><b>${escapeHtml(nm[j] || `인물 ${j + 1}`)}</b><span>${escapeHtml([m.appearance, genMemberExpression(m, index)].filter(Boolean).join(", ") || "(비어 있음)")}</span></div>`).join("");
+    };
+    const previewChars = pair?.ch ? [pair.ch] : pair?.many ? pair.many.map(({ ch }) => ch) : [];
+    if (genState.emoShared && previewChars.length && genState.chars.some((ch) => !ch.noSolo && genPeopleCount(ch) === 1)) {
+      html += `<p class="ias-hint">표정이 「모든 캐릭터 공통」이라 혼자 뽑는 캐릭터에도 첫 칸이 들어가요 (행동 태그는 빼고). 짝만의 장면을 따로 두려면 표정의 「모든 캐릭터 공통」을 꺼 주세요.</p>`;
+    }
+    if (previewChars.length) {
+      html += `<div class="ias-pp"><div class="ias-pp-title">NovelAI 캐릭터 칸에 들어가는 것</div>${previewChars.map((ch) => `${previewChars.length > 1 ? `<div class="ias-pp-char">${escapeHtml(charDisplayName(ch, genState.chars.indexOf(ch)))}</div>` : ""}${previewOf(ch)}`).join("")}</div>`;
+    } else {
+      html += `<p class="ias-hint ias-pp">두 사람이 나오는 캐릭터(캐릭터 → 같은 그림에 인물 추가)가 있어야 인물 2 몫이 들어가요. 혼자인 캐릭터에는 첫 칸만 들어가요.</p>`;
+    }
+    return html;
+  }
+  function refreshEmotionPreview() {
+    const box = ui.comboInspector?.querySelector(".ias-pp");
+    if (box && genSelection.type === "emo") box.outerHTML = emotionPreviewHtml(genSelection.index);
+  }
+  function setEmotionAction(word, dir) {
+    const ch = emoOwner();
+    const entries = charEmotionEntries(ch);
+    const entry = entries[genSelection.index];
+    if (!entry) return;
+    const parts = String(entry.tags || "").split(/\s*(?:;;|；；)\s*/u);
+    while (parts.length < 2) parts.push("");
+    const next = writeAction(parts, word, dir);
+    while (next.length > 1 && !String(next[next.length - 1]).trim()) next.pop();
+    entry.tags = next.map((p) => String(p).trim()).join(" ;; ");
+    setCharEmotionEntries(ch, entries);
+    // show the result in the person fields without redrawing (keeps the caret)
+    next.forEach((v, j) => {
+      const f = ui.comboInspector?.querySelector(`[data-eperson="${j}"]`);
+      if (f) f.value = v;
+    });
+    ui.comboInspector?.querySelectorAll("[data-eactdir]").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.eactdir === dir && Boolean(String(word).trim()))));
+    refreshEmotionPreview();
+    renderCombo({ inspector: false });
+    scheduleGenSave();
   }
 
   function renderComboInspector() {
@@ -4647,20 +4787,40 @@
     let html = "";
     if (type === "char" && genState.chars[index]) {
       const ch = genState.chars[index];
+      // a person = written here, or another character (외형 · 네거티브 follow it)
+      const others = genState.chars.map((c, i) => ({ c, i })).filter(({ c, i }) => i !== index && String(c.code || "").trim());
+      const linkSelect = (attrs, value) => `<select class="ias-input ias-link-select" ${attrs} aria-label="이 사람을 어디서 가져올지">
+          <option value="">여기에 직접 쓰기</option>
+          ${others.map(({ c }) => `<option value="${escapeAttr(c.code.trim())}" ${value === c.code.trim() ? "selected" : ""}>캐릭터 「${escapeHtml(c.code.trim())}」 불러오기</option>`).join("")}
+          ${value && !others.some(({ c }) => c.code.trim() === value) ? `<option value="${escapeAttr(value)}" selected>「${escapeHtml(value)}」 (없는 캐릭터)</option>` : ""}
+        </select>`;
+      const linkedNote = (name) => {
+        const ref = genCharByName(name);
+        if (!ref) return `<p class="ias-hint ias-link-missing">「${escapeHtml(name)}」 캐릭터를 찾을 수 없어요. 이름이 바뀌었으면 다시 골라 주세요.</p>`;
+        const look = genResolveLook(ref, genState.chars);
+        return `<div class="ias-link-note"><span>${escapeHtml(look.appearance || "(외형 태그 없음)")}</span><small>「${escapeHtml(name)}」에서 고치면 여기도 같이 바뀌어요</small></div>`;
+      };
+      const people = genPeopleNames(ch);
       const members = ch.members.map((m, mi) => `
         <div class="ias-insp-member">
-          <div class="ias-insp-member-head"><span>인물 ${mi + 2}</span><button type="button" class="ias-icon-btn" data-remove-member="${mi}" aria-label="인물 ${mi + 2} 빼기">${icon("delete", 15)}</button></div>
+          <div class="ias-insp-member-head"><span>인물 ${mi + 2}${m.ref ? ` · ${escapeHtml(m.ref)}` : ""}</span><button type="button" class="ias-icon-btn" data-remove-member="${mi}" aria-label="인물 ${mi + 2} 빼기">${icon("delete", 15)}</button></div>
+          ${linkSelect(`data-mfield="ref" data-mindex="${mi}"`, m.ref)}
+          ${m.ref ? linkedNote(m.ref) : `
           ${inspectorField("외형 태그", `data-mfield="appearance" data-mindex="${mi}"`, m.appearance, { rows: 2, placeholder: "예: boy, white hair" })}
-          ${inspectorField("표정 (줄 순서가 맞춰져요 · 한 줄이면 고정)", `data-mfield="expressions" data-mindex="${mi}"`, m.expressions, { rows: 2 })}
-          ${inspectorField("네거티브", `data-mfield="negative" data-mindex="${mi}"`, m.negative, { rows: 1 })}
+          ${inspectorField("네거티브", `data-mfield="negative" data-mindex="${mi}"`, m.negative, { rows: 1 })}`}
+          ${inspectorField("표정 목록 (표정 칸의 이 사람 몫이 비었을 때 · 한 줄이면 고정)", `data-mfield="expressions" data-mindex="${mi}"`, m.expressions, { rows: 2 })}
         </div>`).join("");
       html = `
-        <div class="ias-insp-head"><button type="button" class="ias-insp-back" data-insp-back="1">${icon("chevron", 14)}<span>공통 베이스</span></button><span class="ias-insp-kicker">캐릭터</span><span class="ias-insp-title">${escapeHtml(charDisplayName(ch, index))}</span></div>
-        ${inspectorField("이름 (파일 이름 · 폴더에 들어가요)", 'data-cfield="code" data-autofocus="true"', ch.code, { placeholder: "예: 김춘자" })}
+        <div class="ias-insp-head"><button type="button" class="ias-insp-back" data-insp-back="1">${icon("chevron", 14)}<span>공통 베이스</span></button><span class="ias-insp-kicker">캐릭터${people.length > 1 ? ` · ${people.length}인` : ""}</span><span class="ias-insp-title">${escapeHtml(charDisplayName(ch, index))}</span></div>
+        ${inspectorField("이름 (파일 이름 · 폴더에 들어가요)", 'data-cfield="code" data-autofocus="true"', ch.code, { placeholder: ch.members.length ? "예: 춘자x코코" : "예: 김춘자" })}
+        ${ch.members.length || ch.ref ? `<div class="ias-insp-member"><div class="ias-insp-member-head"><span>인물 1${ch.ref ? ` · ${escapeHtml(ch.ref)}` : ""}</span></div>${linkSelect('data-cfield="ref"', ch.ref)}${ch.ref ? linkedNote(ch.ref) : `
         ${inspectorField("외형 태그", 'data-cfield="appearance"', ch.appearance, { rows: 3, placeholder: "예: girl, black hair, long hair" })}
-        ${inspectorField("캐릭터 네거티브", 'data-cfield="negative"', ch.negative, { rows: 2, placeholder: "비우면 없음" })}
+        ${inspectorField("캐릭터 네거티브", 'data-cfield="negative"', ch.negative, { rows: 2, placeholder: "비우면 없음" })}`}</div>` : `
+        ${inspectorField("외형 태그", 'data-cfield="appearance"', ch.appearance, { rows: 3, placeholder: "예: girl, black hair, long hair" })}
+        ${inspectorField("캐릭터 네거티브", 'data-cfield="negative"', ch.negative, { rows: 2, placeholder: "비우면 없음" })}`}
         ${members}
-        <button type="button" class="ias-btn secondary" data-add-member="1">${icon("add", 14)}<span>같은 그림에 인물 추가</span></button>
+        <button type="button" class="ias-btn secondary" data-add-member="1">${icon("add", 14)}<span>같은 그림에 인물 추가 (2인)</span></button>
+        <div class="ias-form-row ias-solo-row"><label for="ias-solo-${index}">이 캐릭터 혼자 뽑기<small>끄면 다른 캐릭터의 2인 짝에 불러오는 용도로만 써요</small></label><label class="ias-switch"><input id="ias-solo-${index}" type="checkbox" data-cfield="noSolo" ${ch.noSolo ? "" : "checked"}><span class="ias-slider"></span></label></div>
         ${copyFromSelect("char")}
         <div class="ias-insp-spacer"></div>
         <button type="button" class="ias-insp-delete" data-delete="char">이 캐릭터 지우기</button>`;
@@ -4682,7 +4842,7 @@
         html = `
           <div class="ias-insp-head"><button type="button" class="ias-insp-back" data-insp-back="1">${icon("chevron", 14)}<span>공통 베이스</span></button><span class="ias-insp-kicker">${escapeHtml(kicker)}</span><span class="ias-insp-title">${escapeHtml(emoDisplayName(entry, index))}</span></div>
           ${inspectorField("이름 (파일 이름에 들어가요)", 'data-efield="name" data-autofocus="true" maxlength="30"', entry.name, { placeholder: `비우면 ${index + 1} · 쉼표는 「·」로 바뀌어요` })}
-          ${emotionTagFields(entry)}
+          ${emotionTagFields(entry, index)}
           ${genState.emoShared ? "" : copyFromSelect("emo")}
           <div class="ias-insp-spacer"></div>
           <button type="button" class="ias-insp-delete" data-delete="emo">이 표정 삭제</button>`;
@@ -4804,6 +4964,18 @@
       comboChanged({ inspector: true });
       return;
     }
+    const dirBtn = target.closest("[data-eactdir]");
+    if (dirBtn) {
+      const word = ui.comboInspector?.querySelector('[data-eaction="word"]')?.value || "";
+      if (!word.trim()) {
+        ui.comboInspector?.querySelector('[data-eaction="word"]')?.focus();
+        setStatus("먼저 행동(예: kiss)을 써 주세요.", "neutral");
+        return;
+      }
+      const again = dirBtn.getAttribute("aria-checked") === "true";
+      setEmotionAction(word, again ? "" : dirBtn.dataset.eactdir); // press again to take it out
+      return;
+    }
     if (target.closest("[data-emo-two]")) {
       genEmoTwoUp = `${genSelection.type}:${genSelection.index}`;
       renderComboInspector();
@@ -4844,17 +5016,51 @@
     }
     const value = el.value ?? "";
     const { type, index } = genSelection;
+    if (el.dataset.eaction === "word" && type === "emo") {
+      const current = ui.comboInspector?.querySelector('[data-eactdir][aria-checked="true"]')?.dataset.eactdir || "12";
+      setEmotionAction(value, current);
+      return;
+    }
     if (el.dataset.gfield) {
       genState[el.dataset.gfield] = value;
     } else if (el.dataset.cfield && genState.chars[index]) {
-      genState.chars[index][el.dataset.cfield] = value;
-      if (el.dataset.cfield === "code" && value.trim()) {
+      const field = el.dataset.cfield;
+      if (field === "noSolo") {
+        genState.chars[index].noSolo = !el.checked;
+        comboChanged({ inspector: false });
+        scheduleGenSave();
+        return;
+      }
+      const before = genState.chars[index][field];
+      genState.chars[index][field] = field === "ref" ? value.trim() : value;
+      if (field === "code") {
+        // 2인 짝 that point at this character follow its new name
+        const was = String(before || "").trim();
+        const now = value.trim();
+        if (was && now && was !== now) {
+          for (const c of genState.chars) {
+            if (c.ref === was) c.ref = now;
+            for (const m of c.members || []) if (m.ref === was) m.ref = now;
+          }
+        }
+      }
+      if (field === "ref") {
+        comboChanged({ inspector: true });
+        scheduleGenSave();
+        return;
+      }
+      if (field === "code" && value.trim()) {
         tourEvent("combo-char-added");
       }
     } else if (el.dataset.mfield && genState.chars[index]) {
       const member = genState.chars[index].members[Number(el.dataset.mindex)];
       if (member) {
-        member[el.dataset.mfield] = value;
+        member[el.dataset.mfield] = el.dataset.mfield === "ref" ? value.trim() : value;
+        if (el.dataset.mfield === "ref") {
+          comboChanged({ inspector: true });
+          scheduleGenSave();
+          return;
+        }
       }
     } else if (el.dataset.bfield && bgOwnerList()?.[index]) {
       bgOwnerList()[index][el.dataset.bfield] = value;
@@ -4872,6 +5078,8 @@
           parts[j] = value.replace(/[=\n]/g, " ").replace(/;;|；；/g, " ");
           while (parts.length > 1 && !parts[parts.length - 1].trim()) parts.pop();
           entries[index].tags = parts.map((p) => p.trim()).join(" ;; ");
+          setCharEmotionEntries(ch, entries);
+          refreshEmotionPreview();
         } else {
           entries[index][el.dataset.efield] = el.dataset.efield === "name" ? safeEmotionName(value) : value.replace(/[=\n]/g, " ");
         }
@@ -8848,6 +9056,23 @@
       .ias-insp-title { font-size: 16px; font-weight: 750; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .ias-insp-member { border-radius: 8px; background: var(--group); border: 0.5px solid var(--border); padding: 8px; margin-bottom: 10px; }
       .ias-insp-member-head { display: flex; justify-content: space-between; align-items: center; font-size: 12px; font-weight: 700; color: var(--text2); margin-bottom: 6px; }
+      .ias-link-select { width: 100%; height: 28px; margin-bottom: 8px; font-family: inherit; font-size: 12.5px; }
+      .ias-link-note { display: flex; flex-direction: column; gap: 2px; padding: 7px 9px; margin-bottom: 8px; border-radius: 7px; background: var(--accent-soft, rgba(0,122,255,0.08)); font-size: 12px; color: var(--text); word-break: break-word; }
+      .ias-link-note small { color: var(--text3); font-size: 11px; }
+      .ias-link-missing { color: var(--text2); }
+      .ias-solo-row { margin: 6px 0 4px; padding: 6px 2px; display: flex; align-items: center; gap: 10px; }
+      .ias-solo-row > label:first-child { flex: 1; display: flex; flex-direction: column; gap: 1px; font-size: 12.5px; color: var(--text); }
+      .ias-solo-row small { font-size: 11px; color: var(--text3); }
+      .ias-action-field .ias-action-dir { margin-top: 6px; display: grid; grid-template-columns: 1fr; gap: 2px; }
+      .ias-action-field .ias-action-dir .ias-seg-btn { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .ias-action-field small { display: block; margin-top: 4px; }
+      .ias-pp { margin-top: 10px; padding: 8px 10px; border-radius: 8px; background: var(--group); border: 0.5px solid var(--border); font-size: 12px; }
+      .ias-pp-title { font-size: 11.5px; font-weight: 700; color: var(--text2); margin-bottom: 4px; }
+      .ias-pp-char { font-size: 11.5px; font-weight: 650; color: var(--text2); margin-top: 6px; }
+      .ias-pp-row { display: grid; grid-template-columns: 64px 1fr; gap: 6px; padding: 3px 0; }
+      .ias-pp-row + .ias-pp-row { border-top: 0.5px solid var(--border); }
+      .ias-pp-row b { font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .ias-pp-row span { color: var(--text2); word-break: break-word; }
       .ias-insp-spacer { flex: 1; min-height: 12px; }
       .ias-insp-delete { align-self: flex-start; border: none; background: transparent; color: var(--danger); font-size: 12.5px; padding: 4px 0; cursor: pointer; }
       .ias-copy-emos { margin-top: 8px; height: 26px; padding: 0 6px; }
