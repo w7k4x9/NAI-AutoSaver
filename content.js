@@ -4087,13 +4087,25 @@
   // One combo "character" can hold several NovelAI characters: the main
   // fields are person 1, each added member is the next person. The old ";;"
   // habit also works inside the main fields.
+  // A 표정 line can hold one part per person, split by ";;" ("smile ;; blush"
+  // = person 1 smiles, person 2 blushes): the 표정 screen's 「인물 2 표정」
+  // writes it that way. Parts past the people made by the main fields go to
+  // the added people (같은 그림에 인물 추가), ahead of their own 표정 list.
   function genCharacterMembers(ch) {
     const splitSemi = (value) => String(value == null ? "" : value).split(/\s*(?:;;|；；)\s*/u);
     const members = [];
     const appearParts = splitSemi(ch.appearance);
     const negParts = splitSemi(ch.negative);
     const exprLines = parseExpressionSet(ch.expressions).map(splitSemi);
-    const width = Math.max(appearParts.length, negParts.length, ...exprLines.map((parts) => parts.length), 1);
+    const extras = (Array.isArray(ch.members) ? ch.members : []).map((extra) => ({
+      appearance: String(extra.appearance || "").trim(),
+      expressions: parseExpressionSet(extra.expressions),
+      negative: String(extra.negative || "").trim(),
+    })).filter((m) => m.appearance || m.expressions.length || m.negative);
+    // people from the main fields: as many as their ";;" parts. A 표정 part
+    // for a person the character does not have is left out (a one-person
+    // character sharing a 2인 표정 just uses part 1).
+    const width = Math.max(appearParts.length, negParts.length, 1);
     for (let j = 0; j < width; j += 1) {
       members.push({
         appearance: (appearParts[j] || "").trim(),
@@ -4101,16 +4113,25 @@
         expressions: exprLines.map((parts) => (parts[j] || "").trim()),
       });
     }
-    for (const extra of Array.isArray(ch.members) ? ch.members : []) {
-      const appearance = String(extra.appearance || "").trim();
-      const expressions = parseExpressionSet(extra.expressions);
-      const negative = String(extra.negative || "").trim();
-      if (!appearance && !expressions.length && !negative) {
-        continue;
+    extras.forEach((extra, k) => {
+      const j = width + k;
+      const fromLines = exprLines.map((parts) => (parts[j] || "").trim());
+      if (fromLines.some(Boolean)) {
+        // the 표정 screen's part wins; the person's own list fills the rest
+        const own = extra.expressions;
+        const pick = (i) => fromLines[i] || (own.length === 1 ? own[0] : own[i] || "");
+        extra = { ...extra, expressions: exprLines.map((_, i) => pick(i)) };
       }
-      members.push({ appearance, expressions, negative });
-    }
+      members.push(extra);
+    });
     return members;
+  }
+  // How many people a combo character draws (for the 표정 screen's fields).
+  function genPeopleCount(ch) {
+    if (!ch) return 1;
+    const splitSemi = (value) => String(value == null ? "" : value).split(/\s*(?:;;|；；)\s*/u);
+    const extras = (Array.isArray(ch.members) ? ch.members : []).filter((m) => String(m.appearance || "").trim() || String(m.expressions || "").trim() || String(m.negative || "").trim()).length;
+    return Math.max(splitSemi(ch.appearance).length, splitSemi(ch.negative).length, 1) + extras;
   }
 
   // Emotion numbers follow person 1's lines; if person 1 has none, the longest
@@ -4600,6 +4621,24 @@
     return `<select class="ias-input ias-copy-emos" data-copy="${kind}" aria-label="다른 캐릭터에서 표정 복사"><option value="">다른 캐릭터에서 표정 복사…</option>${others.map(({ ch, i }) => `<option value="${i}">${escapeHtml(charDisplayName(ch, i))} (${charEmotionEntries(ch).length}개)</option>`).join("")}</select>`;
   }
 
+  let genEmoTwoUp = ""; // "emo:3" after 「2인 표정」 was pressed for that 표정
+  // The 표정's tags, one field per person when a character has 2+ people
+  // (stored as "person1 ;; person2" in the line).
+  function emotionTagFields(entry) {
+    const people = genState.emoShared ? Math.max(1, ...genState.chars.map((ch) => genPeopleCount(ch))) : genPeopleCount(emoOwner());
+    const parts = String(entry.tags || "").split(/\s*(?:;;|；；)\s*/u);
+    const shown = Math.max(people, parts.length, genEmoTwoUp === `${genSelection.type}:${genSelection.index}` ? 2 : 1);
+    if (shown < 2) {
+      return `${inspectorField("태그", 'data-efield="tags"', entry.tags, { rows: 3, placeholder: "예: smiling, open mouth" })}
+        <button type="button" class="ias-btn secondary small" data-emo-two="1" title="같은 그림에 두 사람이 나오는 캐릭터용: 사람마다 표정을 따로 써요">${icon("add", 13)}<span>2인 표정 (인물 2 따로 쓰기)</span></button>`;
+    }
+    let html = "";
+    for (let j = 0; j < shown; j += 1) {
+      html += inspectorField(j === 0 ? "인물 1 표정" : `인물 ${j + 1} 표정`, `data-efield="tags" data-eperson="${j}"`, parts[j] || "", { rows: 2, placeholder: j === 0 ? "예: smiling, open mouth" : "비우면 이 사람의 표정 목록을 써요" });
+    }
+    return `${html}<p class="ias-hint">인물 순서는 캐릭터 카드 순서예요 (외형 태그 = 인물 1, 같은 그림에 인물 추가 = 인물 2…). 혼자인 캐릭터에는 인물 1 표정만 들어가요.</p>`;
+  }
+
   function renderComboInspector() {
     if (!ui.comboInspector) {
       return;
@@ -4643,7 +4682,7 @@
         html = `
           <div class="ias-insp-head"><button type="button" class="ias-insp-back" data-insp-back="1">${icon("chevron", 14)}<span>공통 베이스</span></button><span class="ias-insp-kicker">${escapeHtml(kicker)}</span><span class="ias-insp-title">${escapeHtml(emoDisplayName(entry, index))}</span></div>
           ${inspectorField("이름 (파일 이름에 들어가요)", 'data-efield="name" data-autofocus="true" maxlength="30"', entry.name, { placeholder: `비우면 ${index + 1} · 쉼표는 「·」로 바뀌어요` })}
-          ${inspectorField("태그", 'data-efield="tags"', entry.tags, { rows: 3, placeholder: "예: smiling, open mouth" })}
+          ${emotionTagFields(entry)}
           ${genState.emoShared ? "" : copyFromSelect("emo")}
           <div class="ias-insp-spacer"></div>
           <button type="button" class="ias-insp-delete" data-delete="emo">이 표정 삭제</button>`;
@@ -4765,6 +4804,12 @@
       comboChanged({ inspector: true });
       return;
     }
+    if (target.closest("[data-emo-two]")) {
+      genEmoTwoUp = `${genSelection.type}:${genSelection.index}`;
+      renderComboInspector();
+      ui.comboInspector?.querySelector('[data-eperson="1"]')?.focus();
+      return;
+    }
     if (target.closest("[data-add-member]")) {
       const ch = genState.chars[genSelection.index];
       if (ch) {
@@ -4820,7 +4865,16 @@
       const ch = emoOwner();
       const entries = charEmotionEntries(ch);
       if (entries[index]) {
-        entries[index][el.dataset.efield] = el.dataset.efield === "name" ? safeEmotionName(value) : value.replace(/[=\n]/g, " ");
+        if (el.dataset.eperson != null) {
+          const parts = String(entries[index].tags || "").split(/\s*(?:;;|；；)\s*/u);
+          const j = Number(el.dataset.eperson);
+          while (parts.length <= j) parts.push("");
+          parts[j] = value.replace(/[=\n]/g, " ").replace(/;;|；；/g, " ");
+          while (parts.length > 1 && !parts[parts.length - 1].trim()) parts.pop();
+          entries[index].tags = parts.map((p) => p.trim()).join(" ;; ");
+        } else {
+          entries[index][el.dataset.efield] = el.dataset.efield === "name" ? safeEmotionName(value) : value.replace(/[=\n]/g, " ");
+        }
         setCharEmotionEntries(ch, entries);
         if (el.dataset.efield === "tags" && value.trim()) {
           tourEvent("combo-emo-tagged");
