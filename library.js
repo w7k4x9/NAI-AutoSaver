@@ -3112,12 +3112,14 @@
     }
   }
 
-  async function* walk(dir, prefix) {
+  async function* walk(dir, prefix, { withCull = false } = {}) {
     for await (const [name, handle] of dir.entries()) {
       if (name.startsWith(".")) continue;
-      if (handle.kind === "directory" && (name === CULL_FOLDER || name === TRASH_FOLDER)) continue; // our own sorted copies, trash
+      // our own trash; the sorted folder too, unless we are checking which
+      // of the pictures moved there are still there
+      if (handle.kind === "directory" && (name === TRASH_FOLDER || (name === CULL_FOLDER && !withCull))) continue;
       if (handle.kind === "directory") {
-        yield* walk(handle, `${prefix}/${name}`);
+        yield* walk(handle, `${prefix}/${name}`, { withCull });
       } else if (/\.(png|webp)$/i.test(name)) {
         yield { path: `${prefix}/${name}`, handle };
       }
@@ -3230,14 +3232,16 @@
     lastSync = Date.now();
     try {
       const found = new Map(); // path inside the linked folder → handle
-      for await (const item of walk(state.root, state.root.name)) found.set(item.path.split("/").slice(1).join("/"), item);
+      // _셀렉 is looked at too: pictures moved there by 「폴더로 나눠 저장」 and
+      // later deleted or moved away in 탐색기 used to stay in the list for good
+      for await (const item of walk(state.root, state.root.name, { withCull: true })) found.set(item.path.split("/").slice(1).join("/"), item);
       if (!found.size) return; // an empty or unreachable folder never empties the library
       const tops = new Set([...found.keys()].map((k) => k.split("/")[0]));
       // An entry belongs to this folder when its path runs through the linked
       // folder's name (NovelAI/2/… with NovelAI linked: even if folder "2" is
       // gone now), or starts with a folder that is there (NovelAI/… with 다운로드
       // linked).
-      const covered = (e, rel) => rel.length > 1 && !rel.includes(CULL_FOLDER) && !rel.includes(TRASH_FOLDER)
+      const covered = (e, rel) => rel.length > 1 && !rel.includes(TRASH_FOLDER)
         && (e.path.split("/").slice(0, -1).includes(state.root.name) || tops.has(rel[0]));
       const files = onDisk(state.entries);
       const known = new Set();
@@ -3264,8 +3268,8 @@
           gone.splice(gone.indexOf(match), 1);
           await retarget(match, `${state.root.name}/${key}`);
           moved += 1;
-        } else {
-          rest.push({ item, key, size });
+        } else if (!key.split("/").includes(CULL_FOLDER)) {
+          rest.push({ item, key, size }); // new in _셀렉 = a copy, not a new picture
         }
       }
       // Renamed in 탐색기 (과한웃음 → 잠식): same folder, same size, and the
