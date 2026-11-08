@@ -160,6 +160,9 @@
   let seedImageMs = null;
 
   let saveContext = { baseName: "", folderName: "", counter: 0, lastSavedSrc: "" };
+  // Pictures in a row whose own NovelAI data showed other character tags than
+  // the queue item (see checkTagDrift). Two in a row stops the run.
+  let tagDriftStreak = 0;
   let todaySavedCount = 0;
 
   const autoRun = {
@@ -3096,6 +3099,87 @@
   // generation starts, so passing the raw blob: URL to the background download
   // races that revocation and occasionally writes an empty file. A data: URL has
   // the bytes baked in and never goes stale.
+  // What NovelAI really drew with: the picture's own "Comment" text (JSON with
+  // v4_prompt). Text chunks come before the pixel data, so usually only the
+  // first part of the file needs decoding. null when there is none.
+  function readPngComment(dataUrl) {
+    const text = String(dataUrl || "");
+    const comma = text.indexOf(",");
+    if (comma < 0 || !/;base64$/i.test(text.slice(0, comma))) return null;
+    const b64 = text.slice(comma + 1);
+    for (const limit of [262144, b64.length]) {
+      const take = Math.min(b64.length, limit - (limit % 4));
+      let bytes;
+      try {
+        bytes = Uint8Array.from(atob(b64.slice(0, take)), (c) => c.charCodeAt(0));
+      } catch (error) {
+        return null;
+      }
+      const sig = [137, 80, 78, 71, 13, 10, 26, 10];
+      if (bytes.length < 8 || sig.some((v, i) => bytes[i] !== v)) return null;
+      let pos = 8;
+      let truncated = false;
+      while (true) {
+        if (pos + 8 > bytes.length) { truncated = true; break; }
+        const len = ((bytes[pos] << 24) >>> 0) + (bytes[pos + 1] << 16) + (bytes[pos + 2] << 8) + bytes[pos + 3];
+        const type = String.fromCharCode(bytes[pos + 4], bytes[pos + 5], bytes[pos + 6], bytes[pos + 7]);
+        if (type === "IDAT" || type === "IEND") return null;
+        if (pos + 12 + len > bytes.length) { truncated = true; break; }
+        if (type === "tEXt" || type === "iTXt") {
+          const body = bytes.subarray(pos + 8, pos + 8 + len);
+          const zero = body.indexOf(0);
+          const key = zero > 0 ? String.fromCharCode(...body.subarray(0, zero)) : "";
+          if (key === "Comment") {
+            if (type === "tEXt") return new TextDecoder().decode(body.subarray(zero + 1));
+            if (body[zero + 1] !== 0) return null; // compressed iTXt: not what NovelAI writes
+            let at = zero + 3;
+            at = body.indexOf(0, at) + 1; // language
+            at = body.indexOf(0, at) + 1; // translated keyword
+            return at > 0 ? new TextDecoder().decode(body.subarray(at)) : null;
+          }
+        }
+        pos += 12 + len;
+      }
+      if (!truncated || take >= b64.length) return null;
+    }
+    return null;
+  }
+
+  // Character tags the picture was drawn with vs the ones the run put in.
+  // → [{ index, missing, extra }] (empty = the same), or null when the picture
+  // carries no character data to compare with.
+  function checkTagDrift(expected, dataUrl) {
+    if (!Array.isArray(expected) || !expected.length) return null;
+    const comment = readPngComment(dataUrl);
+    if (!comment) return null;
+    let data;
+    try {
+      data = JSON.parse(comment);
+    } catch (error) {
+      return null;
+    }
+    const captions = data?.v4_prompt?.caption?.char_captions;
+    if (!Array.isArray(captions)) return null;
+    const actual = captions.map((c) => String(c?.char_caption || ""));
+    const diffs = [];
+    for (let i = 0; i < Math.max(expected.length, actual.length); i += 1) {
+      const want = normalizedPromptTags(expected[i] || "");
+      const got = normalizedPromptTags(actual[i] || "");
+      const missing = want.filter((tag) => !got.includes(tag));
+      const extra = got.filter((tag) => !want.includes(tag));
+      if (missing.length || extra.length) diffs.push({ index: i, missing, extra, actual: actual[i] || "" });
+    }
+    return diffs;
+  }
+
+  function describeTagDrift(diffs) {
+    const clip = (list) => {
+      const text = list.join(", ");
+      return text.length > 80 ? `${text.slice(0, 80)}…` : text;
+    };
+    return diffs.map((d) => `캐릭터 ${d.index + 1}: ${d.extra.length ? `들어간 다른 태그 "${clip(d.extra)}"` : ""}${d.extra.length && d.missing.length ? " · " : ""}${d.missing.length ? `빠진 태그 "${clip(d.missing)}"` : ""}`).join(" / ");
+  }
+
   async function captureImageDataUrl(image) {
     // Preferred path: fetch the blob and keep the exact PNG bytes.
     try {
@@ -3214,6 +3298,20 @@
 
     saveContext.lastSavedSrc = image.src;
     saveContext.counter += 1;
+    // Did NovelAI really draw this with the run's character tags? A picture
+    // drawn with left-over tags is kept, but under a name that says so, and
+    // the run puts the tags back in before the next one.
+    const drift = checkTagDrift(saveContext.expectChars, dataUrl);
+    const drifted = Boolean(drift && drift.length);
+    if (drift) {
+      if (drifted) {
+        tagDriftStreak += 1;
+        autoRun.tagDrift = drift;
+        logEvent("error", `그림의 캐릭터 태그가 대기열과 달라요 → "태그다름_"을 붙여 저장`, describeTagDrift(drift));
+      } else {
+        tagDriftStreak = 0;
+      }
+    }
     if (queueRun.active) {
       const running = queueRun.items[queueRun.index];
       if (running) {
@@ -3226,14 +3324,14 @@
     }
     const base = Store.sanitizeFileName(saveContext.baseName || defaultSaveName());
     const folder = currentSaveFolder(saveContext.baseName, saveContext.folderName);
-    const fileName = `${base} (${saveContext.counter})`;
+    const fileName = `${drifted ? "태그다름_" : ""}${base} (${saveContext.counter})`;
     chrome.runtime.sendMessage({
       action: "downloadImage",
       imageUrl: dataUrl,
       fileName,
       folder,
       format: effectiveFormat(),
-      axes: saveContext.axes || null,
+      axes: drifted ? null : saveContext.axes || null,
     }, (response) => {
       const lastError = chrome.runtime.lastError;
       if (lastError) {
@@ -3425,9 +3523,31 @@
       await finalizeStop({ playAudio: true });
       return;
     }
-    if (autoRun.target > 0 && autoRun.count >= autoRun.target) {
-      await completeAutoRun();
+    const drift = autoRun.tagDrift;
+    autoRun.tagDrift = null;
+    if (drift && tagDriftStreak >= 2) {
+      // put back once already (or a fresh item started) and it happened again:
+      // more pictures would only repeat it
+      await finalizeStop({ playAudio: true, quiet: true });
+      setStatus(`NovelAI에 캐릭터 태그가 제대로 들어가지 않아 멈췄어요. ${describeTagDrift(drift)}`, "warn");
       return;
+    }
+    if (autoRun.target > 0 && autoRun.count >= autoRun.target) {
+      await completeAutoRun(); // the next item puts its own tags in anyway
+      return;
+    }
+    if (drift && typeof saveContext.reapply === "function") {
+      setStatus("방금 그림이 대기열과 다른 캐릭터 태그로 그려졌어요. 태그를 다시 넣고 이어 갈게요.", "warn");
+      const token = autoRun.token;
+      const again = await saveContext.reapply();
+      if (!autoRun.active || token !== autoRun.token) {
+        return;
+      }
+      if (!again.ok) {
+        await finalizeStop({ playAudio: true, quiet: true });
+        setStatus(again.error || "캐릭터 태그를 다시 넣지 못해 멈췄어요.", "warn");
+        return;
+      }
     }
     await scheduleNextAutoClick();
   }
@@ -3495,7 +3615,19 @@
       axes: axes || null, // 캐릭터·배경·표정 of a combination item, kept with each saved picture
       counter: 0,
       lastSavedSrc: saveContext.lastSavedSrc || "",
+      // what each picture must have been drawn with (checked against the
+      // picture's own NovelAI data), and how to put it back if it was not
+      expectChars: applyCharacterPrompt != null ? splitCharacterBlocks(applyCharacterPrompt) : null,
+      reapply: applyCharacterPrompt != null ? async () => {
+        const again = await applyStructuredPrompt(applyBasePrompt, applyCharacterPrompt);
+        if (!again.ok) return again;
+        await applyCharacterNegativesToNovelAi(applyCharacterNegative, { slots: ownedCharacterSlots });
+        return { ok: true };
+      } : null,
     };
+    if (!queueRun.active) {
+      tagDriftStreak = 0;
+    }
     // For a standalone single run, restart timing. During a queue run the
     // tracker spans all items, so startQueueRun owns the reset instead.
     if (!queueRun.active) {
@@ -3510,6 +3642,7 @@
     autoRun.waitingForExistingGeneration = false;
     autoRun.stopAfterCurrent = false;
     autoRun.ignoreReadyUntil = 0;
+    autoRun.tagDrift = null;
     renderControls();
 
     await storageSet("sync", { autoClickEnabled: true });
@@ -3875,6 +4008,7 @@
     }
 
     queueRun.active = true;
+    tagDriftStreak = 0;
     syncBackgroundKeepAlive();
     queueRun.token += 1;
     const runToken = queueRun.token;
