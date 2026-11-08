@@ -394,18 +394,18 @@
   // the background; a 칸 then opens best-first, and the bottom N% can be
   // skipped. The user decides how far to trust it with 「내 셀렉과 맞춰 보기」.
   const AES_KEY = "aesSettings";
-  const aes = { on: false, skip: 0 };
+  const aes = { on: false, skip: 30, hide: false };
   async function loadAes() {
     try {
       const saved = await LibDB.getKv(AES_KEY);
-      if (saved && typeof saved === "object") Object.assign(aes, { on: Boolean(saved.on), skip: [0, 30, 50, 70].includes(saved.skip) ? saved.skip : 0 });
+      if (saved && typeof saved === "object") Object.assign(aes, { on: Boolean(saved.on), skip: [30, 50, 70].includes(saved.skip) ? saved.skip : 30, hide: saved.v === 2 ? Boolean(saved.hide) : false });
     } catch (error) {
       void error;
     }
     if (aes.on) await Aesthetic.loadScores();
   }
   function saveAes() {
-    void LibDB.setKv(AES_KEY, { ...aes }).catch(() => {});
+    void LibDB.setKv(AES_KEY, { ...aes, v: 2 }).catch(() => {});
   }
   const aesReady = () => aes.on && Aesthetic.status().phase === "ready";
   const aesItem = (id) => {
@@ -423,19 +423,20 @@
   }
   // Best first, and the bottom N% of the not-yet-sorted ones out of the way —
   // once every picture of the 칸 has a score, and only before the user started.
+  function lowScored(ids, percent) {
+    const ranked = ids.filter((id) => Aesthetic.hasRank(id)).sort((a, b) => Aesthetic.rank(b) - Aesthetic.rank(a));
+    const cut = Math.floor((ranked.length * percent) / 100);
+    return ranked.slice(Math.max(2, ranked.length - cut)).filter((id) => !cullOf(id).label);
+  }
   function applyAesOrder() {
     if (!aes.on || cmp.aesApplied) return;
     if (!cmp.ids.every((id) => Aesthetic.hasRank(id))) return;
     cmp.aesApplied = true;
     const s = (id) => Aesthetic.rank(id);
     cmp.ids.sort((a, b) => s(b) - s(a));
-    if (aes.skip) {
-      const ranked = cmp.ids.slice(); // best → worst
-      const cut = Math.floor((ranked.length * aes.skip) / 100);
-      const keepAtLeast = 2;
-      const bottom = ranked.slice(Math.max(keepAtLeast, ranked.length - cut));
-      cmp.skipped = new Set(bottom.filter((id) => !cullOf(id).label));
-    }
+    // the low ones are only pointed out: what happens to them is the user's call
+    cmp.low = new Set(lowScored(cmp.ids, aes.skip));
+    cmp.skipped = aes.hide ? new Set(cmp.low) : new Set();
     cmp.lane.a = 0;
     cmp.lane.aId = null;
     pickLeftLane();
@@ -443,17 +444,20 @@
   function renderAesChip() {
     const chip = $(".cmp-aes");
     if (!chip) return;
-    const n = cmp.skipped.size;
+    for (const id of cmp.low) if (cullOf(id).label) cmp.low.delete(id); // already chosen by hand
+    const n = cmp.low.size;
     const waiting = aes.on && !cmp.aesApplied ? cmp.ids.filter((id) => !Aesthetic.hasRank(id)).length : 0;
     chip.hidden = !(n || waiting);
     chip.innerHTML = "";
     if (waiting) {
       chip.append(el("span", { class: "cmp-aes-text", text: Aesthetic.status().phase === "ready" ? `점수 매기는 중 · ${waiting}장 남음` : "AI 점수 준비 중…" }));
     } else if (n) {
+      const hidden = cmp.skipped.size > 0;
       chip.append(
-        el("span", { class: "cmp-aes-text", text: `점수 낮은 ${n}장은 건너뛰었어요` }),
-        el("button", { type: "button", "data-aes": "show", text: "다시 보기" }),
-        el("button", { type: "button", "data-aes": "hold", text: "모두 B컷으로" }),
+        el("span", { class: "cmp-aes-text", text: `점수 낮은 ${n}장${hidden ? " · 가려 둠" : ""}`, title: `이 칸에서 AI 점수 아래쪽 ${aes.skip}% (아직 미분류인 것만)` }),
+        el("button", { type: "button", "data-aes": "hold", text: "B컷으로" }),
+        el("button", { type: "button", "data-aes": "reject", text: "탈락으로" }),
+        el("button", { type: "button", "data-aes": hidden ? "show" : "hide", text: hidden ? "보이기" : "가리기" }),
       );
     }
   }
@@ -530,7 +534,7 @@
       : st.phase === "loading" ? "준비하는 중…"
         : st.phase === "error" ? "시작하지 못했어요 · 눌러서 보기"
           : st.queued ? `점수 매기는 중 · 남은 ${st.queued.toLocaleString("ko-KR")}장`
-            : `켜짐${aes.skip ? ` · 낮은 ${aes.skip}% 건너뛰기` : ""}`;
+            : "켜짐 · 눌러서 점수 낮은 그림 정리";
     box.append(connRow({ iconName: "sparkle", title: "AI 점수", sub, action: () => void openAesSettings(), actionTitle: "AI 점수 설정" }));
     if (st.phase === "downloading") box.append(el("div", { class: "progress", html: `<span style="width:${pct}%"></span>` }));
   }
@@ -690,6 +694,71 @@
     }
     return box;
   }
+  // 점수 낮은 그림 한꺼번에 정리: in the pictures on screen, the low-scored
+  // 미분류 of every 칸 (same name). Nothing happens until the user picks what
+  // to do with them: B컷, 탈락, or just select them and decide by hand.
+  async function openLowScoreSheet() {
+    if (!aesReady()) return;
+    const { dialog, body } = notionDialogShell("점수 낮은 그림 정리", { leftLabel: "닫기", rightLabel: "" });
+    let percent = aes.skip;
+    let timer = null;
+    const fmt = (n) => n.toLocaleString("ko-KR");
+    const draw = () => {
+      body.innerHTML = "";
+      const shown = (state.shown || []).filter((e) => e.source !== "dropped");
+      const groups = new Map();
+      for (const e of shown) {
+        const k = groupKeyOf(e);
+        if (!groups.has(k)) groups.set(k, []);
+        groups.get(k).push(e.id);
+      }
+      const unscored = shown.filter((e) => !Aesthetic.hasRank(e.id)).map((e) => e.id);
+      const ids = [];
+      let cells = 0;
+      for (const list of groups.values()) {
+        if (list.length < 3) continue;
+        const low = lowScored(list, percent);
+        if (low.length) { cells += 1; ids.push(...low); }
+      }
+      body.append(
+        el("p", { class: "sheet-lead", text: `지금 보이는 ${fmt(shown.length)}장에서` }),
+        el("p", { class: "sheet-note", text: "같은 이름 칸마다 점수를 비교해서, 아래쪽에 있는 미분류 그림을 골라요. 이미 채택·B컷·탈락한 그림은 건드리지 않아요." }),
+        setRow("같은 칸에서 아래쪽", "", setSeg("기준", [[30, "30%"], [50, "50%"], [70, "70%"]], percent, (v) => { percent = v; draw(); })),
+      );
+      if (unscored.length) {
+        const go = el("button", { class: "btn small secondary", type: "button", text: Aesthetic.pending() ? `점수 매기는 중 · ${fmt(Aesthetic.pending())}장 남음` : `점수 먼저 매기기 (${fmt(unscored.length)}장)` });
+        go.disabled = Aesthetic.pending() > 0;
+        go.addEventListener("click", () => { Aesthetic.want(unscored.map(aesItem).filter(Boolean), { front: true }); draw(); });
+        body.append(el("p", { class: "sheet-warn", text: `아직 점수가 없는 ${fmt(unscored.length)}장은 빠져요.` }), go);
+      }
+      const result = el("p", { class: "low-result" }, ids.length
+        ? [el("b", { text: `${fmt(ids.length)}장` }), document.createTextNode(` · 칸 ${fmt(cells)}개`)]
+        : [document.createTextNode("고를 그림이 없어요 (칸에 미분류가 2장 이하로 남았거나, 점수가 아직 없어요).")]);
+      body.append(result);
+      const act = (label) => {
+        dialog.close();
+        if (label === "select") {
+          while (state.rendered < state.shown.length) renderMoreTiles();
+          state.sel = ids.slice();
+          updateSelectionLook();
+          toast(`점수 낮은 ${fmt(ids.length)}장을 골라 뒀어요. 오른쪽이나 키보드(W B컷 · E 탈락)로 정해요.`, "ok");
+          return;
+        }
+        applyCullAction(ids, { label });
+        toast(`점수 낮은 ${fmt(ids.length)}장을 ${LABELS[label]}으로 바꿨어요.`, "ok", { label: "되돌리기", run: () => applyCullAction(ids, { label: null }) });
+      };
+      body.append(el("div", { class: "low-actions" }, [
+        el("button", { class: "btn", type: "button", disabled: !ids.length, text: "B컷으로", onclick: () => act("hold") }),
+        el("button", { class: "btn secondary", type: "button", disabled: !ids.length, text: "탈락으로", onclick: () => act("reject") }),
+        el("button", { class: "btn secondary", type: "button", disabled: !ids.length, text: "골라 두기만", title: "그림에서 고른 상태로 두고, 직접 보고 정해요", onclick: () => act("select") }),
+      ]));
+      clearTimeout(timer);
+      if (unscored.length && dialog.open) timer = setTimeout(draw, 1500); // counts follow the scoring
+    };
+    dialog.addEventListener("close", () => clearTimeout(timer), { once: true });
+    draw();
+  }
+
   let refreshAesSheet = () => {};
   async function openAesSettings() {
     const { dialog, body, right: save } = notionDialogShell("AI 점수", { leftLabel: "닫기", rightLabel: "" });
@@ -727,8 +796,12 @@
             : st.phase === "error" ? `시작하지 못했어요: ${st.error}`
               : st.phase === "ready" ? (st.queued ? `점수 매기는 중 · 남은 ${st.queued.toLocaleString("ko-KR")}장 (한 번에 ${st.threads}개씩)` : "준비됐어요. 지금 보는 그림부터 뒤에서 점수를 매겨요.") : "";
         if (phaseText) body.append(el("p", { class: st.phase === "error" ? "sheet-warn" : "sheet-note", text: phaseText }));
-        const radios = [[0, "건너뛰지 않기", "순서만 점수 높은 순으로 바꿔요"], [30, "낮은 30% 건너뛰기", ""], [50, "낮은 50% 건너뛰기", ""], [70, "낮은 70% 건너뛰기", "과감하게 · 놓치는 채택이 생길 수 있어요"]];
-        body.append(el("div", { class: "ios-group-label", text: "비교할 때 점수 낮은 그림" }));
+        if (st.phase === "ready") {
+          body.append(el("button", { class: "btn wide", type: "button", html: `${icon("sparkle", 14)}<span>점수 낮은 그림 한꺼번에 정리…</span>`, onclick: () => { dialog.close(); setTimeout(() => void openLowScoreSheet(), 0); } }));
+          body.append(el("p", { class: "sheet-note", text: "지금 보이는 그림에서 칸마다 점수 낮은 미분류 그림을 골라, B컷·탈락으로 바꾸거나 골라 두기만 해요. 무엇을 할지는 직접 정해요." }));
+        }
+        const radios = [[30, "아래쪽 30%", ""], [50, "아래쪽 50%", ""], [70, "아래쪽 70%", "과감하게 · 놓치는 채택이 생길 수 있어요"]];
+        body.append(el("div", { class: "ios-group-label", text: "「점수 낮은 그림」은 같은 칸에서" }));
         const group = el("div", { class: "ios-group" });
         for (const [v, label, hint] of radios) {
           const r = el("input", { type: "radio", name: "aes-skip", id: `aes-skip-${v}`, checked: aes.skip === v });
@@ -736,7 +809,12 @@
           r.addEventListener("change", () => { aes.skip = v; saveAes(); renderAesBox(); });
           group.append(el("label", { class: "ios-row", for: `aes-skip-${v}` }, [el("span", { class: "grow" }, [document.createTextNode(label), hint ? el("small", { text: hint }) : null]), r]));
         }
-        body.append(group, el("p", { class: "sheet-note", text: "건너뛴 그림은 미분류로 남아요. 비교 화면 위쪽의 「다시 보기」로 볼 수 있고, 「모두 B컷으로」를 누르면 한꺼번에 B컷이 돼요." }));
+        const hide = el("input", { type: "checkbox", id: "aes-hide", checked: aes.hide });
+        hide.classList.add("ios-switch");
+        hide.addEventListener("change", () => { aes.hide = hide.checked; saveAes(); });
+        body.append(group,
+          el("div", { class: "ios-group" }, [el("label", { class: "ios-row", for: "aes-hide" }, [el("span", { class: "grow" }, [document.createTextNode("비교할 때 처음부터 가려 두기"), el("small", { text: "끄면 다 보이고, 비교 화면 위쪽에서 알려만 줘요" })]), hide])]),
+          el("p", { class: "sheet-note", text: "AI는 고르지 않아요. 비교 화면 위쪽에 「점수 낮은 N장」이 뜨면 [B컷으로] [탈락으로] [가리기] 중에 직접 골라요. 이미 채택·B컷·탈락한 그림은 건드리지 않아요." }));
         // 내 셀렉으로 학습
         body.append(el("div", { class: "ios-group-label", text: "내 취향 배우기" }));
         body.append(tasteSection(draw));
@@ -878,7 +956,9 @@
       renderSettings();
     }))];
     if (aes.on) {
-      rows.push(setRow("비교할 때 점수 낮은 그림 건너뛰기", "건너뛴 그림은 미분류로 남고, 비교 화면 위쪽에서 다시 볼 수 있어요", setSeg("건너뛰기", [[0, "안 함"], [30, "낮은 30%"], [50, "50%"], [70, "70%"]], aes.skip, (v) => { aes.skip = v; saveAes(); renderAesBox(); })));
+      if (st.phase === "ready") rows.push(setRow("점수 낮은 그림 한꺼번에 정리", "칸마다 점수 낮은 미분류를 골라 B컷·탈락으로 · 직접 정해요", setBtn("정리하기…", () => void openLowScoreSheet())));
+      rows.push(setRow("「점수 낮은 그림」 기준", "같은 칸에서 아래쪽 몇 %를 낮다고 볼지", setSeg("기준", [[30, "아래 30%"], [50, "50%"], [70, "70%"]], aes.skip, (v) => { aes.skip = v; saveAes(); renderAesBox(); })));
+      rows.push(setRow("비교할 때 처음부터 가려 두기", "끄면 다 보이고, 비교 화면 위쪽에서 알려만 줘요", setSwitch("set-aes-hide", aes.hide, (on) => { aes.hide = on; saveAes(); })));
       const t = Aesthetic.taste();
       const lg = learnableGroups();
       const tasteSub = Aesthetic.fingerprintsSupported() === false ? "이 모델로는 만들 수 없어요"
@@ -2470,7 +2550,7 @@
   // down to B컷 one by one against the best". Click a lane (or Tab) to choose
   // which one ←/→ rolls; Q/W/E/R mark the picture in that lane; S swaps the
   // two (the left picture becomes the 기준).
-  const cmp = { ids: [], focus: 0, filter: "all", group: null, urls: new Map(), token: 0, mode: "pair", actual: false, lane: { side: "a", a: 0, b: 0, aId: null, bId: null, left: "none", right: "pick" }, skipped: new Set(), order: [], aesApplied: false, touched: false };
+  const cmp = { ids: [], focus: 0, filter: "all", group: null, urls: new Map(), token: 0, mode: "pair", actual: false, lane: { side: "a", a: 0, b: 0, aId: null, bId: null, left: "none", right: "pick" }, skipped: new Set(), low: new Set(), order: [], aesApplied: false, touched: false };
   const CMP_MODE_KEY = "naiAutoSaver.compareMode2";
   try {
     cmp.mode = localStorage.getItem(CMP_MODE_KEY) === "grid" ? "grid" : "pair";
@@ -2668,6 +2748,7 @@
     cmp.group = group;
     cmp.order = cmp.ids.slice(); // as given, before 미적 점수
     cmp.skipped = new Set();
+    cmp.low = new Set();
     cmp.aesApplied = false;
     cmp.touched = false;
     applyAesOrder();
@@ -4454,12 +4535,18 @@
       if (b.dataset.aes === "show") {
         cmp.skipped = new Set();
         renderCompare({ keepImages: true });
-      } else if (b.dataset.aes === "hold") {
-        const ids = [...cmp.skipped];
-        cmp.skipped = new Set();
-        applyCullAction(ids, { label: "hold" });
+      } else if (b.dataset.aes === "hide") {
+        cmp.skipped = new Set(cmp.low);
+        laneCurrent("a");
         renderCompare({ keepImages: true });
-        toast(`건너뛴 ${ids.length}장을 B컷으로 바꿨어요.`, "ok", { label: "되돌리기", run: () => { applyCullAction(ids, { label: null }); renderCompare({ keepImages: true }); } });
+      } else {
+        const label = b.dataset.aes === "reject" ? "reject" : "hold";
+        const ids = [...cmp.low];
+        cmp.low = new Set();
+        cmp.skipped = new Set();
+        applyCullAction(ids, { label });
+        renderCompare({ keepImages: true });
+        toast(`점수 낮은 ${ids.length}장을 ${LABELS[label]}으로 바꿨어요.`, "ok", { label: "되돌리기", run: () => { applyCullAction(ids, { label: null }); renderCompare({ keepImages: true }); } });
       }
     });
     Aesthetic.on(onAesEvent);
