@@ -411,6 +411,15 @@ body { word-break: keep-all; overflow-wrap: anywhere; }
 .sheet-note { font-size: 12.5px; color: var(--text2) !important; }
 .sheet-lead { margin: 0; font-size: 14px; font-weight: 600; color: var(--text); }
 .sheet-points { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 12.5px; color: var(--text2); }
+/* sheet pages (AI 점수) */
+.ios-row.nav-row { width: 100%; border: none; background: transparent; font: inherit; color: var(--text); text-align: left; font-size: 14px; }
+.ios-row.nav-row:hover { background: var(--hover); }
+.nav-val { font-size: 13px; color: var(--text3); white-space: nowrap; max-width: 60%; overflow: hidden; text-overflow: ellipsis; }
+.nav-primary { color: var(--accent-text) !important; font-weight: 600; }
+.nav-primary .low-ic { color: var(--accent); }
+.dialog.sheet .dialog-body > .ios-group + .ios-group { margin-top: 10px; }
+.back-chev { display: inline-flex; transform: rotate(180deg); margin-right: 2px; vertical-align: -2px; }
+.bar-btn { display: inline-flex; align-items: center; }
 /* 점수 낮은 그림 정리 */
 .low-hero { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 0 10px; text-align: center; }
 .low-count { display: flex; align-items: baseline; gap: 2px; color: var(--text); }

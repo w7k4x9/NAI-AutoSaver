@@ -772,74 +772,128 @@
   }
 
   let refreshAesSheet = () => {};
-  async function openAesSettings() {
+  // AI 점수 sheet, in pages like iOS 설정: the main page only has the switch,
+  // the one thing to do (정리) and rows that lead to the details.
+  async function openAesSettings(startPage = "main") {
     const { dialog, body, right: save } = notionDialogShell("AI 점수", { leftLabel: "닫기", rightLabel: "" });
     save.hidden = true;
-    const draw = () => {
-      body.innerHTML = "";
-      const st = Aesthetic.status();
-      const on = el("input", { type: "checkbox", id: "aes-on", checked: aes.on });
-      on.classList.add("ios-switch");
-      on.addEventListener("change", async () => {
-        aes.on = on.checked;
-        saveAes();
-        if (aes.on) {
-          await Aesthetic.loadScores();
-          void Aesthetic.start().then(() => { feedAesFromView(); }, () => {});
-          feedAesFromView();
-        } else {
-          Aesthetic.stop();
+    const back = dialog.querySelector(".sheet-bar .bar-btn");
+    const title = dialog.querySelector(".sheet-title");
+    let page = startPage;
+    const go = (to) => { page = to; draw(); body.scrollTop = 0; };
+    // on a sub page the bar's left button goes back instead of closing
+    back.addEventListener("click", (event) => {
+      if (page === "main") return;
+      event.stopImmediatePropagation();
+      go("main");
+    }, true);
+    const fmt = (n) => n.toLocaleString("ko-KR");
+    const navRow = (label, value, to, sub = "") => el("button", { class: "ios-row nav-row", type: "button", onclick: () => go(to) }, [
+      el("span", { class: "grow" }, [document.createTextNode(label), sub ? el("small", { text: sub }) : null]),
+      value ? el("span", { class: "nav-val", text: value }) : null,
+      el("span", { class: "low-chev", html: icon("chevron", 14) }),
+    ]);
+    const switchRow = (id, label, sub, checked, onChange) => {
+      const input = el("input", { type: "checkbox", id, checked });
+      input.classList.add("ios-switch");
+      input.addEventListener("change", () => onChange(input.checked));
+      return el("label", { class: "ios-row", for: id }, [el("span", { class: "grow" }, [document.createTextNode(label), sub ? el("small", { text: sub }) : null]), input]);
+    };
+    const pages = {
+      main() {
+        const st = Aesthetic.status();
+        const status = !aes.on ? `처음 켤 때 AI 모델(약 ${Aesthetic.MODEL.sizeMB}MB)을 한 번 받아요`
+          : st.phase === "downloading" ? `모델 받는 중 · ${Math.round(st.progress * 100)}%`
+            : st.phase === "loading" ? "준비하는 중…"
+              : st.phase === "error" ? "시작하지 못했어요"
+                : st.queued ? `점수 매기는 중 · 남은 ${fmt(st.queued)}장` : "켜져 있어요 · 보는 그림부터 점수를 매겨요";
+        if (!aes.on) {
+          body.append(
+            el("p", { class: "sheet-lead", text: "AI가 그림마다 얼마나 잘 나왔는지 0–100점을 매겨요." }),
+            el("ul", { class: "sheet-points" }, [
+              el("li", { text: "비교할 때 점수 높은 그림부터 나와요." }),
+              el("li", { text: "점수 낮은 그림을 한꺼번에 B컷·탈락으로 정리할 수 있어요." }),
+              el("li", { text: "고르는 건 직접 해요. AI는 순서만 정해요." }),
+            ]),
+          );
         }
-        renderAesBox();
-        draw();
-      });
-      body.append(
-        el("p", { class: "sheet-lead", text: "AI가 그림마다 얼마나 잘 나왔는지 0–100점을 매겨요." }),
-        el("ul", { class: "sheet-points" }, [
-          el("li", { text: "같은 칸을 비교할 때 점수 높은 그림부터 나와서, 괜찮은 그림을 더 빨리 찾아요." }),
-          el("li", { text: "원하면 점수 낮은 그림은 건너뛰어요. 지우지는 않아요." }),
-          el("li", { text: "채택·B컷은 여전히 직접 골라요. AI는 순서만 정해요." }),
-        ]),
-        el("div", { class: "ios-group" }, [el("label", { class: "ios-row", for: "aes-on" }, [el("span", { class: "grow" }, [document.createTextNode("AI 점수 켜기"), el("small", { text: `처음 켤 때 AI 모델(약 ${Aesthetic.MODEL.sizeMB}MB)을 한 번 받아요 · 점수는 이 컴퓨터에서 매기고, 그림은 밖으로 안 나가요` })]), on])]),
-      );
-      if (aes.on) {
-        const phaseText = st.phase === "downloading" ? `모델 받는 중 · ${Math.round(st.progress * 100)}%`
-          : st.phase === "loading" ? "준비하는 중…"
-            : st.phase === "error" ? `시작하지 못했어요: ${st.error}`
-              : st.phase === "ready" ? (st.queued ? `점수 매기는 중 · 남은 ${st.queued.toLocaleString("ko-KR")}장 (한 번에 ${st.threads}개씩)` : "준비됐어요. 지금 보는 그림부터 뒤에서 점수를 매겨요.") : "";
-        if (phaseText) body.append(el("p", { class: st.phase === "error" ? "sheet-warn" : "sheet-note", text: phaseText }));
+        body.append(el("div", { class: "ios-group" }, [switchRow("aes-on", "AI 점수 켜기", status, aes.on, async (on) => {
+          aes.on = on;
+          saveAes();
+          if (on) {
+            await Aesthetic.loadScores();
+            void Aesthetic.start().then(() => { feedAesFromView(); }, () => {});
+            feedAesFromView();
+          } else {
+            Aesthetic.stop();
+          }
+          renderAesBox();
+          draw();
+        })]));
+        if (!aes.on) {
+          body.append(el("p", { class: "low-foot", text: "점수는 이 컴퓨터에서 매기고, 그림은 밖으로 안 나가요." }));
+          return;
+        }
+        if (st.phase === "error") body.append(el("p", { class: "sheet-warn", text: st.error || "모델을 불러오지 못했어요." }));
         if (st.phase === "ready") {
-          body.append(el("button", { class: "btn wide", type: "button", html: `${icon("sparkle", 14)}<span>점수 낮은 그림 한꺼번에 정리…</span>`, onclick: () => { dialog.close(); setTimeout(() => void openLowScoreSheet(), 0); } }));
-          body.append(el("p", { class: "sheet-note", text: "지금 보이는 그림에서 칸마다 점수 낮은 미분류 그림을 골라, B컷·탈락으로 바꾸거나 골라 두기만 해요. 무엇을 할지는 직접 정해요." }));
+          body.append(el("div", { class: "ios-group" }, [el("button", { class: "ios-row nav-row nav-primary", type: "button", onclick: () => { dialog.close(); setTimeout(() => void openLowScoreSheet(), 0); } }, [
+            el("span", { class: "low-ic", html: icon("sparkle", 18) }),
+            el("span", { class: "grow" }, [document.createTextNode("점수 낮은 그림 정리"), el("small", { text: "지금 보이는 그림에서 B컷·탈락으로" })]),
+            el("span", { class: "low-chev", html: icon("chevron", 14) }),
+          ])]));
         }
-        const radios = [[30, "아래쪽 30%", ""], [50, "아래쪽 50%", ""], [70, "아래쪽 70%", "과감하게 · 놓치는 채택이 생길 수 있어요"]];
-        body.append(el("div", { class: "ios-group-label", text: "「점수 낮은 그림」은 같은 칸에서" }));
+        const t = Aesthetic.taste();
+        const tasteValue = Aesthetic.fingerprintsSupported() === false ? "못 써요" : !t ? "아직 안 배움" : Aesthetic.usingTaste() ? "쓰는 중" : "꺼 둠";
+        body.append(el("div", { class: "ios-group" }, [
+          navRow("점수 낮은 그림 기준", `아래 ${aes.skip}%${aes.hide ? " · 가려 둠" : ""}`, "low"),
+          navRow("내 취향 점수", tasteValue, "taste"),
+          navRow("AI 모델", `${Aesthetic.MODEL.sizeMB}MB`, "model"),
+        ]));
+      },
+      low() {
         const group = el("div", { class: "ios-group" });
-        for (const [v, label, hint] of radios) {
+        for (const [v, label, hint] of [[30, "아래 30%", ""], [50, "아래 50%", ""], [70, "아래 70%", "과감하게 · 놓치는 채택이 생길 수 있어요"]]) {
           const r = el("input", { type: "radio", name: "aes-skip", id: `aes-skip-${v}`, checked: aes.skip === v });
           r.classList.add("ios-check");
           r.addEventListener("change", () => { aes.skip = v; saveAes(); renderAesBox(); });
           group.append(el("label", { class: "ios-row", for: `aes-skip-${v}` }, [el("span", { class: "grow" }, [document.createTextNode(label), hint ? el("small", { text: hint }) : null]), r]));
         }
-        const hide = el("input", { type: "checkbox", id: "aes-hide", checked: aes.hide });
-        hide.classList.add("ios-switch");
-        hide.addEventListener("change", () => { aes.hide = hide.checked; saveAes(); });
-        body.append(group,
-          el("div", { class: "ios-group" }, [el("label", { class: "ios-row", for: "aes-hide" }, [el("span", { class: "grow" }, [document.createTextNode("비교할 때 처음부터 가려 두기"), el("small", { text: "끄면 다 보이고, 비교 화면 위쪽에서 알려만 줘요" })]), hide])]),
-          el("p", { class: "sheet-note", text: "AI는 고르지 않아요. 비교 화면 위쪽에 「점수 낮은 N장」이 뜨면 [B컷으로] [탈락으로] [가리기] 중에 직접 골라요. 이미 채택·B컷·탈락한 그림은 건드리지 않아요." }));
-        // 내 셀렉으로 학습
-        body.append(el("div", { class: "ios-group-label", text: "내 취향 배우기" }));
+        body.append(
+          el("div", { class: "ios-group-label", text: "같은 칸에서 점수가 아래쪽 몇 %면 「낮다」고 볼까요" }),
+          group,
+          el("div", { class: "ios-group" }, [switchRow("aes-hide", "비교할 때 처음부터 가려 두기", "", aes.hide, (on) => { aes.hide = on; saveAes(); })]),
+          el("p", { class: "low-foot", text: "꺼 두면 다 보이고, 비교 화면 위쪽에 「점수 낮은 N장」만 떠요. 거기서 B컷·탈락·가리기를 직접 골라요." }),
+        );
+      },
+      taste() {
         body.append(tasteSection(draw));
-        body.append(el("p", { class: "sheet-note", text: `AI 모델: ${Aesthetic.MODEL.repo} (${Aesthetic.MODEL.license}) · 많은 사람이 좋아하는 평균 취향이라 내 기준과 다를 수 있어요.` }));
-        body.append(el("button", { class: "sheet-danger", type: "button", text: "AI 점수 끄고 모델 지우기", onclick: async () => {
-          aes.on = false;
-          saveAes();
-          await Aesthetic.removeModel();
-          renderAesBox();
-          dialog.close();
-          toast("AI 점수를 끄고 모델을 지웠어요. 이미 매긴 점수는 남아 있어요.");
-        } }));
-      }
+      },
+      model() {
+        body.append(
+          el("div", { class: "ios-group" }, [
+            el("div", { class: "ios-row" }, [el("span", { class: "grow", text: "모델" }), el("span", { class: "nav-val", text: Aesthetic.MODEL.repo })]),
+            el("div", { class: "ios-row" }, [el("span", { class: "grow", text: "크기" }), el("span", { class: "nav-val", text: `약 ${Aesthetic.MODEL.sizeMB}MB` })]),
+            el("div", { class: "ios-row" }, [el("span", { class: "grow", text: "라이선스" }), el("span", { class: "nav-val", text: Aesthetic.MODEL.license })]),
+          ]),
+          el("p", { class: "low-foot", text: "많은 사람이 좋아하는 평균 취향을 배운 모델이라 내 기준과 다를 수 있어요. 점수는 이 컴퓨터에서 매기고, 그림은 밖으로 안 나가요." }),
+          el("button", { class: "sheet-danger", type: "button", text: "AI 점수 끄고 모델 지우기", onclick: async () => {
+            aes.on = false;
+            saveAes();
+            await Aesthetic.removeModel();
+            renderAesBox();
+            dialog.close();
+            toast("AI 점수를 끄고 모델을 지웠어요. 이미 매긴 점수는 남아 있어요.");
+          } }),
+        );
+      },
+    };
+    const titles = { main: "AI 점수", low: "점수 낮은 그림 기준", taste: "내 취향 점수", model: "AI 모델" };
+    const draw = () => {
+      if (!aes.on && page !== "main") page = "main";
+      body.innerHTML = "";
+      title.textContent = titles[page];
+      back.innerHTML = page === "main" ? "닫기" : `<span class="back-chev">${icon("chevron", 14)}</span>AI 점수`;
+      pages[page]();
     };
     let last = 0;
     refreshAesSheet = () => {
@@ -976,7 +1030,7 @@
       const tasteSub = Aesthetic.fingerprintsSupported() === false ? "이 모델로는 만들 수 없어요"
         : t ? `${new Date(t.at).toLocaleDateString("ko-KR")}에 배움 · 채택을 맞힌 비율 AI ${Math.round(t.generic.pairAcc)}% → 내 취향 ${Math.round(t.personal.pairAcc)}%`
           : `내 채택을 보고 내 취향에 맞춘 점수를 만들어요 · 배울 수 있는 칸 ${fmt(lg.total)}개`;
-      rows.push(setRow("내 취향 점수", tasteSub, setBtn(t ? "결과 · 다시 배우기…" : "배우기…", () => void openAesSettings())));
+      rows.push(setRow("내 취향 점수", tasteSub, setBtn(t ? "결과 · 다시 배우기…" : "배우기…", () => void openAesSettings("taste"))));
       if (t) rows.push(setRow("AI 점수 대신 내 취향 점수 쓰기", t.better ? "내 취향 점수가 더 잘 맞아요" : "아직은 AI 점수가 더 잘 맞아요", setSwitch("set-taste", Aesthetic.usingTaste(), async (on) => { await Aesthetic.setUseTaste(on); renderSettings(); })));
     }
     pane.append(group(...rows));
