@@ -720,38 +720,50 @@
         const low = lowScored(list, percent);
         if (low.length) { cells += 1; ids.push(...low); }
       }
-      body.append(
-        el("p", { class: "sheet-lead", text: `지금 보이는 ${fmt(shown.length)}장에서` }),
-        el("p", { class: "sheet-note", text: "같은 이름 칸마다 점수를 비교해서, 아래쪽에 있는 미분류 그림을 골라요. 이미 채택·B컷·탈락한 그림은 건드리지 않아요." }),
-        setRow("같은 칸에서 아래쪽", "", setSeg("기준", [[30, "30%"], [50, "50%"], [70, "70%"]], percent, (v) => { percent = v; draw(); })),
-      );
-      if (unscored.length) {
-        const go = el("button", { class: "btn small secondary", type: "button", text: Aesthetic.pending() ? `점수 매기는 중 · ${fmt(Aesthetic.pending())}장 남음` : `점수 먼저 매기기 (${fmt(unscored.length)}장)` });
-        go.disabled = Aesthetic.pending() > 0;
-        go.addEventListener("click", () => { Aesthetic.want(unscored.map(aesItem).filter(Boolean), { front: true }); draw(); });
-        body.append(el("p", { class: "sheet-warn", text: `아직 점수가 없는 ${fmt(unscored.length)}장은 빠져요.` }), go);
+      const pending = Aesthetic.pending();
+      // how many, from where, and a look at them (lowest first)
+      ids.sort((a, b) => Aesthetic.rank(a) - Aesthetic.rank(b));
+      const strip = el("div", { class: "low-strip" });
+      for (const id of ids.slice(0, 7)) {
+        const e = byId(id);
+        if (e) strip.append(el("span", { class: "low-thumb" }, [el("img", { src: thumbUrl(e), alt: "", draggable: "false" }), el("i", { text: String(Math.round(Aesthetic.rank(id))) })]));
       }
-      const result = el("p", { class: "low-result" }, ids.length
-        ? [el("b", { text: `${fmt(ids.length)}장` }), document.createTextNode(` · 칸 ${fmt(cells)}개`)]
-        : [document.createTextNode("고를 그림이 없어요 (칸에 미분류가 2장 이하로 남았거나, 점수가 아직 없어요).")]);
-      body.append(result);
+      if (ids.length > 7) strip.append(el("span", { class: "low-thumb low-more", text: `+${fmt(ids.length - 7)}` }));
+      body.append(el("div", { class: "low-hero", "data-empty": String(!ids.length) }, [
+        el("div", { class: "low-count" }, [el("b", { text: fmt(ids.length) }), el("span", { text: "장" })]),
+        el("div", { class: "low-sub", text: ids.length ? `칸 ${fmt(cells)}개에서 점수 아래쪽 ${percent}% · 미분류만` : unscored.length ? "점수를 매기는 중이에요" : "고를 그림이 없어요 · 칸마다 미분류가 3장 이상일 때 골라요" }),
+        ids.length ? strip : null,
+      ]));
+      body.append(setSeg("기준", [[30, "아래 30%"], [50, "아래 50%"], [70, "아래 70%"]], percent, (v) => { percent = v; draw(); }));
+      body.lastChild.classList.add("low-seg");
+      if (unscored.length) {
+        body.append(pending
+          ? el("p", { class: "low-wait", text: `점수 매기는 중 · ${fmt(pending)}장 남음 · 끝나면 숫자가 바뀌어요` })
+          : el("button", { class: "low-wait link", type: "button", text: `점수 없는 ${fmt(unscored.length)}장 먼저 매기기`, onclick: () => { Aesthetic.want(unscored.map(aesItem).filter(Boolean), { front: true }); draw(); } }));
+      }
       const act = (label) => {
         dialog.close();
         if (label === "select") {
           while (state.rendered < state.shown.length) renderMoreTiles();
           state.sel = ids.slice();
           updateSelectionLook();
-          toast(`점수 낮은 ${fmt(ids.length)}장을 골라 뒀어요. 오른쪽이나 키보드(W B컷 · E 탈락)로 정해요.`, "ok");
+          toast(`점수 낮은 ${fmt(ids.length)}장을 골라 뒀어요. 보고 나서 W(B컷)나 E(탈락)로 정해요.`, "ok");
           return;
         }
         applyCullAction(ids, { label });
         toast(`점수 낮은 ${fmt(ids.length)}장을 ${LABELS[label]}으로 바꿨어요.`, "ok", { label: "되돌리기", run: () => applyCullAction(ids, { label: null }) });
       };
-      body.append(el("div", { class: "low-actions" }, [
-        el("button", { class: "btn", type: "button", disabled: !ids.length, text: "B컷으로", onclick: () => act("hold") }),
-        el("button", { class: "btn secondary", type: "button", disabled: !ids.length, text: "탈락으로", onclick: () => act("reject") }),
-        el("button", { class: "btn secondary", type: "button", disabled: !ids.length, text: "골라 두기만", title: "그림에서 고른 상태로 두고, 직접 보고 정해요", onclick: () => act("select") }),
+      const row = (iconName, title, sub, run, tone) => el("button", { class: "ios-row low-row", type: "button", "data-tone": tone, "data-disabled": String(!ids.length), disabled: !ids.length, onclick: run }, [
+        el("span", { class: "low-ic", html: icon(iconName, 18) }),
+        el("span", { class: "grow" }, [document.createTextNode(title), sub ? el("small", { text: sub }) : null]),
+        el("span", { class: "low-chev", html: icon("chevron", 14) }),
+      ]);
+      body.append(el("div", { class: "ios-group low-list" }, [
+        row("check_circle", "B컷으로 바꾸기", "", () => act("hold"), "hold"),
+        row("minus_circle", "탈락으로 바꾸기", "", () => act("reject"), "reject"),
+        row("visibility", "골라 두기만", "그림에서 직접 보고 정해요", () => act("select"), "select"),
       ]));
+      body.append(el("p", { class: "low-foot", text: `지금 보이는 ${fmt(shown.length)}장 기준 · 이미 고른 그림은 그대로 · 되돌릴 수 있어요` }));
       clearTimeout(timer);
       if (unscored.length && dialog.open) timer = setTimeout(draw, 1500); // counts follow the scoring
     };
