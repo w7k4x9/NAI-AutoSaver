@@ -47,7 +47,7 @@
       steps: [
         { target: firstTile, empty: NO_PICTURE, title: "하나씩 더하기", body: "<b>Ctrl</b>(맥은 ⌘)을 누른 채 클릭하거나, 그림 왼쪽 위 <b>동그라미</b>를 눌러요. <b>Shift</b>+클릭은 사이에 있는 그림 전부예요." },
         { target: () => $(".gallery"), title: "끌어서 고르기", body: "그림 사이 <b>빈 곳에서 끌면</b> 네모 안에 든 그림이 다 골라져요. 빈 곳을 누르거나 <b>Esc</b>를 누르면 풀려요." },
-        { target: () => $(".pick-all"), title: "모두 선택", body: "지금 보이는 그림을 전부 골라요 (<b>Ctrl+A</b>). 여러 장을 고르면 오른쪽에서 한꺼번에 사본을 만들거나 노션에 보내요." },
+        { prep: ensureSelected, target: () => $(".sel-pill") || $(".gallery"), empty: NO_PICTURE, title: "모두 선택 · 선택 해제", body: "그림을 고르면 아래쪽에 <b>고른 장 수</b>와 <b>모두 선택 · 선택 해제</b>가 떠요 (<b>Ctrl+A</b> · <b>Esc</b>). 여러 장을 고르면 오른쪽에서 한꺼번에 셀렉하거나 사본을 만들고 노션에 보내요." },
       ],
     },
     {

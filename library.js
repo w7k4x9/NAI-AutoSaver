@@ -304,7 +304,7 @@
     ["old", "오래된 순", "먼저 저장한 그림이 위로"],
     ["group", "같은 이름끼리", "같은 이름 그림을 붙여서 · 묶음은 최근 순"],
     ["name", "이름순", "가나다 · (1) (2) (10) 순서로"],
-    ["aes", "미적 점수순", "점수 높은 그림이 위로 · 미적 점수를 켜면 돼요"],
+    ["aes", "AI 점수순", "AI가 잘 나왔다고 본 그림이 위로 · 설정에서 AI 점수를 켜면 돼요"],
   ];
   const SORT_KEY = "naiAutoSaver.librarySort";
   state.sort = "new";
@@ -414,12 +414,12 @@
   };
   function scoreText(id) {
     const s = Aesthetic.rank(id);
-    const label = Aesthetic.usingTaste() ? "내 점수" : "점수";
+    const label = Aesthetic.usingTaste() ? "내 취향" : "AI";
     return s == null ? `${label} …` : `${label} ${Math.round(s)}`;
   }
   function aesBadge(id) {
     if (!aes.on) return null;
-    return el("span", { class: "cmp-score", "data-score-id": id, title: Aesthetic.usingTaste() ? "내 점수: 내 셀렉으로 배운 점수 (0–100)" : "미적 점수 (0–100)", text: scoreText(id) });
+    return el("span", { class: "cmp-score", "data-score-id": id, title: Aesthetic.usingTaste() ? "내 취향 점수 (0–100): 내 채택을 보고 배운 점수" : "AI 점수 (0–100): AI가 본 그림의 완성도", text: scoreText(id) });
   }
   // Best first, and the bottom N% of the not-yet-sorted ones out of the way —
   // once every picture of the 칸 has a score, and only before the user started.
@@ -448,12 +448,12 @@
     chip.hidden = !(n || waiting);
     chip.innerHTML = "";
     if (waiting) {
-      chip.append(el("span", { class: "cmp-aes-text", text: Aesthetic.status().phase === "ready" ? `점수 매기는 중 · ${waiting}장 남음` : "미적 점수 준비 중…" }));
+      chip.append(el("span", { class: "cmp-aes-text", text: Aesthetic.status().phase === "ready" ? `점수 매기는 중 · ${waiting}장 남음` : "AI 점수 준비 중…" }));
     } else if (n) {
       chip.append(
-        el("span", { class: "cmp-aes-text", text: `점수 아래쪽 ${n}장 건너뜀` }),
-        el("button", { type: "button", "data-aes": "show", text: "보기" }),
-        el("button", { type: "button", "data-aes": "hold", text: "B컷으로" }),
+        el("span", { class: "cmp-aes-text", text: `점수 낮은 ${n}장은 건너뛰었어요` }),
+        el("button", { type: "button", "data-aes": "show", text: "다시 보기" }),
+        el("button", { type: "button", "data-aes": "hold", text: "모두 B컷으로" }),
       );
     }
   }
@@ -522,7 +522,7 @@
     const pct = Math.round((st.progress || 0) * 100);
     if (!aes.on) {
       box.dataset.state = "none";
-      box.append(connRow({ iconName: "sparkle", title: "미적 점수", sub: "점수 높은 그림부터 보기", action: () => void openAesSettings(), actionTitle: "애니 미적 점수 모델로 그림마다 점수를 매겨요" }));
+      box.append(connRow({ iconName: "sparkle", title: "AI 점수", sub: "잘 나온 그림부터 보여 줘요", action: () => void openAesSettings(), actionTitle: "AI가 그림마다 0–100점을 매겨서, 비교할 때 잘 나온 그림부터 보여 줘요" }));
       return;
     }
     box.dataset.state = st.phase === "error" ? "warn" : "ok";
@@ -530,8 +530,8 @@
       : st.phase === "loading" ? "준비하는 중…"
         : st.phase === "error" ? "시작하지 못했어요 · 눌러서 보기"
           : st.queued ? `점수 매기는 중 · 남은 ${st.queued.toLocaleString("ko-KR")}장`
-            : `준비됨${aes.skip ? ` · 아래쪽 ${aes.skip}% 건너뛰기` : ""}`;
-    box.append(connRow({ iconName: "sparkle", title: "미적 점수", sub, meta: st.phase === "ready" ? '<i class="dot"></i>켜짐' : "", action: () => void openAesSettings(), actionTitle: "미적 점수 설정" }));
+            : `켜짐${aes.skip ? ` · 낮은 ${aes.skip}% 건너뛰기` : ""}`;
+    box.append(connRow({ iconName: "sparkle", title: "AI 점수", sub, action: () => void openAesSettings(), actionTitle: "AI 점수 설정" }));
     if (st.phase === "downloading") box.append(el("div", { class: "progress", html: `<span style="width:${pct}%"></span>` }));
   }
 
@@ -585,17 +585,17 @@
             reject(new Error(data.error));
           }
         };
-        w.onerror = (e) => { w.terminate(); reject(new Error(e.message || "학습하지 못했어요.")); };
+        w.onerror = (e) => { w.terminate(); reject(new Error(e.message || "배우지 못했어요.")); };
         w.postMessage({ groups });
       });
       if (!result.ok) {
-        toast(result.reason === "few" ? "학습할 칸이 아직 적어요. 채택해 둔 칸이 8개 이상 필요해요." : "학습하지 못했어요.", "warn");
+        toast(result.reason === "few" ? "배울 칸이 아직 적어요. 채택을 고른 칸이 8개 이상 있어야 해요." : "배우지 못했어요.", "warn");
       } else {
         await Aesthetic.setTaste(result);
-        toast(result.better ? "내 점수를 만들었어요. 이제 칸을 열면 내 점수 순서로 나와요." : "학습했지만 아직은 일반 점수가 더 맞아요. 셀렉을 더 하고 다시 해 보세요.", result.better ? "ok" : "warn");
+        toast(result.better ? "내 취향 점수를 만들었어요. 이제 비교할 때 내 취향 순서로 나와요." : "배워 봤는데 아직은 AI 점수가 더 잘 맞아요. 셀렉을 더 한 다음 다시 배워 보세요.", result.better ? "ok" : "warn");
       }
     } catch (error) {
-      toast(`학습하지 못했어요: ${error.message || error}`, "warn");
+      toast(`배우지 못했어요: ${error.message || error}`, "warn");
     } finally {
       tasteRun = null;
       redraw();
@@ -605,7 +605,7 @@
   function tasteSection(redraw) {
     const box = el("div", { class: "aes-report" });
     if (Aesthetic.fingerprintsSupported() === false) {
-      box.append(el("p", { class: "sheet-note", text: "이 모델에서는 그림 지문을 꺼내지 못해서 내 점수를 만들 수 없어요. 일반 점수는 그대로 쓸 수 있어요." }));
+      box.append(el("p", { class: "sheet-note", text: "이 모델로는 내 취향 점수를 만들 수 없어요. AI 점수는 그대로 쓸 수 있어요." }));
       // how the general score does on the 칸 already chosen
       const ranks = [];
       for (const g of learnableGroups().ready) {
@@ -614,8 +614,8 @@
       }
       if (ranks.length >= 5) {
         const share = (f) => Math.round((ranks.filter(f).length / ranks.length) * 100);
-        box.append(el("p", {}, [el("b", { text: `채택 ${ranks.length}장 중 ${share((r) => r <= 0.3)}%` }), document.createTextNode("가 같은 칸에서 점수 위쪽 30% 안에 있었어요. (점수가 아무 의미 없으면 30% 정도)")]),
-          el("p", { class: "sheet-note", text: `건너뛰었다면 놓쳤을 채택: 아래쪽 30% → ${share((r) => r > 0.7)}% · 50% → ${share((r) => r > 0.5)}% · 70% → ${share((r) => r > 0.3)}%` }));
+        box.append(el("p", {}, [el("b", { text: `채택 ${ranks.length}장 중 ${share((r) => r <= 0.3)}%` }), document.createTextNode("가 같은 칸에서 점수 상위 30% 안에 있었어요. (점수가 아무 쓸모 없다면 30% 정도가 나와요)")]),
+          el("p", { class: "sheet-note", text: `건너뛰었다면 놓쳤을 채택: 낮은 30% → ${share((r) => r > 0.7)}% · 50% → ${share((r) => r > 0.5)}% · 70% → ${share((r) => r > 0.3)}%` }));
       }
       const need = learnableGroups().need;
       if (need.length) {
@@ -627,46 +627,46 @@
     }
     const lg = learnableGroups();
     const fmt = (n) => n.toLocaleString("ko-KR");
-    box.append(el("p", { class: "sheet-note", text: "채택해 둔 칸에서 「같은 칸 안에서 무엇을 골랐나」를 배워요 (채택 > B컷 > 미분류 > 탈락). 학습에 안 쓴 칸으로 확인해서, 일반 점수보다 나을 때만 써요." }));
-    box.append(el("p", {}, [el("b", { text: `배울 수 있는 칸 ${fmt(lg.total)}개` }), document.createTextNode(` · 준비된 칸 ${fmt(lg.ready.length)}개`)]));
+    box.append(el("p", { class: "sheet-note", text: "AI 점수는 많은 사람의 평균 취향이에요. 이미 셀렉을 끝낸 칸에서 「같은 칸 안에서 무엇을 채택했나」를 보고 내 취향에 맞춘 점수를 만들어요. 배울 때 안 쓴 칸으로 시험해서, AI 점수보다 잘 맞을 때만 써요." }));
+    box.append(el("p", {}, [el("b", { text: `배울 수 있는 칸 ${fmt(lg.total)}개` }), document.createTextNode(` · 그중 바로 배울 수 있는 칸 ${fmt(lg.ready.length)}개`)]));
     if (lg.need.length) {
       const have = lg.pictures - lg.need.length;
       box.append(el("div", { class: "aes-progress" }, [
-        el("span", { text: `그림 지문 ${fmt(have)} / ${fmt(lg.pictures)}장` }),
+        el("span", { text: `그림 특징 읽음 ${fmt(have)} / ${fmt(lg.pictures)}장` }),
         el("span", { class: "bar" }, [el("i", { style: `width:${lg.pictures ? Math.round((have / lg.pictures) * 100) : 0}%` })]),
       ]));
     }
     const row = el("div", { class: "aes-actions" });
     if (lg.need.length) {
       const queuedAll = lg.need.every((id) => !Aesthetic.needs(id)) || Aesthetic.pending() >= lg.need.length;
-      const go = el("button", { class: "btn small secondary", type: "button", text: queuedAll ? "지문 모으는 중…" : `지문 모으기 (${fmt(lg.need.length)}장)` });
+      const go = el("button", { class: "btn small secondary", type: "button", text: queuedAll ? "그림 특징 읽는 중…" : `① 그림 특징 읽기 (${fmt(lg.need.length)}장)` });
       go.disabled = queuedAll;
       go.addEventListener("click", () => {
         Aesthetic.want(lg.need.map(aesItem).filter(Boolean), { front: true });
         go.disabled = true;
-        go.textContent = "지문 모으는 중…";
+        go.textContent = "그림 특징 읽는 중…";
       });
       row.append(go);
     }
-    const trainBtn = el("button", { class: "btn small", type: "button", text: tasteRun ? `학습 중… ${Math.round(tasteRun.p * 100)}%` : Aesthetic.taste() ? "다시 학습하기" : "학습하기" });
+    const trainBtn = el("button", { class: "btn small", type: "button", text: tasteRun ? `배우는 중… ${Math.round(tasteRun.p * 100)}%` : Aesthetic.taste() ? "다시 배우기" : `${lg.need.length ? "② " : ""}내 취향 배우기` });
     trainBtn.disabled = Boolean(tasteRun) || lg.ready.length < 8;
-    if (!tasteRun && lg.ready.length < 8) box.append(el("p", { class: "sheet-note", text: `학습은 준비된 칸이 8개부터 돼요 (30개 넘으면 더 정확해요). 배울 수 있는 칸은 채택 1장 + 나머지 B컷처럼, 고른 것과 안 고른 것이 같이 있는 칸이에요.` }));
-    trainBtn.title = lg.ready.length < 8 ? "준비된 칸이 8개 이상 있어야 해요 (30개 이상 권장)" : "";
+    if (!tasteRun && lg.ready.length < 8) box.append(el("p", { class: "sheet-note", text: `바로 배울 수 있는 칸이 8개 있어야 시작할 수 있어요 (30개가 넘으면 더 정확해요). 「배울 수 있는 칸」은 채택 1장 + 나머지 B컷처럼, 고른 그림과 안 고른 그림이 같이 있는 칸이에요.` }));
+    trainBtn.title = lg.ready.length < 8 ? "바로 배울 수 있는 칸이 8개 이상 있어야 해요 (30개 이상이면 더 좋아요)" : "";
     trainBtn.addEventListener("click", () => void trainTaste(redraw));
     row.append(trainBtn);
     box.append(row);
-    if (lg.ready.length && lg.ready.length < 30 && !tasteRun) box.append(el("p", { class: "sheet-note", text: "칸이 30개 이상 모이면 더 믿을 만해요. 지문 모으기는 뒤에서 계속돼요." }));
+    if (lg.ready.length && lg.ready.length < 30 && !tasteRun) box.append(el("p", { class: "sheet-note", text: "칸이 30개 이상 모이면 더 믿을 만해요. 그림 특징 읽기는 창을 닫아도 뒤에서 계속돼요." }));
     const t = Aesthetic.taste();
     if (t) {
       const pct = (v) => `${Math.round(v)}%`;
       const table = el("table", { class: "aes-table" }, [
-        el("thead", {}, [el("tr", {}, [el("th", { text: "" }), el("th", { text: "일반 점수" }), el("th", { text: "내 점수" })])]),
+        el("thead", {}, [el("tr", {}, [el("th", { text: "" }), el("th", { text: "AI 점수" }), el("th", { text: "내 취향" })])]),
         el("tbody", {}, [
-          ["같은 칸 두 장 중 채택을 위로 본 비율", t.generic.pairAcc, t.personal.pairAcc, true],
-          ["채택이 위쪽 30% 안에 든 비율", t.generic.top30, t.personal.top30, true],
-          ["아래쪽 30% 건너뛰면 놓치는 채택", t.generic.lost[30], t.personal.lost[30], false],
-          ["아래쪽 50% 건너뛰면 놓치는 채택", t.generic.lost[50], t.personal.lost[50], false],
-          ["아래쪽 70% 건너뛰면 놓치는 채택", t.generic.lost[70], t.personal.lost[70], false],
+          ["같은 칸 두 장 중 채택한 쪽을 더 높게 본 비율", t.generic.pairAcc, t.personal.pairAcc, true],
+          ["채택이 상위 30% 안에 든 비율", t.generic.top30, t.personal.top30, true],
+          ["낮은 30%를 건너뛰면 놓치는 채택", t.generic.lost[30], t.personal.lost[30], false],
+          ["낮은 50%를 건너뛰면 놓치는 채택", t.generic.lost[50], t.personal.lost[50], false],
+          ["낮은 70%를 건너뛰면 놓치는 채택", t.generic.lost[70], t.personal.lost[70], false],
         ].map(([label, g, p, up]) => el("tr", {}, [
           el("td", { text: label }),
           el("td", { text: pct(g) }),
@@ -674,9 +674,9 @@
         ]))),
       ]);
       box.append(
-        el("p", { class: "sheet-note", text: `${new Date(t.at).toLocaleString("ko-KR")} · 칸 ${fmt(t.groups)}개 · 그림 ${fmt(t.pictures)}장으로 학습 · 숫자는 학습에 안 쓴 칸으로 잰 거예요` }),
+        el("p", { class: "sheet-note", text: `${new Date(t.at).toLocaleString("ko-KR")}에 칸 ${fmt(t.groups)}개 · 그림 ${fmt(t.pictures)}장으로 배웠어요. 아래 숫자는 배울 때 안 쓴 칸으로 시험한 결과예요.` }),
         table,
-        el("p", { class: "sheet-note", text: t.better ? "내 점수가 네 셀렉을 더 잘 맞혀요." : "아직은 일반 점수가 더 맞아요. 셀렉을 더 하고 다시 학습해 보세요." }),
+        el("p", { class: "sheet-note", text: t.better ? "내 취향 점수가 내 셀렉을 더 잘 맞혀요." : "아직은 AI 점수가 더 잘 맞아요. 셀렉을 더 한 다음 다시 배워 보세요." }),
       );
       const use = el("input", { type: "checkbox", id: "aes-taste", checked: Aesthetic.usingTaste() });
       use.classList.add("ios-switch");
@@ -685,14 +685,14 @@
         if (!$(".compare").hidden) { cmp.aesApplied = false; if (!cmp.touched) { applyAesOrder(); renderCompare({ keepImages: true }); } }
         redraw();
       });
-      box.append(el("div", { class: "ios-group" }, [el("label", { class: "ios-row", for: "aes-taste" }, [el("span", { class: "grow" }, [document.createTextNode("칸 순서·건너뛰기에 내 점수 쓰기"), el("small", { text: "끄면 일반 점수로 해요" })]), use])]));
-      box.append(el("button", { class: "btn small plain", type: "button", text: "내 점수 지우기", onclick: async () => { await Aesthetic.clearTaste(); redraw(); } }));
+      box.append(el("div", { class: "ios-group" }, [el("label", { class: "ios-row", for: "aes-taste" }, [el("span", { class: "grow" }, [document.createTextNode("AI 점수 대신 내 취향 점수 쓰기"), el("small", { text: "비교 순서와 건너뛰기에 써요" })]), use])]));
+      box.append(el("button", { class: "btn small plain", type: "button", text: "내 취향 점수 지우기", onclick: async () => { await Aesthetic.clearTaste(); redraw(); } }));
     }
     return box;
   }
   let refreshAesSheet = () => {};
   async function openAesSettings() {
-    const { dialog, body, right: save } = notionDialogShell("미적 점수", { leftLabel: "닫기", rightLabel: "" });
+    const { dialog, body, right: save } = notionDialogShell("AI 점수", { leftLabel: "닫기", rightLabel: "" });
     save.hidden = true;
     const draw = () => {
       body.innerHTML = "";
@@ -713,17 +713,22 @@
         draw();
       });
       body.append(
-        el("p", { class: "sheet-note", text: "애니 그림 미적 점수 모델로 그림마다 0–100점을 매겨요. 칸을 열면 점수 높은 그림부터 나오고, 원하면 점수 아래쪽은 건너뛰어요. 고르는 건 그대로 네가 해요." }),
-        el("div", { class: "ios-group" }, [el("label", { class: "ios-row", for: "aes-on" }, [el("span", { class: "grow" }, [document.createTextNode("미적 점수 켜기"), el("small", { text: `처음 켤 때 모델을 한 번 받아요 (약 ${Aesthetic.MODEL.sizeMB}MB) · 그림은 밖으로 안 나가요` })]), on])]),
+        el("p", { class: "sheet-lead", text: "AI가 그림마다 얼마나 잘 나왔는지 0–100점을 매겨요." }),
+        el("ul", { class: "sheet-points" }, [
+          el("li", { text: "같은 칸을 비교할 때 점수 높은 그림부터 나와서, 괜찮은 그림을 더 빨리 찾아요." }),
+          el("li", { text: "원하면 점수 낮은 그림은 건너뛰어요. 지우지는 않아요." }),
+          el("li", { text: "채택·B컷은 여전히 직접 골라요. AI는 순서만 정해요." }),
+        ]),
+        el("div", { class: "ios-group" }, [el("label", { class: "ios-row", for: "aes-on" }, [el("span", { class: "grow" }, [document.createTextNode("AI 점수 켜기"), el("small", { text: `처음 켤 때 AI 모델(약 ${Aesthetic.MODEL.sizeMB}MB)을 한 번 받아요 · 점수는 이 컴퓨터에서 매기고, 그림은 밖으로 안 나가요` })]), on])]),
       );
       if (aes.on) {
         const phaseText = st.phase === "downloading" ? `모델 받는 중 · ${Math.round(st.progress * 100)}%`
           : st.phase === "loading" ? "준비하는 중…"
             : st.phase === "error" ? `시작하지 못했어요: ${st.error}`
-              : st.phase === "ready" ? (st.queued ? `점수 매기는 중 · 남은 ${st.queued.toLocaleString("ko-KR")}장 (한 번에 ${st.threads}개씩)` : "준비됐어요. 보는 그림부터 뒤에서 점수를 매겨요.") : "";
+              : st.phase === "ready" ? (st.queued ? `점수 매기는 중 · 남은 ${st.queued.toLocaleString("ko-KR")}장 (한 번에 ${st.threads}개씩)` : "준비됐어요. 지금 보는 그림부터 뒤에서 점수를 매겨요.") : "";
         if (phaseText) body.append(el("p", { class: st.phase === "error" ? "sheet-warn" : "sheet-note", text: phaseText }));
-        const radios = [[0, "건너뛰지 않기", "순서만 점수 높은 순으로"], [30, "아래쪽 30%", ""], [50, "아래쪽 50%", ""], [70, "아래쪽 70%", "과감하게"]];
-        body.append(el("div", { class: "ios-group-label", text: "칸을 열 때 점수 아래쪽 건너뛰기" }));
+        const radios = [[0, "건너뛰지 않기", "순서만 점수 높은 순으로 바꿔요"], [30, "낮은 30% 건너뛰기", ""], [50, "낮은 50% 건너뛰기", ""], [70, "낮은 70% 건너뛰기", "과감하게 · 놓치는 채택이 생길 수 있어요"]];
+        body.append(el("div", { class: "ios-group-label", text: "비교할 때 점수 낮은 그림" }));
         const group = el("div", { class: "ios-group" });
         for (const [v, label, hint] of radios) {
           const r = el("input", { type: "radio", name: "aes-skip", id: `aes-skip-${v}`, checked: aes.skip === v });
@@ -731,18 +736,18 @@
           r.addEventListener("change", () => { aes.skip = v; saveAes(); renderAesBox(); });
           group.append(el("label", { class: "ios-row", for: `aes-skip-${v}` }, [el("span", { class: "grow" }, [document.createTextNode(label), hint ? el("small", { text: hint }) : null]), r]));
         }
-        body.append(group, el("p", { class: "sheet-note", text: "건너뛴 그림은 미분류로 남고, 비교 화면 위의 「보기」로 다시 볼 수 있어요. 「B컷으로」를 누르면 한꺼번에 B컷이 돼요." }));
+        body.append(group, el("p", { class: "sheet-note", text: "건너뛴 그림은 미분류로 남아요. 비교 화면 위쪽의 「다시 보기」로 볼 수 있고, 「모두 B컷으로」를 누르면 한꺼번에 B컷이 돼요." }));
         // 내 셀렉으로 학습
-        body.append(el("div", { class: "ios-group-label", text: "내 셀렉으로 학습 (내 점수)" }));
+        body.append(el("div", { class: "ios-group-label", text: "내 취향 배우기" }));
         body.append(tasteSection(draw));
-        body.append(el("p", { class: "sheet-note", text: `모델: ${Aesthetic.MODEL.repo} (${Aesthetic.MODEL.license}). 많은 사람이 좋아하는 평균 취향이라 네 기준과 다를 수 있어요.` }));
-        body.append(el("button", { class: "sheet-danger", type: "button", text: "미적 점수 끄고 모델 지우기", onclick: async () => {
+        body.append(el("p", { class: "sheet-note", text: `AI 모델: ${Aesthetic.MODEL.repo} (${Aesthetic.MODEL.license}) · 많은 사람이 좋아하는 평균 취향이라 내 기준과 다를 수 있어요.` }));
+        body.append(el("button", { class: "sheet-danger", type: "button", text: "AI 점수 끄고 모델 지우기", onclick: async () => {
           aes.on = false;
           saveAes();
           await Aesthetic.removeModel();
           renderAesBox();
           dialog.close();
-          toast("미적 점수를 끄고 모델을 지웠어요. 매긴 점수는 남아 있어요.");
+          toast("AI 점수를 끄고 모델을 지웠어요. 이미 매긴 점수는 남아 있어요.");
         } }));
       }
     };
@@ -771,6 +776,7 @@
     if (state.settings) {
       $(".title").textContent = "설정";
       $(".count").textContent = "";
+      renderPickBar();
       void renderSettings();
       checkUpdate();
     } else {
@@ -851,14 +857,14 @@
     ));
 
     // 미적 점수
-    pane.append(title("미적 점수"));
+    pane.append(title("AI 점수"));
     const st = Aesthetic.status();
-    const aesSub = !aes.on ? `그림마다 0–100점 · 처음 켤 때 모델 약 ${Aesthetic.MODEL.sizeMB}MB를 한 번 받아요`
+    const aesSub = !aes.on ? `AI가 그림마다 0–100점을 매겨서, 비교할 때 잘 나온 그림부터 보여 줘요 · 처음 켤 때 약 ${Aesthetic.MODEL.sizeMB}MB 받기`
       : st.phase === "downloading" ? `모델 받는 중 · ${Math.round(st.progress * 100)}%`
         : st.phase === "loading" ? "준비하는 중…"
           : st.phase === "error" ? `시작하지 못했어요: ${st.error}`
-            : st.queued ? `점수 매기는 중 · 남은 ${fmt(st.queued)}장` : "준비됐어요 · 보는 그림부터 뒤에서 매겨요";
-    const rows = [setRow("미적 점수", aesSub, setSwitch("set-aes", aes.on, async (on) => {
+            : st.queued ? `점수 매기는 중 · 남은 ${fmt(st.queued)}장` : "준비됐어요 · 지금 보는 그림부터 뒤에서 매겨요";
+    const rows = [setRow("AI 점수 켜기", aesSub, setSwitch("set-aes", aes.on, async (on) => {
       aes.on = on;
       saveAes();
       if (on) {
@@ -872,14 +878,14 @@
       renderSettings();
     }))];
     if (aes.on) {
-      rows.push(setRow("칸을 열 때 점수 아래쪽 건너뛰기", "건너뛴 그림은 미분류로 남아요 · 비교 화면 위에서 다시 보기", setSeg("건너뛰기", [[0, "끄기"], [30, "30%"], [50, "50%"], [70, "70%"]], aes.skip, (v) => { aes.skip = v; saveAes(); renderAesBox(); })));
+      rows.push(setRow("비교할 때 점수 낮은 그림 건너뛰기", "건너뛴 그림은 미분류로 남고, 비교 화면 위쪽에서 다시 볼 수 있어요", setSeg("건너뛰기", [[0, "안 함"], [30, "낮은 30%"], [50, "50%"], [70, "70%"]], aes.skip, (v) => { aes.skip = v; saveAes(); renderAesBox(); })));
       const t = Aesthetic.taste();
       const lg = learnableGroups();
-      const tasteSub = Aesthetic.fingerprintsSupported() === false ? "이 모델에서는 만들 수 없어요"
-        : t ? `${new Date(t.at).toLocaleDateString("ko-KR")} 학습 · 채택을 위로 본 비율 일반 ${Math.round(t.generic.pairAcc)}% → 내 점수 ${Math.round(t.personal.pairAcc)}%`
-          : `배울 수 있는 칸 ${fmt(lg.total)}개 · 준비된 칸 ${fmt(lg.ready.length)}개${lg.need.length ? ` · 지문 ${fmt(lg.pictures - lg.need.length)} / ${fmt(lg.pictures)}장` : ""}`;
-      rows.push(setRow("내 점수 (내 셀렉으로 학습)", tasteSub, setBtn(t ? "결과 · 다시 학습…" : "학습…", () => void openAesSettings())));
-      if (t) rows.push(setRow("칸 순서·건너뛰기에 내 점수 쓰기", t.better ? "내 점수가 더 잘 맞아요" : "아직은 일반 점수가 더 맞아요", setSwitch("set-taste", Aesthetic.usingTaste(), async (on) => { await Aesthetic.setUseTaste(on); renderSettings(); })));
+      const tasteSub = Aesthetic.fingerprintsSupported() === false ? "이 모델로는 만들 수 없어요"
+        : t ? `${new Date(t.at).toLocaleDateString("ko-KR")}에 배움 · 채택을 맞힌 비율 AI ${Math.round(t.generic.pairAcc)}% → 내 취향 ${Math.round(t.personal.pairAcc)}%`
+          : `내 채택을 보고 내 취향에 맞춘 점수를 만들어요 · 배울 수 있는 칸 ${fmt(lg.total)}개`;
+      rows.push(setRow("내 취향 점수", tasteSub, setBtn(t ? "결과 · 다시 배우기…" : "배우기…", () => void openAesSettings())));
+      if (t) rows.push(setRow("AI 점수 대신 내 취향 점수 쓰기", t.better ? "내 취향 점수가 더 잘 맞아요" : "아직은 AI 점수가 더 잘 맞아요", setSwitch("set-taste", Aesthetic.usingTaste(), async (on) => { await Aesthetic.setUseTaste(on); renderSettings(); })));
     }
     pane.append(group(...rows));
 
@@ -992,14 +998,12 @@
     $(".gallery").scrollTop = 0;
   }
   function renderBoardButton() {
-    const btn = $(".board-btn");
-    if (!btn) return;
-    btn.setAttribute("aria-pressed", String(state.board));
+    document.querySelectorAll(".view-seg [data-view]").forEach((b) => b.setAttribute("aria-checked", String((b.dataset.view === "board") === state.board)));
     // the board has no single picture to show, sort or select
     document.querySelector(".app")?.toggleAttribute("data-board", state.board);
-    $(".sort-wrap").hidden = state.board;
-    $(".pick-all").hidden = state.board;
-    btn.innerHTML = state.board ? `${icon("grid", 15)}<span>그림으로 보기</span>` : `${icon("table", 15)}<span>셀렉 현황</span>`;
+    // kept in place (only invisible) so 그림 · 셀렉 현황 never moves under the mouse
+    $(".sort-wrap").style.visibility = state.board ? "hidden" : "";
+    renderPickBar();
   }
   let boardOrder = []; // 셀렉 현황 cells, 캐릭터 → 배경 → 표정: what ] walks through
   function renderBoard({ keepScroll = false } = {}) {
@@ -1397,11 +1401,21 @@
     renderInspector();
   }
 
+  // The floating bar over the pictures: only while something is chosen, and
+  // only about the chosen pictures (모두 선택 · 선택 해제).
   function renderPickBar() {
     const n = state.sel.length;
-    $(".pick-all").disabled = !(state.shown || []).length;
-    $(".clear-sel").hidden = n < 2;
-    $(".count").textContent = n > 1 ? `${countText()} · ${n.toLocaleString("ko-KR")}장 선택됨` : countText();
+    const shown = (state.shown || []).length;
+    if (!state.settings) $(".count").textContent = countText();
+    const bar = $(".sel-bar");
+    const on = n > 0 && !state.board && !state.settings;
+    bar.hidden = !on;
+    document.body.toggleAttribute("data-selbar", on);
+    if (!on) return;
+    $(".sel-count").textContent = `${n.toLocaleString("ko-KR")}장 선택됨`;
+    const all = n >= shown;
+    $(".pick-all").disabled = all;
+    $(".pick-all").textContent = all ? "모두 선택됨" : `모두 선택 (${shown.toLocaleString("ko-KR")}장)`;
   }
 
   // ------------------------------------------------------------- inspector ---
@@ -1828,7 +1842,7 @@
     for (const [label, text, key] of CULL_CHOICES) {
       seg.append(el("button", {
         type: "button", "data-label": label, "aria-pressed": String(all((id) => (cullOf(id).label || "none") === label)),
-        title: `${text} (${key})`, text,
+        title: `${text} (${key})`, html: `${text}<kbd>${key}</kbd>`,
         onclick: () => applyCullAction(ids, { label: label === "none" ? null : label }),
       }));
     }
@@ -4430,7 +4444,10 @@
     });
     $(".sort-btn").addEventListener("click", openSortMenu);
     $(".settings-open").addEventListener("click", () => openSettings(!state.settings));
-    $(".board-btn").addEventListener("click", () => setBoard(!state.board));
+    document.querySelectorAll(".view-seg [data-view]").forEach((b) => b.addEventListener("click", () => {
+      const board = b.dataset.view === "board";
+      if (board !== state.board) setBoard(board);
+    }));
     $(".cmp-aes").addEventListener("click", (event) => {
       const b = event.target.closest("[data-aes]");
       if (!b) return;
@@ -4442,7 +4459,7 @@
         cmp.skipped = new Set();
         applyCullAction(ids, { label: "hold" });
         renderCompare({ keepImages: true });
-        toast(`점수 아래쪽 ${ids.length}장을 B컷으로 넣었어요.`, "ok", { label: "되돌리기", run: () => { applyCullAction(ids, { label: null }); renderCompare({ keepImages: true }); } });
+        toast(`건너뛴 ${ids.length}장을 B컷으로 바꿨어요.`, "ok", { label: "되돌리기", run: () => { applyCullAction(ids, { label: null }); renderCompare({ keepImages: true }); } });
       }
     });
     Aesthetic.on(onAesEvent);
