@@ -2154,6 +2154,7 @@
     const undo = [];
     const failed = [];
     const done = [];
+    const ghosts = [];
     // gone from view at once; the files follow
     for (const e of files) state.hiding.add(e.id);
     const keepScroll = $(".gallery").scrollTop;
@@ -2174,12 +2175,18 @@
           undo.push({ entry, label: cullOf(entry.id).label || null, from: rel, to: [...base, TRASH_FOLDER, ...keep, trashedName] });
           done.push(entry);
         } catch (error) {
+          if (error?.name === "NotFoundError") {
+            // its file is already gone from there (renamed, moved or deleted
+            // outside): nothing to move, it only leaves the list
+            ghosts.push(entry);
+            continue;
+          }
           failed.push(entry.name);
           state.hiding.delete(entry.id); // still there: show it again
         }
       }
     });
-    await forgetMany(done);
+    await forgetMany([...done, ...ghosts]);
     saveCull();
     if (failed.length || state.board) {
       const y = $(".gallery").scrollTop;
@@ -2191,7 +2198,9 @@
       renderInspector();
     }
     if (undo.length) {
-      toast(`${undo.length}장을 휴지통(${TRASH_FOLDER})으로 옮겼어요${failed.length ? ` · ${failed.length}장은 못 옮겼어요` : ""}.`, failed.length ? "warn" : "ok", { label: "되돌리기", run: () => void restoreTrashed(undo) });
+      toast(`${undo.length}장을 휴지통(${TRASH_FOLDER})으로 옮겼어요${ghosts.length ? ` · 폴더에 이미 없던 ${ghosts.length}장은 목록에서 뺐어요` : ""}${failed.length ? ` · ${failed.length}장은 못 옮겼어요` : ""}.`, failed.length ? "warn" : "ok", { label: "되돌리기", run: () => void restoreTrashed(undo) });
+    } else if (ghosts.length) {
+      toast(`폴더에 이미 없는 그림이라 목록에서만 뺐어요 (${ghosts.length}장)${failed.length ? ` · ${failed.length}장은 못 지웠어요` : ""}.`, failed.length ? "warn" : "ok");
     } else {
       toast("지우지 못했어요. 파일이 그 자리에 있는지 확인해 주세요.", "warn");
     }
@@ -3112,17 +3121,26 @@
     }
   }
 
-  async function* walk(dir, prefix, { withCull = false } = {}) {
-    for await (const [name, handle] of dir.entries()) {
-      if (name.startsWith(".")) continue;
-      // our own trash; the sorted folder too, unless we are checking which
-      // of the pictures moved there are still there
-      if (handle.kind === "directory" && (name === TRASH_FOLDER || (name === CULL_FOLDER && !withCull))) continue;
-      if (handle.kind === "directory") {
-        yield* walk(handle, `${prefix}/${name}`, { withCull });
-      } else if (/\.(png|webp)$/i.test(name)) {
-        yield { path: `${prefix}/${name}`, handle };
+  // `unreadable` (a Set) collects folders that could not be read (in use,
+  // cloud placeholder, permission): the walk goes on without them instead of
+  // the whole check failing — it used to stop there, every time, silently.
+  async function* walk(dir, prefix, { withCull = false, unreadable = null } = {}) {
+    try {
+      for await (const [name, handle] of dir.entries()) {
+        if (name.startsWith(".")) continue;
+        // our own trash; the sorted folder too, unless we are checking which
+        // of the pictures moved there are still there
+        if (handle.kind === "directory" && (name === TRASH_FOLDER || (name === CULL_FOLDER && !withCull))) continue;
+        if (handle.kind === "directory") {
+          yield* walk(handle, `${prefix}/${name}`, { withCull, unreadable });
+        } else if (/\.(png|webp)$/i.test(name)) {
+          yield { path: `${prefix}/${name}`, handle };
+        }
       }
+    } catch (error) {
+      if (!unreadable) throw error;
+      unreadable.add(prefix);
+      console.warn("폴더를 읽지 못함:", prefix, error);
     }
   }
 
@@ -3234,7 +3252,11 @@
       const found = new Map(); // path inside the linked folder → handle
       // _셀렉 is looked at too: pictures moved there by 「폴더로 나눠 저장」 and
       // later deleted or moved away in 탐색기 used to stay in the list for good
-      for await (const item of walk(state.root, state.root.name, { withCull: true })) found.set(item.path.split("/").slice(1).join("/"), item);
+      const unreadable = new Set();
+      for await (const item of walk(state.root, state.root.name, { withCull: true, unreadable })) found.set(item.path.split("/").slice(1).join("/"), item);
+      if (unreadable.has(state.root.name)) return;
+      // pictures inside a folder that could not be read are not "gone"
+      const blind = [...unreadable].map((p) => `${p.split("/").slice(1).join("/")}/`);
       if (!found.size) return; // an empty or unreachable folder never empties the library
       const tops = new Set([...found.keys()].map((k) => k.split("/")[0]));
       // An entry belongs to this folder when its path runs through the linked
@@ -3242,7 +3264,8 @@
       // gone now), or starts with a folder that is there (NovelAI/… with 다운로드
       // linked).
       const covered = (e, rel) => rel.length > 1 && !rel.includes(TRASH_FOLDER)
-        && (e.path.split("/").slice(0, -1).includes(state.root.name) || tops.has(rel[0]));
+        && (e.path.split("/").slice(0, -1).includes(state.root.name) || tops.has(rel[0]))
+        && !blind.some((b) => `${rel.join("/")}`.startsWith(b));
       const files = onDisk(state.entries);
       const known = new Set();
       const gone = [];
@@ -3330,7 +3353,7 @@
       syncing = false;
       if (rest.length) await scanFolder({ quiet: true }); // new files: the usual import (with progress)
     } catch (error) {
-      void error; // permission gone, folder unplugged, …: try again next time
+      console.warn("폴더 맞추기 실패:", error); // permission gone, folder unplugged, …: try again next time
     } finally {
       syncing = false;
     }
