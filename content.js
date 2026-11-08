@@ -159,7 +159,9 @@
   // Average ms/image measured in a previous run; used for the pre-run estimate.
   let seedImageMs = null;
 
-  let saveContext = { baseName: "", folderName: "", counter: 0, lastSavedSrc: "" };
+  let saveContext = { baseName: "", folderName: "", counter: 0, lastSavedSrc: "", lastSavedHash: "" };
+  // Generations in a row that brought no new picture (see handleAutoProgress).
+  let noNewPictureStreak = 0;
   // Pictures in a row whose own NovelAI data showed other character tags than
   // the queue item (see checkTagDrift). Two in a row stops the run.
   let tagDriftStreak = 0;
@@ -3253,7 +3255,7 @@
     // would otherwise be captured as blank/duplicate files.
     const previousSrc = saveContext.lastSavedSrc;
     let image = findCurrentImage();
-    for (let i = 0; i < 16; i += 1) {
+    for (let i = 0; i < 40; i += 1) {
       if (isFreshGeneratedImage(image, previousSrc)) {
         break;
       }
@@ -3268,12 +3270,17 @@
       }
     }
     if (!isFreshGeneratedImage(image, previousSrc)) {
-      // Last resort: accept any complete, full-size image even if src looks
-      // unchanged, rather than silently skipping a real result.
       image = findCurrentImage();
+      // Still the picture saved last time: no new one came out (NovelAI
+      // failed this one, or never swapped it in). Saving it again only made a
+      // second copy under the next name.
+      if (image?.src && previousSrc && image.src === previousSrc) {
+        return { saved: false, same: true };
+      }
+      // Last resort: a complete, full-size picture whose address changed.
       if (!image?.src || !image.complete || image.naturalWidth < MIN_IMAGE_DIM) {
         setStatus("자동 저장할 이미지를 찾지 못했어요.", "warn");
-        return;
+        return { saved: false };
       }
     }
 
@@ -3293,10 +3300,16 @@
     }
     if (!dataUrl) {
       setStatus("이미지를 읽지 못해 이번 저장은 건너뛰었어요.", "warn");
-      return;
+      return { saved: false };
     }
-
+    // The same file as the last saved one (NovelAI showed the same picture
+    // under a new address) is not a new picture either.
+    const fingerprint = quickTextHash(dataUrl);
     saveContext.lastSavedSrc = image.src;
+    if (fingerprint === saveContext.lastSavedHash) {
+      return { saved: false, same: true };
+    }
+    saveContext.lastSavedHash = fingerprint;
     saveContext.counter += 1;
     // Did NovelAI really draw this with the run's character tags? A picture
     // drawn with left-over tags is kept, but under a name that says so, and
@@ -3347,6 +3360,17 @@
         todaySavedCount += 1;
       }
     });
+    return { saved: true };
+  }
+
+  // Cheap fingerprint of a saved file (FNV-1a over the data URL + its length).
+  function quickTextHash(text) {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < text.length; i += 1) {
+      h ^= text.charCodeAt(i);
+      h = Math.imul(h, 0x01000193);
+    }
+    return `${text.length}:${(h >>> 0).toString(16)}`;
   }
 
   // ---------------------------------------------------------------------------
@@ -3513,7 +3537,24 @@
       return;
     }
     autoRun.waitingForCompletion = false;
-    await maybeDownloadCurrentImage();
+    const save = await maybeDownloadCurrentImage();
+    if (save?.same && !autoRun.stopAfterCurrent) {
+      // No new picture this time: do that one again instead of counting it
+      // (and instead of saving the old picture twice). Three in a row: stop.
+      noNewPictureStreak += 1;
+      logEvent("warn", `새 그림이 나오지 않음 (${noNewPictureStreak}번째) → 같은 그림을 또 저장하지 않고 다시 뽑기`);
+      if (noNewPictureStreak >= 3) {
+        noNewPictureStreak = 0;
+        await finalizeStop({ playAudio: true, quiet: true });
+        setStatus("NovelAI에서 새 그림이 세 번 연속 나오지 않아 멈췄어요. NovelAI 화면에 오류가 떠 있는지 봐 주세요.", "warn");
+        return;
+      }
+      autoRun.count = Math.max(0, autoRun.count - 1);
+      setStatus("새 그림이 나오지 않아서 한 번 더 뽑을게요.", "warn");
+      await scheduleNextAutoClick();
+      return;
+    }
+    if (save?.saved) noNewPictureStreak = 0;
     autoRun.completedCount = autoRun.count;
     recordImageCompletion();
     noteProgress(progressLine() + liveEtaSuffix());
@@ -3615,6 +3656,7 @@
       axes: axes || null, // 캐릭터·배경·표정 of a combination item, kept with each saved picture
       counter: 0,
       lastSavedSrc: saveContext.lastSavedSrc || "",
+      lastSavedHash: saveContext.lastSavedHash || "",
       // what each picture must have been drawn with (checked against the
       // picture's own NovelAI data), and how to put it back if it was not
       expectChars: applyCharacterPrompt != null ? splitCharacterBlocks(applyCharacterPrompt) : null,
@@ -3643,6 +3685,7 @@
     autoRun.stopAfterCurrent = false;
     autoRun.ignoreReadyUntil = 0;
     autoRun.tagDrift = null;
+    noNewPictureStreak = 0;
     renderControls();
 
     await storageSet("sync", { autoClickEnabled: true });
