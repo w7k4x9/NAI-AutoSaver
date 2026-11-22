@@ -502,7 +502,6 @@
     clearTimeout(aesBoxTimer);
     aesBoxTimer = setTimeout(() => {
       renderAesBox();
-      refreshAesSheet();
       if (state.settings && Date.now() - settingsDrawn > 1500 && !document.querySelector(".set-scroll select:focus")) { settingsDrawn = Date.now(); void renderSettings(); }
     }, event.type === "score" ? 400 : 0);
   }
@@ -534,7 +533,7 @@
       : st.phase === "loading" ? "준비하는 중…"
         : st.phase === "error" ? "시작하지 못했어요 · 눌러서 보기"
           : st.queued ? `점수 매기는 중 · 남은 ${st.queued.toLocaleString("ko-KR")}장`
-            : "켜짐 · 눌러서 점수 낮은 그림 정리";
+            : "켜짐";
     box.append(connRow({ iconName: "sparkle", title: "AI 점수", sub, action: () => void openAesSettings(), actionTitle: "AI 점수 설정" }));
     if (st.phase === "downloading") box.append(el("div", { class: "progress", html: `<span style="width:${pct}%"></span>` }));
   }
@@ -699,8 +698,10 @@
   // to do with them: B컷, 탈락, or just select them and decide by hand.
   async function openLowScoreSheet() {
     if (!aesReady()) return;
-    const { dialog, body } = notionDialogShell("점수 낮은 그림 정리", { leftLabel: "닫기", rightLabel: "" });
+    const { dialog, body, right: go, foot } = notionDialogShell("점수 낮은 그림 정리", { leftLabel: "취소", rightLabel: "정리하기" });
     let percent = aes.skip;
+    let action = "hold";
+    let ids = [];
     let timer = null;
     const fmt = (n) => n.toLocaleString("ko-KR");
     const draw = () => {
@@ -713,7 +714,7 @@
         groups.get(k).push(e.id);
       }
       const unscored = shown.filter((e) => !Aesthetic.hasRank(e.id)).map((e) => e.id);
-      const ids = [];
+      ids = [];
       let cells = 0;
       for (const list of groups.values()) {
         if (list.length < 3) continue;
@@ -741,184 +742,77 @@
           ? el("p", { class: "low-wait", text: `점수 매기는 중 · ${fmt(pending)}장 남음 · 끝나면 숫자가 바뀌어요` })
           : el("button", { class: "low-wait link", type: "button", text: `점수 없는 ${fmt(unscored.length)}장 먼저 매기기`, onclick: () => { Aesthetic.want(unscored.map(aesItem).filter(Boolean), { front: true }); draw(); } }));
       }
-      const act = (label) => {
-        dialog.close();
-        if (label === "select") {
-          while (state.rendered < state.shown.length) renderMoreTiles();
-          state.sel = ids.slice();
-          updateSelectionLook();
-          toast(`점수 낮은 ${fmt(ids.length)}장을 골라 뒀어요. 보고 나서 W(B컷)나 E(탈락)로 정해요.`, "ok");
-          return;
-        }
-        applyCullAction(ids, { label });
-        toast(`점수 낮은 ${fmt(ids.length)}장을 ${LABELS[label]}으로 바꿨어요.`, "ok", { label: "되돌리기", run: () => applyCullAction(ids, { label: null }) });
-      };
-      const row = (iconName, title, sub, run, tone) => el("button", { class: "ios-row low-row", type: "button", "data-tone": tone, "data-disabled": String(!ids.length), disabled: !ids.length, onclick: run }, [
-        el("span", { class: "low-ic", html: icon(iconName, 18) }),
-        el("span", { class: "grow" }, [document.createTextNode(title), sub ? el("small", { text: sub }) : null]),
-        el("span", { class: "low-chev", html: icon("chevron", 14) }),
-      ]);
-      body.append(el("div", { class: "ios-group low-list" }, [
-        row("check_circle", "B컷으로 바꾸기", "", () => act("hold"), "hold"),
-        row("minus_circle", "탈락으로 바꾸기", "", () => act("reject"), "reject"),
-        row("visibility", "골라 두기만", "그림에서 직접 보고 정해요", () => act("select"), "select"),
-      ]));
-      body.append(el("p", { class: "low-foot", text: `지금 보이는 ${fmt(shown.length)}장 기준 · 이미 고른 그림은 그대로 · 되돌릴 수 있어요` }));
+      // what to do with them: the user picks, then 정리하기
+      const choice = el("div", { class: "ios-group" });
+      for (const [v, label, sub] of [["hold", "B컷으로 바꾸기", ""], ["reject", "탈락으로 바꾸기", ""], ["select", "골라 두기만", "그림에서 직접 보고 W(B컷) · E(탈락)로 정해요"]]) {
+        const r = el("input", { type: "radio", name: "low-act", id: `low-act-${v}`, checked: action === v });
+        r.classList.add("ios-check");
+        r.addEventListener("change", () => { action = v; syncGo(); });
+        choice.append(el("label", { class: "ios-row", for: `low-act-${v}` }, [el("span", { class: "grow" }, [document.createTextNode(label), sub ? el("small", { text: sub }) : null]), r]));
+      }
+      body.append(el("div", { class: "ios-group-label", text: "고른 그림을" }), choice);
+      foot.querySelector(".mac-foot-left").replaceChildren(el("span", { class: "mac-foot-note", text: `지금 보이는 ${fmt(shown.length)}장 기준 · 되돌릴 수 있어요` }));
+      syncGo();
       clearTimeout(timer);
       if (unscored.length && dialog.open) timer = setTimeout(draw, 1500); // counts follow the scoring
     };
+    function syncGo() {
+      go.disabled = !ids.length;
+      go.textContent = !ids.length ? "정리하기" : action === "select" ? `${fmt(ids.length)}장 고르기` : `${fmt(ids.length)}장 ${LABELS[action]}으로`;
+    }
+    go.addEventListener("click", () => {
+      if (!ids.length) return;
+      const list = ids.slice();
+      dialog.close();
+      if (action === "select") {
+        while (state.rendered < state.shown.length) renderMoreTiles();
+        state.sel = list;
+        updateSelectionLook();
+        toast(`점수 낮은 ${fmt(list.length)}장을 골라 뒀어요. 보고 나서 W(B컷)나 E(탈락)로 정해요.`, "ok");
+        return;
+      }
+      applyCullAction(list, { label: action });
+      toast(`점수 낮은 ${fmt(list.length)}장을 ${LABELS[action]}으로 바꿨어요.`, "ok", { label: "되돌리기", run: () => applyCullAction(list, { label: null }) });
+    });
     dialog.addEventListener("close", () => clearTimeout(timer), { once: true });
     draw();
   }
 
-  let refreshAesSheet = () => {};
-  // AI 점수 sheet, in pages like iOS 설정: the main page only has the switch,
-  // the one thing to do (정리) and rows that lead to the details.
-  async function openAesSettings(startPage = "main") {
-    const { dialog, body, right: save } = notionDialogShell("AI 점수", { leftLabel: "닫기", rightLabel: "" });
-    save.hidden = true;
-    const back = dialog.querySelector(".sheet-bar .bar-btn");
-    const title = dialog.querySelector(".sheet-title");
-    let page = startPage;
-    const go = (to) => { page = to; draw(); body.scrollTop = 0; };
-    // on a sub page the bar's left button goes back instead of closing
-    back.addEventListener("click", (event) => {
-      if (page === "main") return;
-      event.stopImmediatePropagation();
-      go("main");
-    }, true);
-    const fmt = (n) => n.toLocaleString("ko-KR");
-    const navRow = (label, value, to, sub = "") => el("button", { class: "ios-row nav-row", type: "button", onclick: () => go(to) }, [
-      el("span", { class: "grow" }, [document.createTextNode(label), sub ? el("small", { text: sub }) : null]),
-      value ? el("span", { class: "nav-val", text: value }) : null,
-      el("span", { class: "low-chev", html: icon("chevron", 14) }),
-    ]);
-    const switchRow = (id, label, sub, checked, onChange) => {
-      const input = el("input", { type: "checkbox", id, checked });
-      input.classList.add("ios-switch");
-      input.addEventListener("change", () => onChange(input.checked));
-      return el("label", { class: "ios-row", for: id }, [el("span", { class: "grow" }, [document.createTextNode(label), sub ? el("small", { text: sub }) : null]), input]);
-    };
-    const pages = {
-      main() {
-        const st = Aesthetic.status();
-        const status = !aes.on ? `처음 켤 때 AI 모델(약 ${Aesthetic.MODEL.sizeMB}MB)을 한 번 받아요`
-          : st.phase === "downloading" ? `모델 받는 중 · ${Math.round(st.progress * 100)}%`
-            : st.phase === "loading" ? "준비하는 중…"
-              : st.phase === "error" ? "시작하지 못했어요"
-                : st.queued ? `점수 매기는 중 · 남은 ${fmt(st.queued)}장` : "켜져 있어요 · 보는 그림부터 점수를 매겨요";
-        if (!aes.on) {
-          body.append(
-            el("p", { class: "sheet-lead", text: "AI가 그림마다 얼마나 잘 나왔는지 0–100점을 매겨요." }),
-            el("ul", { class: "sheet-points" }, [
-              el("li", { text: "비교할 때 점수 높은 그림부터 나와요." }),
-              el("li", { text: "점수 낮은 그림을 한꺼번에 B컷·탈락으로 정리할 수 있어요." }),
-              el("li", { text: "고르는 건 직접 해요. AI는 순서만 정해요." }),
-            ]),
-          );
-        }
-        body.append(el("div", { class: "ios-group" }, [switchRow("aes-on", "AI 점수 켜기", status, aes.on, async (on) => {
-          aes.on = on;
-          saveAes();
-          if (on) {
-            await Aesthetic.loadScores();
-            void Aesthetic.start().then(() => { feedAesFromView(); }, () => {});
-            feedAesFromView();
-          } else {
-            Aesthetic.stop();
-          }
-          renderAesBox();
-          draw();
-        })]));
-        if (!aes.on) {
-          body.append(el("p", { class: "low-foot", text: "점수는 이 컴퓨터에서 매기고, 그림은 밖으로 안 나가요." }));
-          return;
-        }
-        if (st.phase === "error") body.append(el("p", { class: "sheet-warn", text: st.error || "모델을 불러오지 못했어요." }));
-        if (st.phase === "ready") {
-          body.append(el("div", { class: "ios-group" }, [el("button", { class: "ios-row nav-row nav-primary", type: "button", onclick: () => { dialog.close(); setTimeout(() => void openLowScoreSheet(), 0); } }, [
-            el("span", { class: "low-ic", html: icon("sparkle", 18) }),
-            el("span", { class: "grow" }, [document.createTextNode("점수 낮은 그림 정리"), el("small", { text: "지금 보이는 그림에서 B컷·탈락으로" })]),
-            el("span", { class: "low-chev", html: icon("chevron", 14) }),
-          ])]));
-        }
-        const t = Aesthetic.taste();
-        const tasteValue = Aesthetic.fingerprintsSupported() === false ? "못 써요" : !t ? "아직 안 배움" : Aesthetic.usingTaste() ? "쓰는 중" : "꺼 둠";
-        body.append(el("div", { class: "ios-group" }, [
-          navRow("점수 낮은 그림 기준", `아래 ${aes.skip}%${aes.hide ? " · 가려 둠" : ""}`, "low"),
-          navRow("내 취향 점수", tasteValue, "taste"),
-          navRow("AI 모델", `${Aesthetic.MODEL.sizeMB}MB`, "model"),
-        ]));
-      },
-      low() {
-        const group = el("div", { class: "ios-group" });
-        for (const [v, label, hint] of [[30, "아래 30%", ""], [50, "아래 50%", ""], [70, "아래 70%", "과감하게 · 놓치는 채택이 생길 수 있어요"]]) {
-          const r = el("input", { type: "radio", name: "aes-skip", id: `aes-skip-${v}`, checked: aes.skip === v });
-          r.classList.add("ios-check");
-          r.addEventListener("change", () => { aes.skip = v; saveAes(); renderAesBox(); });
-          group.append(el("label", { class: "ios-row", for: `aes-skip-${v}` }, [el("span", { class: "grow" }, [document.createTextNode(label), hint ? el("small", { text: hint }) : null]), r]));
-        }
-        body.append(
-          el("div", { class: "ios-group-label", text: "같은 칸에서 점수가 아래쪽 몇 %면 「낮다」고 볼까요" }),
-          group,
-          el("div", { class: "ios-group" }, [switchRow("aes-hide", "비교할 때 처음부터 가려 두기", "", aes.hide, (on) => { aes.hide = on; saveAes(); })]),
-          el("p", { class: "low-foot", text: "꺼 두면 다 보이고, 비교 화면 위쪽에 「점수 낮은 N장」만 떠요. 거기서 B컷·탈락·가리기를 직접 골라요." }),
-        );
-      },
-      taste() {
-        body.append(tasteSection(draw));
-      },
-      model() {
-        body.append(
-          el("div", { class: "ios-group" }, [
-            el("div", { class: "ios-row" }, [el("span", { class: "grow", text: "모델" }), el("span", { class: "nav-val", text: Aesthetic.MODEL.repo })]),
-            el("div", { class: "ios-row" }, [el("span", { class: "grow", text: "크기" }), el("span", { class: "nav-val", text: `약 ${Aesthetic.MODEL.sizeMB}MB` })]),
-            el("div", { class: "ios-row" }, [el("span", { class: "grow", text: "라이선스" }), el("span", { class: "nav-val", text: Aesthetic.MODEL.license })]),
-          ]),
-          el("p", { class: "low-foot", text: "많은 사람이 좋아하는 평균 취향을 배운 모델이라 내 기준과 다를 수 있어요. 점수는 이 컴퓨터에서 매기고, 그림은 밖으로 안 나가요." }),
-          el("button", { class: "sheet-danger", type: "button", text: "AI 점수 끄고 모델 지우기", onclick: async () => {
-            aes.on = false;
-            saveAes();
-            await Aesthetic.removeModel();
-            renderAesBox();
-            dialog.close();
-            toast("AI 점수를 끄고 모델을 지웠어요. 이미 매긴 점수는 남아 있어요.");
-          } }),
-        );
-      },
-    };
-    const titles = { main: "AI 점수", low: "점수 낮은 그림 기준", taste: "내 취향 점수", model: "AI 모델" };
-    const draw = () => {
-      if (!aes.on && page !== "main") page = "main";
-      body.innerHTML = "";
-      title.textContent = titles[page];
-      back.innerHTML = page === "main" ? "닫기" : `<span class="back-chev">${icon("chevron", 14)}</span>AI 점수`;
-      pages[page]();
-    };
-    let last = 0;
-    refreshAesSheet = () => {
-      if (!dialog.open) return;
-      if (Date.now() - last < 1200) return; // not on every score
-      last = Date.now();
-      const y = dialog.querySelector(".dialog-body")?.scrollTop || 0;
-      draw();
-      const b = dialog.querySelector(".dialog-body");
-      if (b) b.scrollTop = y;
-    };
-    dialog.addEventListener("close", () => { refreshAesSheet = () => {}; }, { once: true });
-    draw();
+  // AI 점수 lives in 설정 (its own page there, like System Settings).
+  function openAesSettings(page = "aes") {
+    state.setPage = page === "taste" ? "taste" : "aes";
+    if (state.settings) void renderSettings();
+    else openSettings(true);
   }
 
   // ---- ⚙ 설정: the 보관함's settings in one pane, laid out like the NovelAI
   // panel's 설정 (모양 · 보관함 · 미적 점수 · 태그 뜻 · 데이터 · version).
   state.settings = false;
+  state.setPage = "main"; // "main" · "aes" (AI 점수) · "taste" (내 취향 점수)
+  const SET_PAGES = { main: { title: "설정" }, aes: { title: "AI 점수", back: "main" }, taste: { title: "내 취향 점수", back: "aes" } };
+  function goSettings(page) {
+    state.setPage = page;
+    $(".set-scroll").scrollTop = 0;
+    void renderSettings();
+  }
+  function renderSettingsHead() {
+    const page = SET_PAGES[state.setPage] || SET_PAGES.main;
+    $(".title").textContent = page.title;
+    let back = $(".set-back");
+    if (!back) {
+      back = el("button", { class: "set-back", type: "button", title: "뒤로", "aria-label": "뒤로", html: icon("chevron", 15), onclick: () => goSettings(SET_PAGES[state.setPage]?.back || "main") });
+      $(".tb-left").prepend(back);
+    }
+    back.hidden = !state.settings || !page.back;
+  }
   function openSettings(on = true) {
     state.settings = Boolean(on);
+    if (!state.settings) state.setPage = "main";
     document.querySelector(".app").toggleAttribute("data-settings", state.settings);
     $(".settings-open").setAttribute("aria-current", String(state.settings));
     $(".settings-pane").hidden = !state.settings;
+    renderSettingsHead();
     if (state.settings) {
-      $(".title").textContent = "설정";
       $(".count").textContent = "";
       renderPickBar();
       void renderSettings();
@@ -956,6 +850,86 @@
     }
     return seg;
   }
+  // a whole row that leads to a page, with the value and › on the right
+  function navSetRow(label, sub, value, go) {
+    return el("button", { class: "set-row set-nav", type: "button", onclick: go }, [
+      el("span", { class: "set-label" }, [document.createTextNode(label), sub ? el("small", { text: sub }) : null]),
+      value ? el("span", { class: "nav-val", text: value }) : null,
+      el("span", { class: "set-chev", html: icon("chevron", 13) }),
+    ]);
+  }
+  // 설정 › AI 점수
+  function renderAesPage(pane, { title, group, fmt }) {
+    const st = Aesthetic.status();
+    if (!aes.on) {
+      pane.append(el("div", { class: "set-intro" }, [
+        el("span", { class: "set-intro-ic", html: icon("sparkle", 22) }),
+        el("div", {}, [
+          el("p", { class: "sheet-lead", text: "AI가 그림마다 얼마나 잘 나왔는지 0–100점을 매겨요." }),
+          el("ul", { class: "sheet-points" }, [
+            el("li", { text: "비교할 때 점수 높은 그림부터 나와요." }),
+            el("li", { text: "점수 낮은 그림을 한꺼번에 B컷·탈락으로 정리할 수 있어요." }),
+            el("li", { text: "고르는 건 직접 해요. AI는 순서만 정해요." }),
+          ]),
+        ]),
+      ]));
+    }
+    const status = !aes.on ? `처음 켤 때 AI 모델(약 ${Aesthetic.MODEL.sizeMB}MB)을 한 번 받아요 · 그림은 밖으로 안 나가요`
+      : st.phase === "downloading" ? `모델 받는 중 · ${Math.round(st.progress * 100)}%`
+        : st.phase === "loading" ? "준비하는 중…"
+          : st.phase === "error" ? `시작하지 못했어요: ${st.error}`
+            : st.queued ? `점수 매기는 중 · 남은 ${fmt(st.queued)}장` : "준비됐어요 · 지금 보는 그림부터 뒤에서 매겨요";
+    pane.append(group(setRow("AI 점수", status, setSwitch("set-aes", aes.on, async (on) => {
+      aes.on = on;
+      saveAes();
+      if (on) {
+        await Aesthetic.loadScores();
+        void Aesthetic.start().then(() => feedAesFromView(), () => {});
+        feedAesFromView();
+      } else {
+        Aesthetic.stop();
+      }
+      renderAesBox();
+      renderSettings();
+    }))));
+    if (!aes.on) return;
+    if (st.phase === "ready") pane.append(group(setRow("점수 낮은 그림 정리", "지금 보이는 그림에서 칸마다 점수 낮은 미분류를 골라 B컷·탈락으로", setBtn("정리하기…", () => void openLowScoreSheet(), true))));
+
+    pane.append(title("점수 낮은 그림"));
+    pane.append(group(
+      setRow("기준", "같은 칸에서 점수가 아래쪽 몇 %면 낮다고 볼지", setSeg("기준", [[30, "아래 30%"], [50, "50%"], [70, "70%"]], aes.skip, (v) => { aes.skip = v; saveAes(); renderAesBox(); })),
+      setRow("비교할 때 처음부터 가려 두기", "끄면 다 보이고, 비교 화면 위쪽에 「점수 낮은 N장」만 떠요", setSwitch("set-aes-hide", aes.hide, (on) => { aes.hide = on; saveAes(); })),
+    ));
+
+    pane.append(title("내 취향 점수"));
+    const t = Aesthetic.taste();
+    const lg = learnableGroups();
+    const tasteValue = Aesthetic.fingerprintsSupported() === false ? "못 써요" : !t ? "아직 안 배움" : Aesthetic.usingTaste() ? "쓰는 중" : "꺼 둠";
+    const tasteSub = Aesthetic.fingerprintsSupported() === false ? "이 모델로는 만들 수 없어요"
+      : t ? `${new Date(t.at).toLocaleDateString("ko-KR")}에 배움 · 채택을 맞힌 비율 AI ${Math.round(t.generic.pairAcc)}% → 내 취향 ${Math.round(t.personal.pairAcc)}%`
+        : `내 채택을 보고 내 취향에 맞춘 점수를 만들어요 · 배울 수 있는 칸 ${fmt(lg.total)}개`;
+    pane.append(group(
+      navSetRow("내 취향 점수", tasteSub, tasteValue, () => goSettings("taste")),
+      t ? setRow("AI 점수 대신 내 취향 점수 쓰기", t.better ? "내 취향 점수가 더 잘 맞아요" : "아직은 AI 점수가 더 잘 맞아요", setSwitch("set-taste", Aesthetic.usingTaste(), async (on) => { await Aesthetic.setUseTaste(on); renderSettings(); })) : null,
+    ));
+
+    pane.append(title("AI 모델"));
+    pane.append(group(
+      setRow("모델", "", el("span", { class: "nav-val", text: Aesthetic.MODEL.repo })),
+      setRow("크기", "", el("span", { class: "nav-val", text: `약 ${Aesthetic.MODEL.sizeMB}MB` })),
+      setRow("라이선스", "", el("span", { class: "nav-val", text: Aesthetic.MODEL.license, title: Aesthetic.MODEL.license })),
+      setRow("모델 지우기", "AI 점수를 끄고 받은 모델을 지워요 · 이미 매긴 점수는 남아요", el("button", { class: "btn small destructive", type: "button", text: "지우기…", onclick: async () => {
+        if (!(await confirmDialog("AI 모델을 지울까요?", "AI 점수가 꺼지고, 다시 켜면 모델을 새로 받아요. 이미 매긴 점수는 남아요.", "지우기", { destructive: true }))) return;
+        aes.on = false;
+        saveAes();
+        await Aesthetic.removeModel();
+        renderAesBox();
+        renderSettings();
+        toast("AI 점수를 끄고 모델을 지웠어요. 이미 매긴 점수는 남아 있어요.");
+      } })),
+    ));
+    pane.append(el("p", { class: "set-version", text: "많은 사람이 좋아하는 평균 취향을 배운 모델이라 내 기준과 다를 수 있어요." }));
+  }
   const setBtn = (text, run, primary = false) => el("button", { class: `btn small${primary ? "" : " secondary"}`, type: "button", text, onclick: run });
   let settingsSync = {};
   async function renderSettings() {
@@ -964,9 +938,12 @@
     settingsSync = await chrome.storage.sync.get(["appearance", "tagHover", "tagHoverMachine"]);
     const y = pane.scrollTop;
     pane.innerHTML = "";
+    renderSettingsHead();
     const title = (t) => el("div", { class: "set-title", text: t });
     const group = (...rows) => el("div", { class: "set-group" }, rows.filter(Boolean));
     const fmt = (n) => n.toLocaleString("ko-KR");
+    if (state.setPage === "aes") { renderAesPage(pane, { title, group, fmt }); pane.scrollTop = y; return; }
+    if (state.setPage === "taste") { pane.append(tasteSection(() => void renderSettings())); pane.scrollTop = y; return; }
 
     // 모양
     const look = el("div", { class: "set-appearance", role: "group", "aria-label": "모양" });
@@ -1000,40 +977,14 @@
       })()),
     ));
 
-    // 미적 점수
+    // AI 점수: one row; its settings are on their own page
     pane.append(title("AI 점수"));
     const st = Aesthetic.status();
-    const aesSub = !aes.on ? `AI가 그림마다 0–100점을 매겨서, 비교할 때 잘 나온 그림부터 보여 줘요 · 처음 켤 때 약 ${Aesthetic.MODEL.sizeMB}MB 받기`
+    const aesSub = !aes.on ? "AI가 그림마다 0–100점을 매겨서, 비교할 때 잘 나온 그림부터 보여 줘요"
       : st.phase === "downloading" ? `모델 받는 중 · ${Math.round(st.progress * 100)}%`
-        : st.phase === "loading" ? "준비하는 중…"
-          : st.phase === "error" ? `시작하지 못했어요: ${st.error}`
-            : st.queued ? `점수 매기는 중 · 남은 ${fmt(st.queued)}장` : "준비됐어요 · 지금 보는 그림부터 뒤에서 매겨요";
-    const rows = [setRow("AI 점수 켜기", aesSub, setSwitch("set-aes", aes.on, async (on) => {
-      aes.on = on;
-      saveAes();
-      if (on) {
-        await Aesthetic.loadScores();
-        void Aesthetic.start().then(() => feedAesFromView(), () => {});
-        feedAesFromView();
-      } else {
-        Aesthetic.stop();
-      }
-      renderAesBox();
-      renderSettings();
-    }))];
-    if (aes.on) {
-      if (st.phase === "ready") rows.push(setRow("점수 낮은 그림 한꺼번에 정리", "칸마다 점수 낮은 미분류를 골라 B컷·탈락으로 · 직접 정해요", setBtn("정리하기…", () => void openLowScoreSheet())));
-      rows.push(setRow("「점수 낮은 그림」 기준", "같은 칸에서 아래쪽 몇 %를 낮다고 볼지", setSeg("기준", [[30, "아래 30%"], [50, "50%"], [70, "70%"]], aes.skip, (v) => { aes.skip = v; saveAes(); renderAesBox(); })));
-      rows.push(setRow("비교할 때 처음부터 가려 두기", "끄면 다 보이고, 비교 화면 위쪽에서 알려만 줘요", setSwitch("set-aes-hide", aes.hide, (on) => { aes.hide = on; saveAes(); })));
-      const t = Aesthetic.taste();
-      const lg = learnableGroups();
-      const tasteSub = Aesthetic.fingerprintsSupported() === false ? "이 모델로는 만들 수 없어요"
-        : t ? `${new Date(t.at).toLocaleDateString("ko-KR")}에 배움 · 채택을 맞힌 비율 AI ${Math.round(t.generic.pairAcc)}% → 내 취향 ${Math.round(t.personal.pairAcc)}%`
-          : `내 채택을 보고 내 취향에 맞춘 점수를 만들어요 · 배울 수 있는 칸 ${fmt(lg.total)}개`;
-      rows.push(setRow("내 취향 점수", tasteSub, setBtn(t ? "결과 · 다시 배우기…" : "배우기…", () => void openAesSettings("taste"))));
-      if (t) rows.push(setRow("AI 점수 대신 내 취향 점수 쓰기", t.better ? "내 취향 점수가 더 잘 맞아요" : "아직은 AI 점수가 더 잘 맞아요", setSwitch("set-taste", Aesthetic.usingTaste(), async (on) => { await Aesthetic.setUseTaste(on); renderSettings(); })));
-    }
-    pane.append(group(...rows));
+        : st.phase === "error" ? "시작하지 못했어요"
+          : st.queued ? `점수 매기는 중 · 남은 ${fmt(st.queued)}장` : "켜짐";
+    pane.append(group(navSetRow("AI 점수", aesSub, aes.on ? "켜짐" : "꺼짐", () => goSettings("aes"))));
 
     // 태그 뜻
     pane.append(title("태그 뜻"));
@@ -1443,7 +1394,7 @@
   }
   // Pictures to choose from (채택 first): → { ids, asPick } or null.
   function pickPictures(title, list) {
-    const { dialog, body, right } = notionDialogShell(title, { leftLabel: "취소", rightLabel: "복사해 오기" });
+    const { dialog, body, right } = notionDialogShell(title, { leftLabel: "취소", rightLabel: "복사해 오기", wide: true });
     dialog.classList.add("wide");
     dialog.addEventListener("close", () => dialog.classList.remove("wide"), { once: true });
     const rank = { pick: 0, hold: 1, none: 2, reject: 3 };
@@ -2484,29 +2435,7 @@
     }
   }
   function textDialog(title, value, okLabel, hint = "") {
-    const dialog = $(".dialog");
-    if (dialog.open) dialog.close();
-    dialog.classList.remove("sheet");
-    dialog.innerHTML = "";
-    return new Promise((resolve) => {
-      const input = el("input", { class: "dialog-input", type: "text", value, spellcheck: "false" });
-      const finish = (v) => { dialog.close(); dialog.classList.remove("alert"); resolve(v); };
-      input.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); finish(input.value); }
-      });
-      dialog.classList.add("alert");
-      dialog.append(
-        el("div", { class: "dialog-body" }, [el("strong", { text: title }), hint ? el("p", { text: hint }) : null, input]),
-        el("div", { class: "dialog-foot" }, [
-          el("button", { class: "btn secondary", type: "button", text: "취소", onclick: () => finish(null) }),
-          el("button", { class: "btn", type: "button", text: okLabel, onclick: () => finish(input.value) }),
-        ]),
-      );
-      dialog.addEventListener("cancel", () => { dialog.classList.remove("alert"); resolve(null); }, { once: true });
-      dialog.showModal();
-      input.focus();
-      input.select();
-    });
+    return macAlert({ title, text: hint, okLabel, input: value ?? "" });
   }
   async function renameEntry(entry) {
     if (!entry || entry.source === "dropped") return;
@@ -4156,24 +4085,32 @@
   }
 
   // iOS form sheet: 취소 · title · action in a bar on top, content below.
-  function notionDialogShell(title, { leftLabel = "취소", rightLabel = "" } = {}) {
+  // macOS sheet: drops from the top of the window. Title and content on top,
+  // the buttons at the bottom right: [left = 취소/닫기] [right = the action].
+  // Esc is the left button; Return is the right one (outside text areas).
+  function notionDialogShell(title, { leftLabel = "취소", rightLabel = "", wide = false } = {}) {
     const dialog = $(".dialog");
-    dialog.classList.remove("alert");
-    dialog.classList.add("sheet");
-    dialog.addEventListener("close", () => dialog.classList.remove("sheet"), { once: true });
+    dialog.className = `dialog mac-sheet${wide ? " wide" : ""}`;
     dialog.innerHTML = "";
-    const left = el("button", { class: "bar-btn", type: "button", text: leftLabel, onclick: () => dialog.close() });
-    const right = el("button", { class: "bar-btn primary", type: "button", text: rightLabel });
+    const left = el("button", { class: "btn secondary", type: "button", text: leftLabel, onclick: () => dialog.close() });
+    const right = el("button", { class: "btn", type: "button", text: rightLabel });
     right.hidden = !rightLabel;
-    const bar = el("div", { class: "sheet-bar" }, [left, el("strong", { class: "sheet-title", text: title }), right]);
+    const syncDefault = () => left.classList.toggle("is-default", right.hidden);
+    syncDefault();
+    new MutationObserver(syncDefault).observe(right, { attributes: true, attributeFilter: ["hidden"] });
     const body = el("div", { class: "dialog-body" });
-    dialog.append(bar, body);
+    const foot = el("div", { class: "mac-foot" }, [el("span", { class: "grow mac-foot-left" }), left, right]);
+    dialog.append(el("div", { class: "mac-sheet-head" }, [el("h2", { class: "mac-sheet-title", text: title })]), body, foot);
+    dialog.onkeydown = (event) => {
+      if (event.key !== "Enter" || event.isComposing || event.target.closest?.("textarea, button, select")) return;
+      if (!right.hidden && !right.disabled) { event.preventDefault(); right.click(); }
+    };
     if (!dialog.open) dialog.showModal();
-    return { dialog, body, right };
+    return { dialog, body, right, left, foot };
   }
 
   async function openNotionConnect() {
-    const { body, right: next } = notionDialogShell("노션 연결 1/2", { rightLabel: "다음" });
+    const { body, right: next } = notionDialogShell("노션 연결 (1/2)", { rightLabel: "다음" });
     const input = el("input", { class: "text-input", type: "password", placeholder: "ntn_… 또는 secret_…", autocomplete: "off", "aria-label": "노션 연결 토큰" });
     body.append(
       el("p", { html: "① 아래 버튼으로 노션 <b>연결(통합)</b> 페이지를 열고 <b>새 연결 → 내부</b>로 하나 만들어요. 이름은 아무거나 (예: NAI 자동저장)." }),
@@ -4210,7 +4147,10 @@
   }
 
   async function openNotionPick(token, maxUploadBytes, workspace) {
-    const { dialog, body, right: refresh } = notionDialogShell("그림을 넣을 곳 2/2", { rightLabel: "다시 찾기" });
+    const { dialog, body, foot } = notionDialogShell("노션 연결 · 그림을 넣을 곳 (2/2)", { leftLabel: "취소" });
+    // picking a row is the action; 다시 찾기 sits on the left of the buttons
+    const refresh = el("button", { class: "btn secondary", type: "button", text: "다시 찾기" });
+    foot.querySelector(".mac-foot-left").append(refresh);
     body.append(el("p", { html: `③ 노션에서 그림을 모아 둘 <b>페이지</b>를 열고, 오른쪽 위 <b>•••</b> → <b>연결</b> → 방금 만든 연결을 추가해요. 그다음 아래 「다시 찾기」를 눌러요.${workspace ? `<br><small>워크스페이스: ${escapeHtml(workspace)}</small>` : ""}` }));
     const list = el("div", { class: "pick-list" });
     const status = el("p", { class: "dialog-status" });
@@ -4260,7 +4200,7 @@
   }
 
   async function openNotionSettings() {
-    const { dialog, body, right: save } = notionDialogShell("노션 설정", { leftLabel: "닫기", rightLabel: "저장" });
+    const { dialog, body, right: save, foot } = notionDialogShell("노션 설정", { leftLabel: "취소", rightLabel: "저장" });
     const auto = el("input", { type: "checkbox", id: "nt-auto", checked: Boolean(notionCfg.autoSend) });
     const clean = el("input", { type: "radio", name: "nt-up", id: "nt-clean", checked: notionCfg.upload !== "original" });
     const orig = el("input", { type: "radio", name: "nt-up", id: "nt-orig", checked: notionCfg.upload === "original" });
@@ -4315,7 +4255,10 @@
       ]),
       el("p", { class: "sheet-note", text: "같은 프롬프트 = 베이스·캐릭터·네거티브가 글자까지 같은 것 (시드는 상관없어요)." }),
     );
-    body.append(el("button", { class: "sheet-danger", type: "button", text: "노션 연결 끊기", onclick: async () => { await NotionSync.clearConfig(); notionCfg = await NotionSync.getConfig(); dialog.close(); render(); toast("노션 연결을 끊었어요. 노션에 올라간 페이지는 그대로 있어요."); } }));
+    foot.querySelector(".mac-foot-left").append(el("button", { class: "btn destructive", type: "button", text: "연결 끊기…", onclick: async () => {
+      if (!(await confirmDialog("노션 연결을 끊을까요?", "노션에 이미 올라간 페이지는 그대로 있어요.", "연결 끊기", { destructive: true }))) return;
+      await NotionSync.clearConfig(); notionCfg = await NotionSync.getConfig(); render(); toast("노션 연결을 끊었어요. 노션에 올라간 페이지는 그대로 있어요.");
+    } }));
     save.addEventListener("click", async () => {
       notionCfg = await NotionSync.setConfig({ autoSend: auto.checked, upload: orig.checked ? "original" : "clean", samePrompt: every.checked ? "all" : "first" });
       dialog.close();
@@ -4522,26 +4465,38 @@
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => { node.hidden = true; }, action ? 9000 : 4500);
   }
-  async function confirmDialog(title, text, okLabel) {
+  // macOS alert (NSAlert): app icon, bold title, small text, push buttons.
+  function macAlert({ title, text = "", okLabel = "확인", cancelLabel = "취소", input = null, destructive = false }) {
     const dialog = $(".dialog");
     if (dialog.open) dialog.close();
-    // Let a just-closed sheet finish its own close handling first.
-    await new Promise((r) => setTimeout(r, 0));
-    dialog.classList.remove("sheet");
-    dialog.innerHTML = "";
     return new Promise((resolve) => {
-      const finish = (value) => { dialog.close(); dialog.classList.remove("alert"); resolve(value); };
-      dialog.classList.add("alert"); // iOS-style alert
-      dialog.append(
-        el("div", { class: "dialog-body" }, [el("strong", { text: title }), el("p", { text })]),
-        el("div", { class: "dialog-foot" }, [
-          el("button", { class: "btn secondary", type: "button", text: "취소", onclick: () => finish(false) }),
-          el("button", { class: "btn", type: "button", text: okLabel, onclick: () => finish(true) }),
-        ]),
-      );
-      dialog.addEventListener("cancel", () => { dialog.classList.remove("alert"); resolve(false); }, { once: true });
-      dialog.showModal();
+      // let a just-closed sheet finish its own close handling first
+      setTimeout(() => {
+        dialog.className = "dialog mac-alert";
+        dialog.innerHTML = "";
+        dialog.onkeydown = null;
+        let done = false;
+        const finish = (value) => { if (done) return; done = true; dialog.close(); resolve(value); };
+        const field = input !== null ? el("input", { class: "dialog-input", type: "text", value: String(input), spellcheck: "false" }) : null;
+        const ok = el("button", { class: `btn${destructive ? " destructive" : ""}`, type: "button", text: okLabel, onclick: () => finish(field ? field.value : true) });
+        const cancel = el("button", { class: "btn secondary", type: "button", text: cancelLabel, onclick: () => finish(field ? null : false) });
+        field?.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); ok.click(); } });
+        dialog.append(...[
+          el("img", { class: "mac-alert-icon", src: "icons/icon128.png", alt: "" }),
+          el("h2", { class: "mac-alert-title", text: title }),
+          text ? el("p", { class: "mac-alert-text", text }) : null,
+          field,
+          el("div", { class: "mac-alert-buttons" }, [cancel, ok]),
+        ].filter(Boolean));
+        dialog.addEventListener("cancel", () => finish(field ? null : false), { once: true });
+        dialog.addEventListener("close", () => finish(field ? null : false), { once: true });
+        dialog.showModal();
+        if (field) { field.focus(); field.select(); } else ok.focus();
+      }, 0);
     });
+  }
+  function confirmDialog(title, text, okLabel, { destructive = false } = {}) {
+    return macAlert({ title, text, okLabel, destructive });
   }
 
   function applyTheme(appearance) {

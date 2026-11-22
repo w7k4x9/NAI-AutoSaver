@@ -2960,7 +2960,7 @@
     return "";
   }
 
-  // iOS-style alert in the panel's shadow root (replaces the browser's own
+  // macOS-style alert in the panel's shadow root (replaces the browser's own
   // alert/confirm boxes). Resolves with the chosen button's value; Esc and a
   // click outside pick the cancel button.
   let iosAlertKeyHandler = null;
@@ -2973,7 +2973,7 @@
       }
       const layer = document.createElement("div");
       layer.className = "ias-ios-layer";
-      layer.innerHTML = `<div class="ias-ios-alert" role="alertdialog" aria-modal="true"><div class="ias-ios-body"><strong></strong><p></p></div><div class="ias-ios-buttons" data-count="${buttons.length}"></div></div>`;
+      layer.innerHTML = `<div class="ias-ios-alert" role="alertdialog" aria-modal="true"><img class="ias-ios-icon" alt="" src="${chrome.runtime.getURL("icons/icon128.png")}"><div class="ias-ios-body"><strong></strong><p></p></div><div class="ias-ios-buttons" data-count="${buttons.length}"></div></div>`;
       layer.querySelector("strong").textContent = title;
       const p = layer.querySelector("p");
       p.textContent = message;
@@ -8725,6 +8725,7 @@
         --menu-bg: #2C2C2E; --menu-shadow: 0 0 0 0.5px rgba(255,255,255,0.16), 0 18px 44px rgba(0,0,0,0.6);
         --inspector: #232325; --card: #2C2C2E; --help-dot: #636366;
         --glass: rgba(72,72,76,0.66); --glass-border: rgba(255,255,255,0.16); --warn-icon: #FF9F0A;
+        --btn-bg: rgba(255,255,255,0.16); --btn-bg-hover: rgba(255,255,255,0.22); --btn-shadow: inset 0 0.5px 0 rgba(255,255,255,0.12), 0 0.5px 1px rgba(0,0,0,0.4);
         color-scheme: dark;
       }
       .ias-shell[data-theme="light"] {
@@ -8739,6 +8740,7 @@
         --menu-bg: #FFFFFF; --menu-shadow: 0 0 0 0.5px rgba(0,0,0,0.14), 0 18px 44px rgba(0,0,0,0.18);
         --inspector: #FAFAFA; --card: #F2F2F7; --help-dot: #8E8E93;
         --glass: rgba(246,246,248,0.72); --glass-border: rgba(0,0,0,0.06); --warn-icon: #FF9500;
+        --btn-bg: #FFFFFF; --btn-bg-hover: #F5F5F7; --btn-shadow: 0 0 0 0.5px rgba(0,0,0,0.14), 0 0.5px 1.5px rgba(0,0,0,0.1);
         color-scheme: light;
       }
 
@@ -8884,38 +8886,40 @@
 
       /* ---- toasts: one-off messages, never truncated ---- */
       .ias-main { position: relative; }
-      /* iOS alert: frosted card, centred text, hairline button bar */
-      .ias-ios-layer { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.22); animation: ias-fade 0.14s ease-out; }
+      /* macOS alert (NSAlert): app icon, bold title, small text, push buttons */
+      .ias-ios-layer { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.16); animation: ias-fade 0.14s ease-out; }
       .ias-ios-alert {
-        width: 280px; border-radius: 14px; overflow: hidden; text-align: center; color: var(--text);
+        width: 270px; border-radius: 12px; overflow: hidden; text-align: center; color: var(--text); padding: 20px 16px 16px;
         background: var(--glass); border: 0.5px solid var(--glass-border);
         -webkit-backdrop-filter: blur(30px) saturate(180%); backdrop-filter: blur(30px) saturate(180%);
-        box-shadow: 0 20px 60px rgba(0,0,0,0.3); animation: ias-pop 0.18s cubic-bezier(0.2,0.9,0.3,1.2);
+        box-shadow: 0 20px 60px rgba(0,0,0,0.3); animation: ias-pop 0.16s ease-out;
       }
-      .ias-ios-body { padding: 19px 16px 15px; display: flex; flex-direction: column; gap: 5px; }
-      .ias-ios-body strong { font-size: 15px; font-weight: 650; line-height: 1.3; }
-      .ias-ios-body p { margin: 0; font-size: 12.5px; line-height: 1.45; white-space: pre-line; word-break: keep-all; }
-      .ias-ios-buttons { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; border-top: 0.5px solid var(--border); }
-      .ias-ios-buttons[data-count="3"] { grid-auto-flow: row; }
-      .ias-ios-buttons button { height: 44px; border: none; background: transparent; color: var(--accent-text); font: inherit; font-size: 15px; cursor: pointer; }
-      .ias-ios-buttons button + button { border-left: 0.5px solid var(--border); }
-      .ias-ios-buttons[data-count="3"] button + button { border-left: none; border-top: 0.5px solid var(--border); }
-      .ias-ios-buttons button[data-primary="true"] { font-weight: 650; }
-      .ias-ios-buttons button[data-destructive="true"] { color: var(--danger); }
-      .ias-ios-buttons button:hover, .ias-ios-buttons button:focus-visible { background: var(--hover); outline: none; }
+      .ias-ios-icon { width: 56px; height: 56px; display: block; margin: 0 auto 10px; }
+      .ias-ios-body { display: flex; flex-direction: column; gap: 4px; }
+      .ias-ios-body strong { font-size: 13px; font-weight: 700; line-height: 1.35; }
+      .ias-ios-body p { margin: 0; font-size: 11.5px; line-height: 1.45; white-space: pre-line; word-break: keep-all; }
+      .ias-ios-buttons { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 8px; margin-top: 16px; }
+      .ias-ios-buttons[data-count="3"], .ias-ios-buttons[data-count="1"] { grid-auto-flow: row; }
+      .ias-ios-buttons button { height: 28px; border: none; border-radius: 6px; padding: 0 8px; background: var(--btn-bg); box-shadow: var(--btn-shadow); color: var(--text); font: inherit; font-size: 13px; cursor: pointer; }
+      .ias-ios-buttons button[data-primary="true"] { background: var(--accent-fill); color: #FFFFFF; font-weight: 600; box-shadow: none; }
+      .ias-ios-buttons button[data-destructive="true"]:not([data-primary="true"]) { color: var(--danger); }
+      .ias-ios-buttons button[data-destructive="true"][data-primary="true"] { background: var(--btn-bg); color: var(--danger); box-shadow: var(--btn-shadow); }
+      .ias-ios-buttons button:hover { filter: brightness(1.05); }
+      .ias-ios-buttons button:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-ring); }
       .ias-card > .ias-ios-layer { position: absolute; }
       @keyframes ias-fade { from { opacity: 0; } }
-      @keyframes ias-pop { from { opacity: 0; transform: scale(1.08); } }
-      .ias-toasts { position: absolute; left: 50%; bottom: 62px; transform: translateX(-50%); z-index: 30; display: flex; flex-direction: column-reverse; align-items: center; gap: 6px; width: min(420px, calc(100% - 32px)); pointer-events: none; }
+      @keyframes ias-pop { from { opacity: 0; transform: scale(0.96); } }
+      /* notification banners (macOS): top right of the window */
+      .ias-toasts { position: absolute; top: 56px; right: 12px; z-index: 30; display: flex; flex-direction: column; align-items: stretch; gap: 6px; width: min(340px, calc(100% - 24px)); pointer-events: none; }
       .ias-toast {
         pointer-events: auto; display: flex; align-items: flex-start; gap: 8px; max-width: 100%;
-        padding: 10px 10px 10px 14px; border-radius: 16px; color: var(--text);
+        padding: 10px 10px 10px 12px; border-radius: 12px; color: var(--text);
         background: var(--glass); border: 0.5px solid var(--glass-border);
-        -webkit-backdrop-filter: blur(24px) saturate(180%); backdrop-filter: blur(24px) saturate(180%);
-        box-shadow: 0 12px 40px rgba(0,0,0,0.22), 0 1px 3px rgba(0,0,0,0.08); font-size: 12.5px; line-height: 1.45;
+        -webkit-backdrop-filter: blur(30px) saturate(180%); backdrop-filter: blur(30px) saturate(180%);
+        box-shadow: 0 8px 28px rgba(0,0,0,0.2); font-size: 12.5px; line-height: 1.45;
         animation: ias-toast-in 0.16s ease-out;
       }
-      .ias-toast[data-leaving="true"] { opacity: 0; transform: translateY(4px); transition: opacity 0.18s, transform 0.18s; }
+      .ias-toast[data-leaving="true"] { opacity: 0; transform: translateX(16px); transition: opacity 0.18s, transform 0.18s; }
       .ias-toast-ic { flex: 0 0 auto; margin-top: 1px; display: flex; }
       .ias-toast[data-tone="ok"] .ias-toast-ic { color: var(--success); }
       .ias-toast[data-tone="warn"] .ias-toast-ic { color: var(--warn-icon); }
@@ -8923,7 +8927,7 @@
       .ias-toast-text { flex: 1; min-width: 0; }
       .ias-toast-close { flex: 0 0 auto; width: 18px; height: 18px; margin: 0 0 0 2px; border: none; border-radius: 9px; background: transparent; color: var(--text3); display: flex; align-items: center; justify-content: center; padding: 0; cursor: pointer; }
       .ias-toast-close:hover { background: var(--hover); color: var(--text); }
-      @keyframes ias-toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+      @keyframes ias-toast-in { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: none; } }
       
 
       .ias-pane { display: none; flex-direction: column; min-height: 0; flex: 1 1 auto; padding: 16px 20px 0; }
@@ -8981,8 +8985,9 @@
       .ias-stack { display: flex; flex-direction: column; gap: 0; }
       .ias-combo-inspector textarea { resize: none; }
       .ias-btn[data-active="true"] { background: #D70015; }
-      .ias-btn.secondary { background: var(--elev2); color: var(--text); font-weight: 500; }
-      .ias-btn.danger { background: var(--danger-soft); color: var(--danger); font-weight: 600; }
+      .ias-btn.secondary { background: var(--btn-bg); color: var(--text); font-weight: 500; box-shadow: var(--btn-shadow); }
+      .ias-btn.secondary:not(:disabled):hover { filter: none; background: var(--btn-bg-hover); }
+      .ias-btn.danger { background: var(--btn-bg); color: var(--danger); font-weight: 500; box-shadow: var(--btn-shadow); }
       .ias-btn.wide { width: 100%; height: 32px; }
       .ias-btn[hidden] { display: none; }
       
@@ -9307,9 +9312,10 @@
       }
       .ias-tsheet-head { display: flex; align-items: flex-start; gap: 10px; padding: 18px 16px 14px 18px; border-bottom: 0.5px solid var(--border); }
       .ias-tsheet-head > div { flex: 1; }
-      .ias-tsheet-title { font-size: 17px; font-weight: 750; }
+      .ias-tsheet-title { font-size: 13px; font-weight: 700; }
       .ias-tsheet-sub { font-size: 12px; color: var(--text3); margin-top: 3px; }
-      .ias-tsheet-close { width: 24px; height: 24px; border: none; border-radius: 12px; background: var(--elev2); color: var(--text2); display: flex; align-items: center; justify-content: center; padding: 0; cursor: pointer; }
+      .ias-tsheet-close { width: 22px; height: 22px; border: none; border-radius: 6px; background: transparent; color: var(--text3); display: flex; align-items: center; justify-content: center; padding: 0; cursor: pointer; }
+      .ias-tsheet-close:hover { background: var(--hover); color: var(--text); }
       .ias-tsheet-progress { padding: 14px 18px 6px; display: flex; flex-direction: column; gap: 6px; }
       .ias-tsheet-progress > div:first-child { display: flex; justify-content: space-between; font-size: 12px; color: var(--text3); }
       .ias-tsheet-progress b { color: var(--text); }
@@ -9327,17 +9333,17 @@
       .ias-tstep[data-state="done"] .ias-tstep-title { color: var(--text2); }
       .ias-tstep-short { font-size: 12px; color: var(--text3); }
       .ias-tsheet-actions { display: flex; gap: 8px; padding: 10px 18px 4px; }
-      .ias-tsheet-actions .ias-btn { height: 32px; }
+      .ias-tsheet-actions .ias-btn { height: 28px; }
       .ias-tsheet-actions .ias-btn:first-child { flex: 1; }
       .ias-tsheet-foot { margin-top: auto; border-top: 0.5px solid var(--border); padding: 12px 18px 14px; display: flex; flex-direction: column; gap: 8px; }
       .ias-tsheet-label { font-size: 11.5px; font-weight: 700; color: var(--text3); }
       .ias-tothers { display: flex; flex-wrap: wrap; gap: 6px; }
-      .ias-tother { height: 26px; border: none; border-radius: 13px; background: var(--elev2); color: var(--text); padding: 0 10px; font-size: 12px; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+      .ias-tother { height: 24px; border: none; border-radius: 6px; background: var(--btn-bg); box-shadow: var(--btn-shadow); color: var(--text); padding: 0 10px; font-size: 12px; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
       .ias-tother span { color: var(--text3); font-size: 11px; }
       .ias-tsheet-auto { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12.5px; color: var(--text2); padding-top: 4px; cursor: pointer; }
 
       /* ---- storage health banner ---- */
-      .ias-alert { display: flex; align-items: center; gap: 10px; margin: 10px 16px 0; padding: 9px 10px 9px 12px; border-radius: 12px; background: var(--card); color: var(--text); font-size: 12.5px; line-height: 1.45; box-shadow: inset 0 0 0 0.5px var(--border); }
+      .ias-alert { display: flex; align-items: center; gap: 10px; margin: 10px 16px 0; padding: 8px 10px 8px 12px; border-radius: 8px; background: var(--card); color: var(--text); font-size: 12.5px; line-height: 1.45; box-shadow: inset 0 0 0 0.5px var(--border); }
       .ias-alert > .ias-ic { color: var(--warn-icon); }
       .ias-alert[hidden] { display: none; }
       .ias-alert-text { flex: 1; }
