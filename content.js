@@ -165,6 +165,11 @@
   // Pictures in a row whose own NovelAI data showed other character tags than
   // the queue item (see checkTagDrift). Two in a row stops the run.
   let tagDriftStreak = 0;
+  // pictures in a row that NovelAI drew with another queue item's tags
+  let otherItemStreak = 0;
+  // last number used per save name in this tab (for pictures saved under
+  // the queue item they were really drawn with)
+  const savedNameCounters = new Map();
   let todaySavedCount = 0;
 
   const autoRun = {
@@ -3108,25 +3113,21 @@
     const text = String(dataUrl || "");
     const comma = text.indexOf(",");
     if (comma < 0 || !/;base64$/i.test(text.slice(0, comma))) return null;
-    const b64 = text.slice(comma + 1);
-    for (const limit of [262144, b64.length]) {
-      const take = Math.min(b64.length, limit - (limit % 4));
-      let bytes;
-      try {
-        bytes = Uint8Array.from(atob(b64.slice(0, take)), (c) => c.charCodeAt(0));
-      } catch (error) {
-        return null;
-      }
-      const sig = [137, 80, 78, 71, 13, 10, 26, 10];
-      if (bytes.length < 8 || sig.some((v, i) => bytes[i] !== v)) return null;
+    let bytes;
+    try {
+      bytes = Uint8Array.from(atob(text.slice(comma + 1)), (c) => c.charCodeAt(0));
+    } catch (error) {
+      return null;
+    }
+    const str = (at, n) => String.fromCharCode(...bytes.subarray(at, at + n));
+    // PNG: NovelAI's text chunks can come before or after the picture data
+    // (IDAT), so walk every chunk instead of stopping at IDAT.
+    if (bytes.length >= 8 && [137, 80, 78, 71, 13, 10, 26, 10].every((v, i) => bytes[i] === v)) {
       let pos = 8;
-      let truncated = false;
-      while (true) {
-        if (pos + 8 > bytes.length) { truncated = true; break; }
+      while (pos + 8 <= bytes.length) {
         const len = ((bytes[pos] << 24) >>> 0) + (bytes[pos + 1] << 16) + (bytes[pos + 2] << 8) + bytes[pos + 3];
-        const type = String.fromCharCode(bytes[pos + 4], bytes[pos + 5], bytes[pos + 6], bytes[pos + 7]);
-        if (type === "IDAT" || type === "IEND") return null;
-        if (pos + 12 + len > bytes.length) { truncated = true; break; }
+        const type = str(pos + 4, 4);
+        if (type === "IEND" || pos + 12 + len > bytes.length) return null;
         if (type === "tEXt" || type === "iTXt") {
           const body = bytes.subarray(pos + 8, pos + 8 + len);
           const zero = body.indexOf(0);
@@ -3142,9 +3143,94 @@
         }
         pos += 12 + len;
       }
-      if (!truncated || take >= b64.length) return null;
+      return null;
+    }
+    // WebP: the same JSON sits in EXIF UserComment.
+    if (bytes.length >= 12 && str(0, 4) === "RIFF" && str(8, 4) === "WEBP") {
+      let pos = 12;
+      while (pos + 8 <= bytes.length) {
+        const size = (bytes[pos + 4] | (bytes[pos + 5] << 8) | (bytes[pos + 6] << 16) | (bytes[pos + 7] << 24)) >>> 0;
+        if (str(pos, 4) === "EXIF") return readExifUserComment(bytes.subarray(pos + 8, pos + 8 + size));
+        pos += 8 + size + (size & 1);
+      }
     }
     return null;
+  }
+
+  function readExifUserComment(t) {
+    try {
+      let o = 0;
+      if (t.length >= 6 && String.fromCharCode(t[0], t[1], t[2], t[3]) === "Exif") o = 6;
+      const le = t[o] === 0x49;
+      const u16 = (p) => (le ? t[o + p] | (t[o + p + 1] << 8) : (t[o + p] << 8) | t[o + p + 1]);
+      const u32 = (p) => (le
+        ? (t[o + p] | (t[o + p + 1] << 8) | (t[o + p + 2] << 16) | (t[o + p + 3] << 24)) >>> 0
+        : ((t[o + p] << 24) | (t[o + p + 1] << 16) | (t[o + p + 2] << 8) | t[o + p + 3]) >>> 0);
+      const find = (ifd, tag) => {
+        const n = u16(ifd);
+        for (let k = 0; k < n; k += 1) {
+          const e = ifd + 2 + 12 * k;
+          if (u16(e) === tag) return { cnt: u32(e + 4), val: u32(e + 8) };
+        }
+        return null;
+      };
+      const exif = find(u32(4), 0x8769);
+      const uc = exif && find(exif.val, 0x9286);
+      if (!uc || uc.cnt <= 8) return null;
+      const body = t.subarray(o + uc.val, o + uc.val + uc.cnt);
+      const head = String.fromCharCode(...body.subarray(0, 8));
+      let textOut;
+      if (head.startsWith("UNICODE")) textOut = new TextDecoder(le ? "utf-16le" : "utf-16be").decode(body.subarray(8));
+      else if (head.startsWith("ASCII")) textOut = new TextDecoder().decode(body.subarray(8));
+      else textOut = new TextDecoder().decode(body);
+      textOut = textOut.replace(/\u0000+$/g, "").trim();
+      // NovelAI's WebP keeps {"Comment": "<json>", ...}; hand back the inner JSON.
+      try {
+        const outer = JSON.parse(textOut);
+        if (outer && typeof outer.Comment === "string") return outer.Comment;
+      } catch (error) {
+        void error;
+      }
+      return textOut;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // The character captions NovelAI actually drew a picture with (or null).
+  function readPictureCharCaptions(dataUrl) {
+    const comment = readPngComment(dataUrl);
+    if (!comment) return null;
+    try {
+      const captions = JSON.parse(comment)?.v4_prompt?.caption?.char_captions;
+      return Array.isArray(captions) ? captions.map((c) => String(c?.char_caption || "")) : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // Which queue item has exactly these character tags? Prefers the nearest
+  // item before the one running now (NovelAI lagging one item behind).
+  function findQueueItemForCaptions(actual, currentTitle) {
+    if (!Array.isArray(actual) || !actual.length) return null;
+    const list = (queueRun.active && Array.isArray(queueRun.items) && queueRun.items.length) ? queueRun.items : (queueState.items || []);
+    const same = (a, b) => {
+      const x = normalizedPromptTags(a);
+      const y = normalizedPromptTags(b);
+      return x.length === y.length && x.every((tag) => y.includes(tag)) && y.every((tag) => x.includes(tag));
+    };
+    const matches = [];
+    list.forEach((item, index) => {
+      if (!item || !item.title || item.title === currentTitle) return;
+      const blocks = splitCharacterBlocks(item.characterPrompt || "");
+      if (blocks.length !== actual.length) return;
+      if (blocks.every((block, i) => same(block, actual[i]))) matches.push({ item, index });
+    });
+    if (!matches.length) return null;
+    const current = list.findIndex((item) => item && item.title === currentTitle);
+    const before = matches.filter((m) => current < 0 || m.index < current);
+    const pick = before.length ? before[before.length - 1] : matches[0];
+    return pick.item;
   }
 
   // Character tags the picture was drawn with vs the ones the run put in.
@@ -3310,12 +3396,38 @@
       return { saved: false, same: true };
     }
     saveContext.lastSavedHash = fingerprint;
-    saveContext.counter += 1;
-    // Did NovelAI really draw this with the run's character tags? A picture
-    // drawn with left-over tags is kept, but under a name that says so, and
-    // the run puts the tags back in before the next one.
+    // Did NovelAI really draw this with the run's character tags?
     const drift = checkTagDrift(saveContext.expectChars, dataUrl);
     const drifted = Boolean(drift && drift.length);
+    // NovelAI sometimes keeps drawing with the PREVIOUS item's tags for a
+    // while after the queue moved on (seen in background windows: 3–7 pictures
+    // per item). Such a picture belongs to that item: save it under that
+    // item's name and folder, and don't count it toward the item running now.
+    if (drifted) {
+      const owner = findQueueItemForCaptions(readPictureCharCaptions(dataUrl), saveContext.baseName);
+      if (owner) {
+        const ownerName = Store.sanitizeFileName(owner.title);
+        const ownerNo = (savedNameCounters.get(ownerName) || 0) + 1;
+        savedNameCounters.set(ownerName, ownerNo);
+        const ownerFile = `${ownerName} (${ownerNo})`;
+        const ownerFolder = currentSaveFolder(owner.title, owner.folderName || "");
+        logEvent("warn", `그림이 앞 항목 「${owner.title}」 태그로 그려짐 → 그 이름으로 저장, 「${saveContext.baseName}」 장수에는 안 셈`);
+        sendImageDownload({ dataUrl, fileName: ownerFile, folder: ownerFolder, axes: owner.axes || null, image });
+        return { saved: false, otherItem: owner.title };
+      }
+      // Tags that match no queue item (e.g. left over from before the run):
+      // keep the picture as 태그다름_, don't count it, and go on.
+      const base0 = Store.sanitizeFileName(saveContext.baseName || defaultSaveName());
+      const key0 = `태그다름_${base0}`;
+      const no0 = (savedNameCounters.get(key0) || 0) + 1;
+      savedNameCounters.set(key0, no0);
+      logEvent("error", `그림의 캐릭터 태그가 대기열과 달라요 → "태그다름_"을 붙여 저장, 장수에는 안 셈`, describeTagDrift(drift));
+      sendImageDownload({ dataUrl, fileName: `${key0} (${no0})`, folder: currentSaveFolder(saveContext.baseName, saveContext.folderName), axes: null, image });
+      return { saved: false, otherItem: "대기열에 없는 태그" };
+    }
+    saveContext.counter += 1;
+    // A picture drawn with left-over tags that match no queue item is kept,
+    // but under a name that says so, and the run puts the tags back in.
     if (drift) {
       if (drifted) {
         tagDriftStreak += 1;
@@ -3338,13 +3450,19 @@
     const base = Store.sanitizeFileName(saveContext.baseName || defaultSaveName());
     const folder = currentSaveFolder(saveContext.baseName, saveContext.folderName);
     const fileName = `${drifted ? "태그다름_" : ""}${base} (${saveContext.counter})`;
+    if (!drifted) savedNameCounters.set(base, Math.max(savedNameCounters.get(base) || 0, saveContext.counter));
+    sendImageDownload({ dataUrl, fileName, folder, axes: drifted ? null : saveContext.axes || null, image });
+    return { saved: true };
+  }
+
+  function sendImageDownload({ dataUrl, fileName, folder, axes, image }) {
     chrome.runtime.sendMessage({
       action: "downloadImage",
       imageUrl: dataUrl,
       fileName,
       folder,
       format: effectiveFormat(),
-      axes: drifted ? null : saveContext.axes || null,
+      axes: axes || null,
     }, (response) => {
       const lastError = chrome.runtime.lastError;
       if (lastError) {
@@ -3360,7 +3478,6 @@
         todaySavedCount += 1;
       }
     });
-    return { saved: true };
   }
 
   // Cheap fingerprint of a saved file (FNV-1a over the data URL + its length).
@@ -3554,7 +3671,34 @@
       await scheduleNextAutoClick();
       return;
     }
-    if (save?.saved) noNewPictureStreak = 0;
+    if (save?.otherItem && !autoRun.stopAfterCurrent) {
+      // Saved under the item it was really drawn with; this item still needs
+      // its own count, so do this one again. NovelAI catches up on its own
+      // after a few pictures; if it never does, stop instead of looping.
+      noNewPictureStreak = 0;
+      otherItemStreak += 1;
+      autoRun.count = Math.max(0, autoRun.count - 1);
+      if (otherItemStreak >= 15) {
+        otherItemStreak = 0;
+        await finalizeStop({ playAudio: true, quiet: true });
+        setStatus(`NovelAI가 15장 연속 앞 항목(「${save.otherItem}」) 태그로 그려서 멈췄어요. NovelAI 캐릭터 칸을 확인해 주세요.`, "warn");
+        return;
+      }
+      if (otherItemStreak === 4 && typeof saveContext.reapply === "function") {
+        const token = autoRun.token;
+        const again = await saveContext.reapply();
+        if (!autoRun.active || token !== autoRun.token) return;
+        if (!again.ok) {
+          await finalizeStop({ playAudio: true, quiet: true });
+          setStatus(again.error || "캐릭터 태그를 다시 넣지 못해 멈췄어요.", "warn");
+          return;
+        }
+      }
+      setStatus(`NovelAI가 아직 앞 항목(「${save.otherItem}」) 태그로 그리고 있어요. 그 이름으로 저장하고 이 항목은 이어서 뽑을게요.`, "warn");
+      await scheduleNextAutoClick();
+      return;
+    }
+    if (save?.saved) { noNewPictureStreak = 0; otherItemStreak = 0; }
     autoRun.completedCount = autoRun.count;
     recordImageCompletion();
     noteProgress(progressLine() + liveEtaSuffix());

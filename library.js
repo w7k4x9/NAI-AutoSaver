@@ -1022,6 +1022,15 @@
     void error;
   }
   let comboNames = { bgs: [], emos: [], emoFirst: false, byChar: new Map() };
+  // 배경 names other pictures were saved with (their own axes): lets a picture
+  // without saved axes (renamed in Explorer, say) read "실외 낮 기쁨" as
+  // 배경 「실외 낮」 · 표정 「기쁨」 instead of 「실외」 · 「낮 기쁨」
+  let seenBgs = [];
+  function bgCandidates() {
+    const all = new Set(comboNames.bgs);
+    for (const b of seenBgs) all.add(b);
+    return [...all].sort((a, b) => b.length - a.length);
+  }
   async function loadComboNames() {
     try {
       const raw = (await chrome.storage.local.get("naiAutoSaver.generator"))["naiAutoSaver.generator"] || {};
@@ -1035,6 +1044,17 @@
         }
       };
       for (const bg of raw.bgs || []) if (bg?.code?.trim()) bgs.add(bg.code.trim());
+      // 배경 names the 대기열 uses too ("실외 낮", "실외 밤"…), so a picture
+      // whose name is read back splits at the right place
+      try {
+        const queue = (await chrome.storage.local.get("naiAutoSaver.queue"))["naiAutoSaver.queue"] || {};
+        for (const item of queue.items || []) {
+          const b = String(item?.axes?.bg || "").trim();
+          if (b) bgs.add(b);
+        }
+      } catch (error) {
+        void error;
+      }
       addEmos(raw.sharedExpressions);
       for (const ch of raw.chars || []) {
         for (const bg of ch.bgs || []) if (bg?.code?.trim()) bgs.add(bg.code.trim());
@@ -1076,7 +1096,7 @@
     rest = rest.replace(/^[\s_-]+/, "");
     const sep = (text, at) => at >= text.length || /[\s_-]/.test(text[at]);
     const clean = (text) => text.replace(/^[\s_-]+|[\s_-]+$/g, "");
-    for (const bg of comboNames.bgs) {
+    for (const bg of bgCandidates()) {
       if (!comboNames.emoFirst && rest.startsWith(bg) && sep(rest, bg.length)) return { char, bg, emo: clean(rest.slice(bg.length)) || "—" };
       if (comboNames.emoFirst && rest.endsWith(bg) && (rest.length === bg.length || /[\s_-]/.test(rest[rest.length - bg.length - 1]))) return { char, bg, emo: clean(rest.slice(0, -bg.length)) || "—" };
     }
@@ -1123,6 +1143,7 @@
       else if (!named.has(k) || !list.some((n) => n === named.get(k))) named.set(k, name);
     };
     const axesCache = new Map();
+    seenBgs = [...new Set(order.map((e) => String(e.axes?.bg || "").trim()).filter(Boolean))];
     for (const e of order) {
       if (e.source === "dropped") continue;
       const ax = axesOf(e);
@@ -2185,6 +2206,9 @@
   async function retarget(entry, newPath) {
     const name = newPath.split("/").pop().replace(/\.(png|webp)$/i, "");
     const moved = { ...entry, id: newPath, path: newPath, name, downloadId: null };
+    // saved 배경·표정 belong to the old name; a new name (another 표정) is
+    // read from the name instead
+    if (moved.axes && LibDB.stripCounter(entry.name).trim() !== LibDB.stripCounter(name).trim()) delete moved.axes;
     moved.char = LibDB.characterOf(name, newPath, state.saveFolder);
     moved.search = LibDB.searchText(moved.meta, name);
     await LibDB.put(moved);
@@ -3327,6 +3351,9 @@
   // it is visible, and right away where Chrome can watch the folder.
   let syncing = false;
   let lastSync = 0;
+  // once per opening: a file whose name is still in the library but whose size
+  // changed is a different picture now (names reused after a rename tool)
+  let sizesChecked = false;
   let syncAgain = null;
   async function syncFolder({ quiet = true } = {}) {
     if (!state.root || state.rootPerm !== "granted") return;
@@ -3368,6 +3395,27 @@
       // Same name + size showing up elsewhere = the file was moved: follow it.
       const goneBySig = new Map();
       for (const e of gone) if (e.bytes) goneBySig.set(pictureSig(e.name, e.bytes), e);
+      if (!sizesChecked) {
+        sizesChecked = true;
+        const stale = [];
+        for (const e of files) {
+          if (!e.bytes) continue;
+          const key = relSegments(e).join("/");
+          const item = found.get(key);
+          if (!item?.handle) continue;
+          let size = -1;
+          try { size = (await item.handle.getFile()).size; } catch (error) { continue; }
+          if (size >= 0 && size !== e.bytes) stale.push([e, key]);
+        }
+        for (const [e, key] of stale) {
+          await forget(e);
+          known.delete(key);
+        }
+        if (stale.length) {
+          saveCull();
+          console.info(`같은 이름에 다른 그림이 들어온 ${stale.length}장을 다시 읽어요`);
+        }
+      }
       const fresh = [...found.entries()].filter(([key]) => !known.has(key));
       let moved = 0;
       const rest = [];
