@@ -243,6 +243,10 @@ body[data-selbar] .gallery { padding-bottom: 54px; }
 .bd-badge { position: relative; font-size: 11.5px; font-variant-numeric: tabular-nums; text-align: center; padding: 0 4px; }
 .bd-cell[data-state="done"] .bd-badge { position: absolute; right: 5px; bottom: 5px; display: inline-flex; align-items: center; gap: 3px; padding: 2px 6px; border-radius: 10px; background: var(--accent-fill); color: #fff; }
 .bd-cell[data-state="done"] .bd-badge b { font-weight: 650; }
+/* 채택은 있는데 미분류가 남은 칸: 기준 그림 위에 남은 장수 */
+.bd-cell[data-cover] .bd-badge { position: absolute; left: 5px; right: 5px; bottom: 5px; padding: 2px 6px; border-radius: 10px; background: rgba(0, 0, 0, 0.62); color: #fff; font-weight: 600; }
+.bd-cell[data-dim] { opacity: 0.35; }
+.bd-cell[data-dim]:hover { opacity: 0.8; }
 .bd-empty { color: var(--text2); }
 .sort-menu { min-width: 230px; }
 .sort-menu { min-width: 230px; }

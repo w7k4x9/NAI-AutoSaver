@@ -265,7 +265,13 @@
     const terms = parseQuery(state.query);
     const test = navTest(state.nav);
     const cullTest = state.cullNav ? navTest(state.cullNav) : () => true;
-    state.shown = sortShown(allEntries().filter((e) => !state.hiding.has(e.id) && test(e) && cullTest(e) && matches(e, terms)));
+    const pool = allEntries().filter((e) => !state.hiding.has(e.id) && test(e) && matches(e, terms));
+    state.shown = sortShown(state.cullNav ? pool.filter(cullTest) : pool);
+    // 셀렉 현황 always counts every picture of a 칸 (채택 included), whatever the
+    // 셀렉 filter: a 칸 is done or not on its own, not on what the filter lets in.
+    // The filter only dims the 칸 that have nothing it would show.
+    state.boardPool = pool;
+    state.boardMatch = state.cullNav ? cullTest : null;
     renderSortButton();
     const visible = new Set(state.shown.map((e) => e.id));
     state.sel = state.sel.filter((id) => visible.has(id));
@@ -1130,7 +1136,7 @@
     board.innerHTML = "";
     // character → background → emotion → pictures (in the order they were made)
     const chars = new Map();
-    const order = state.shown.slice().sort((a, b) => a.savedAt - b.savedAt);
+    const order = (state.boardPool || state.shown).slice().sort((a, b) => a.savedAt - b.savedAt);
     // A 표정/배경 renamed only by spaces or _ ("과거섹스" → "과거 섹스") is the
     // same row: old pictures keep the old name in their files. The row shows
     // the name used in the 조합 screen now, else the newest one.
@@ -1197,16 +1203,20 @@
           const counts = { pick: 0, hold: 0, reject: 0, none: 0 };
           for (const e of list) counts[cullOf(e.id).label || "none"] += 1;
           const picked = list.filter((e) => cullOf(e.id).label === "pick");
-          const st = picked.length ? "done" : counts.none === list.length ? "todo" : "doing";
-          if (picked.length) done += 1;
+          // done: a 채택 and nothing 미분류. A 채택 with 미분류 still waiting
+          // (new takes, or the rest never compared) is not done yet.
+          const st = picked.length && !counts.none ? "done" : counts.none === list.length ? "todo" : "doing";
+          if (st === "done") done += 1;
           const cover = picked[0] || null;
           const url = cover ? thumbUrl(cover) : "";
           const ids = list.map((e) => e.id).join("\n");
-          const cell = el("button", { type: "button", class: "bd-cell", "data-state": st, "data-board-group": groupKeyOf(list[0]), "data-ids": ids, "data-char": charName, "data-bg": bg, "data-emo": emo, title: `${groupKeyOf(list[0])} · ${list.length}장 · 오른쪽 클릭: 칸 관리` });
+          const dim = state.boardMatch && !list.some(state.boardMatch);
+          const cell = el("button", { type: "button", class: "bd-cell", "data-state": st, "data-dim": dim ? "1" : null, "data-board-group": groupKeyOf(list[0]), "data-ids": ids, "data-char": charName, "data-bg": bg, "data-emo": emo, title: `${groupKeyOf(list[0])} · ${list.length}장 · 오른쪽 클릭: 칸 관리` });
           if (url) cell.append(el("img", { src: url, alt: "", loading: "lazy", draggable: "false" }));
           const text = st === "done"
             ? (picked.length > 1 ? `채택 ${picked.length}` : "")
-            : st === "doing" ? `${NONE_LABEL} ${counts.none} / ${list.length}` : `${list.length}장`;
+            : st === "doing" ? (picked.length ? `${NONE_LABEL} ${counts.none} 남음` : `${NONE_LABEL} ${counts.none} / ${list.length}`) : `${list.length}장`;
+          if (st === "doing" && picked.length) cell.dataset.cover = "1";
           cell.append(el("span", { class: "bd-badge", html: st === "done" ? `${icon("check", 12)}${text ? `<b>${text}</b>` : ""}` : text }));
           table.append(cell);
         }
@@ -2748,7 +2758,9 @@
     if (cmp.sequence) return cmp.sequence;
     return groupsInView().map(([key, e]) => ({ key, ids: groupMembers(e).map((m) => m.id) }));
   }
-  const groupDone = (ids) => ids.some((id) => cullOf(id).label === "pick");
+  // Done = a 채택 (the 기준) and no 미분류 left to hold up against it. New takes
+  // saved into a 칸 after its 채택 make it a 칸 to do again.
+  const groupDone = (ids) => ids.some((id) => cullOf(id).label === "pick") && !ids.some((id) => !cullOf(id).label);
   // The next group without a 채택 (the one after it when every group is done).
   function nextGroup(step) {
     const seq = groupSequence().filter((g) => g.ids.length > 1);
@@ -2817,7 +2829,7 @@
     $(".cmp-title").textContent = cmp.group || `고른 ${cmp.ids.length}장`;
     const groups = cmp.group ? groupSequence().filter((g) => g.ids.length > 1) : [];
     const left = groups.filter((g) => !groupDone(g.ids)).length;
-    $(".cmp-sub").textContent = [cmp.mode === "pair" ? `${cmp.ids.length}장` : `${visible.length} / ${cmp.ids.length}장`, `채택 ${counts.pick}`, `B컷 ${counts.hold}`, `탈락 ${counts.reject}`, `${NONE_LABEL} ${counts.none}`, groups.length > 1 ? (left ? `남은 칸 ${left} / ${groups.length}` : `${groups.length}칸 모두 채택 ✓`) : ""].filter(Boolean).join(" · ");
+    $(".cmp-sub").textContent = [cmp.mode === "pair" ? `${cmp.ids.length}장` : `${visible.length} / ${cmp.ids.length}장`, `채택 ${counts.pick}`, `B컷 ${counts.hold}`, `탈락 ${counts.reject}`, `${NONE_LABEL} ${counts.none}`, groups.length > 1 ? (left ? `남은 칸 ${left} / ${groups.length}` : `${groups.length}칸 모두 셀렉 완료 ✓`) : ""].filter(Boolean).join(" · ");
     box.querySelectorAll(".cmp-nav").forEach((b) => { b.hidden = !(groups.length > 1); });
     box.querySelectorAll("[data-cmp-filter]").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.cmpFilter === cmp.filter)));
     box.querySelectorAll("[data-cmp-mode]").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.cmpMode === cmp.mode)));
