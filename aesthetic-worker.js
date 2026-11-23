@@ -5,7 +5,9 @@
 // CHW, (x - 0.5) / 0.5.
 /* global ort */
 "use strict";
-importScripts("vendor/ort/ort.wasm.min.js", "onnx-tap.js");
+importScripts("onnx-tap.js");
+// ONNX Runtime is loaded in init(): the WebGPU build when the computer has a
+// usable graphics card (tens of times faster), else the CPU-only build.
 
 let session = null;
 let inputName = "input";
@@ -13,15 +15,42 @@ let outputName = "output";
 let size = 384;
 let stages = null;
 let embName = null; // the picture fingerprint (features before the head), when found
+let backend = "wasm";
+
+async function gpuUsable() {
+  try {
+    if (!self.navigator?.gpu) return false;
+    const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
+    return Boolean(adapter);
+  } catch (error) {
+    return false;
+  }
+}
+// One run on a grey picture: a GPU that gives NaN (some drivers) is not used.
+async function sane() {
+  const input = new Float32Array(3 * size * size);
+  const out = await session.run({ [inputName]: new ort.Tensor("float32", input, [1, 3, size, size]) });
+  return Array.from(out[outputName].data).every((v) => Number.isFinite(v));
+}
 
 function shape(meta) {
   const dims = meta?.shape || meta?.dimensions;
   return Array.isArray(dims) ? dims : null;
 }
 
-async function init({ model, wasmBase, threads, preprocess, fallbackSize }) {
+async function init({ model, wasmBase, threads, preprocess, fallbackSize, gpu = true }) {
+  let useGpu = gpu && (await gpuUsable());
+  try {
+    importScripts(useGpu ? "vendor/ort/ort.webgpu.min.js" : "vendor/ort/ort.wasm.min.js");
+  } catch (error) {
+    if (!useGpu) throw error;
+    useGpu = false;
+    importScripts("vendor/ort/ort.wasm.min.js");
+  }
   ort.env.wasm.wasmPaths = wasmBase;
   ort.env.wasm.numThreads = Math.max(1, threads | 0);
+  const providers = useGpu ? ["webgpu", "wasm"] : ["wasm"];
+  backend = useGpu ? "webgpu" : "wasm";
   // one run gives the class scores and the picture's fingerprint
   let bytes = new Uint8Array(model);
   try {
@@ -31,12 +60,26 @@ async function init({ model, wasmBase, threads, preprocess, fallbackSize }) {
   } catch (error) {
     embName = null;
   }
+  const create = async (data, eps) => ort.InferenceSession.create(data, { executionProviders: eps, graphOptimizationLevel: "all" });
+  const plain = new Uint8Array(model);
   try {
-    session = await ort.InferenceSession.create(bytes, { executionProviders: ["wasm"], graphOptimizationLevel: "all" });
+    session = await create(bytes, providers);
   } catch (error) {
-    if (!embName) throw error;
-    embName = null; // the extra output upset the runtime: scores only
-    session = await ort.InferenceSession.create(new Uint8Array(model), { executionProviders: ["wasm"], graphOptimizationLevel: "all" });
+    if (useGpu) {
+      // the graphics card could not take it: the same build runs on the CPU
+      backend = "wasm";
+      try {
+        session = await create(bytes, ["wasm"]);
+      } catch (e) {
+        if (!embName) throw e;
+        embName = null;
+        session = await create(plain, ["wasm"]);
+      }
+    } else {
+      if (!embName) throw error;
+      embName = null; // the extra output upset the runtime: scores only
+      session = await create(plain, ["wasm"]);
+    }
   }
   if (embName && !session.outputNames.includes(embName)) embName = null;
   inputName = session.inputNames[0];
@@ -44,7 +87,12 @@ async function init({ model, wasmBase, threads, preprocess, fallbackSize }) {
   const dims = shape(session.inputMetadata?.[0]);
   size = dims && typeof dims[2] === "number" && dims[2] > 0 ? dims[2] : fallbackSize || 384;
   stages = Array.isArray(preprocess?.stages) ? preprocess.stages : null;
-  return { size, threads: ort.env.wasm.numThreads, embName };
+  if (backend === "webgpu" && !(await sane().catch(() => false))) {
+    backend = "wasm";
+    try { await session.release?.(); } catch (e) { void e; }
+    session = await create(embName ? bytes : plain, ["wasm"]);
+  }
+  return { size, threads: ort.env.wasm.numThreads, embName, backend };
 }
 
 // A picture as an OffscreenCanvas on white (transparent parts count as white).

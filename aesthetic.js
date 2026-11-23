@@ -27,11 +27,14 @@
   let labels = null;
   const queue = []; // ids, front first
   const queued = new Set();
+  // pictures that could not be scored (no thumbnail, unreadable): they never
+  // hold up a 칸 waiting for them, and are not tried again this session
+  const failed = new Set();
   const blobs = new Map(); // id → () => Blob
   let busy = false;
   let saveTimer = null;
   const listeners = new Set();
-  const status = { phase: "off", progress: 0, error: "", threads: 1, done: 0, fingerprints: null };
+  const status = { phase: "off", progress: 0, error: "", threads: 1, done: 0, fingerprints: null, backend: "" };
 
   // ---- 그림 지문 (fingerprints): one Float32Array per picture, in their own
   // IndexedDB (they are big next to everything else).
@@ -205,11 +208,11 @@
           else if (data.type === "init-error") reject(new Error(data.error));
         };
         worker.onerror = (e) => reject(new Error(e.message || "점수 엔진을 시작하지 못했어요."));
-        worker.postMessage({ type: "init", model, wasmBase: chrome.runtime.getURL("vendor/ort/"), threads, preprocess, fallbackSize: /_448/.test(MODEL.name) ? 448 : 384 }, [model]);
+        worker.postMessage({ type: "init", model, wasmBase: chrome.runtime.getURL("vendor/ort/"), threads, preprocess, fallbackSize: /_448/.test(MODEL.name) ? 448 : 384, gpu: true }, [model]);
       });
       worker.onmessage = null;
       fpSupported = Boolean(info.embName);
-      setPhase("ready", { threads: info.threads, fingerprints: fpSupported });
+      setPhase("ready", { threads: info.threads, fingerprints: fpSupported, backend: info.backend || "wasm" });
       void pump();
       return true;
     })().catch((error) => {
@@ -272,7 +275,11 @@
         } catch (error) {
           blob = null;
         }
-        if (!blob) continue;
+        if (!blob) {
+          failed.add(id);
+          emit({ type: "score", id, score: null, queued: queue.length });
+          continue;
+        }
         try {
           const out = await runOne(id, blob);
           const s = toScore(out.probs);
@@ -288,7 +295,8 @@
           saveScores();
           emit({ type: "score", id, score: s, queued: queue.length });
         } catch (error) {
-          void error; // one unreadable picture: skip it
+          failed.add(id); // one unreadable picture: skip it
+          emit({ type: "score", id, score: null, queued: queue.length });
         }
       }
     } finally {
@@ -302,7 +310,7 @@
   function want(items, { front = false } = {}) {
     const fresh = [];
     for (const it of items) {
-      if (!it || !needs(it.id)) continue;
+      if (!it || !needs(it.id) || failed.has(it.id)) continue;
       blobs.set(it.id, it.blob);
       if (queued.has(it.id)) {
         if (front) {
@@ -334,6 +342,9 @@
     // the score that orders a 칸: 내 점수 when it is in use, else the general one
     rank: (id) => (tasteOn() ? (personal.has(id) ? personal.get(id) : null) : (scores.has(id) ? scores.get(id) : null)),
     hasRank: (id) => (tasteOn() ? personal.has(id) : scores.has(id)),
+    // nothing more will come for this picture: it has its score, or cannot get one
+    settled: (id) => (tasteOn() ? personal.has(id) : scores.has(id)) || failed.has(id) || (tasteOn() && scores.has(id) && fpSupported === false),
+    failed: (id) => failed.has(id),
     personal: (id) => (personal.has(id) ? personal.get(id) : null),
     needs,
     hasFingerprint: (id) => fpIds.has(id),

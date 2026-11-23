@@ -434,25 +434,57 @@
     const cut = Math.floor((ranked.length * percent) / 100);
     return ranked.slice(Math.max(2, ranked.length - cut)).filter((id) => !cullOf(id).label);
   }
+  // Nothing more will come for this picture: scored, or it cannot be (no
+  // thumbnail, unreadable). Those never hold a 칸 up.
+  const aesSettled = (id) => Aesthetic.settled(id) || !aesItem(id);
+  // Orders the 칸 by score as the scores come in, instead of waiting for the
+  // last picture. Before the first mark everything is re-sorted (the best
+  // first); after it, the pictures already looked at keep their place and only
+  // the ones still ahead in the left lane move. Returns true when the order changed.
   function applyAesOrder() {
-    if (!aes.on || cmp.aesApplied) return;
-    if (!cmp.ids.every((id) => Aesthetic.hasRank(id))) return;
-    cmp.aesApplied = true;
+    if (!aes.on) return false;
     const s = (id) => Aesthetic.rank(id);
-    cmp.ids.sort((a, b) => s(b) - s(a));
-    // the low ones are only pointed out: what happens to them is the user's call
-    cmp.low = new Set(lowScored(cmp.ids, aes.skip));
-    cmp.skipped = aes.hide ? new Set(cmp.low) : new Set();
-    cmp.lane.a = 0;
-    cmp.lane.aId = null;
-    pickLeftLane();
+    const fresh = !cmp.touched;
+    const cur = fresh ? null : cmp.lane.aId;
+    const at = cur ? cmp.ids.indexOf(cur) : -1;
+    const head = cmp.ids.slice(0, at + 1);
+    const tail = cmp.ids.slice(at + 1);
+    const ranked = tail.filter((id) => Aesthetic.hasRank(id)).sort((a, b) => s(b) - s(a));
+    const next = [...head, ...ranked, ...tail.filter((id) => !Aesthetic.hasRank(id))];
+    const changed = next.some((id, i) => id !== cmp.ids[i]);
+    cmp.ids = next;
+    if (changed && fresh) {
+      cmp.lane.a = 0;
+      cmp.lane.aId = null;
+      pickLeftLane();
+    }
+    if (!cmp.aesApplied && cmp.ids.every(aesSettled)) {
+      cmp.aesApplied = true;
+      // the low ones are only pointed out: what happens to them is the user's call
+      cmp.low = new Set(lowScored(cmp.ids, aes.skip));
+      cmp.skipped = aes.hide ? new Set(cmp.low) : new Set();
+      return true;
+    }
+    return changed;
+  }
+  let aesOrderTimer = null;
+  function scheduleAesOrder() {
+    if (aesOrderTimer) return;
+    aesOrderTimer = setTimeout(() => {
+      aesOrderTimer = null;
+      if ($(".compare").hidden) return;
+      // 한눈에 after a mark: the tiles stay where they are
+      if (cmp.mode !== "pair" && cmp.touched) { renderAesChip(); return; }
+      if (applyAesOrder()) renderCompare({ keepImages: true });
+      else renderAesChip();
+    }, 250);
   }
   function renderAesChip() {
     const chip = $(".cmp-aes");
     if (!chip) return;
     for (const id of cmp.low) if (cullOf(id).label) cmp.low.delete(id); // already chosen by hand
     const n = cmp.low.size;
-    const waiting = aes.on && !cmp.aesApplied ? cmp.ids.filter((id) => !Aesthetic.hasRank(id)).length : 0;
+    const waiting = aes.on && !cmp.aesApplied ? cmp.ids.filter((id) => !aesSettled(id)).length : 0;
     chip.hidden = !(n || waiting);
     chip.innerHTML = "";
     if (waiting) {
@@ -469,7 +501,10 @@
   }
   function feedAesFromCompare() {
     if (!aes.on) return;
-    Aesthetic.want(cmp.ids.map(aesItem).filter(Boolean), { front: true });
+    // the 미분류 first: they are what the left lane rolls through
+    const none = cmp.ids.filter((id) => !cullOf(id).label);
+    const marked = cmp.ids.filter((id) => cullOf(id).label);
+    Aesthetic.want([...none, ...marked].map(aesItem).filter(Boolean), { front: true });
     // the next 칸 to do, so it is ready by the time the user gets there
     const seq = groupSequence().filter((g) => g.ids.length > 1);
     const at = seq.findIndex((g) => g.key === cmp.group);
@@ -485,7 +520,9 @@
     if (!aes.on) return;
     clearTimeout(feedTimer);
     feedTimer = setTimeout(() => {
-      const ids = state.board ? boardOrder.flatMap((g) => (groupDone(g.ids) ? [] : g.ids)) : (state.shown || []).map((e) => e.id);
+      let ids = state.board ? boardOrder.flatMap((g) => (groupDone(g.ids) ? [] : g.ids)) : (state.shown || []).map((e) => e.id);
+      // 미분류 first: the pictures that are going to be compared
+      ids = [...ids.filter((id) => !cullOf(id).label), ...ids.filter((id) => cullOf(id).label)];
       Aesthetic.want(ids.slice(0, 5000).map(aesItem).filter(Boolean));
     }, 1500);
   }
@@ -495,14 +532,7 @@
     if (event.type === "score") {
       // the 점수 badge in the compare view, if it is showing that picture
       document.querySelectorAll(`.cmp-score[data-score-id="${CSS.escape(event.id)}"]`).forEach((b) => { b.textContent = scoreText(event.id); });
-      if (!$(".compare").hidden && cmp.ids.includes(event.id)) {
-        if (!cmp.aesApplied && !cmp.touched && cmp.ids.every((id) => Aesthetic.hasRank(id))) {
-          applyAesOrder();
-          renderCompare({ keepImages: true });
-        } else {
-          renderAesChip();
-        }
-      }
+      if (!$(".compare").hidden && cmp.ids.includes(event.id)) scheduleAesOrder();
       if (sortNeedsScores()) scheduleScoreSort();
     }
     clearTimeout(aesBoxTimer);
@@ -884,7 +914,7 @@
       : st.phase === "downloading" ? `모델 받는 중 · ${Math.round(st.progress * 100)}%`
         : st.phase === "loading" ? "준비하는 중…"
           : st.phase === "error" ? `시작하지 못했어요: ${st.error}`
-            : st.queued ? `점수 매기는 중 · 남은 ${fmt(st.queued)}장` : "준비됐어요 · 지금 보는 그림부터 뒤에서 매겨요";
+            : `${st.queued ? `점수 매기는 중 · 남은 ${fmt(st.queued)}장` : "준비됐어요 · 지금 보는 그림부터 뒤에서 매겨요"} · ${st.backend === "webgpu" ? "그래픽카드로 계산" : "CPU로 계산 (그래픽카드를 못 써서 느려요)"}`;
     pane.append(group(setRow("AI 점수", status, setSwitch("set-aes", aes.on, async (on) => {
       aes.on = on;
       saveAes();
