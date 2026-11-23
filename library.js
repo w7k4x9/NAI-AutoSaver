@@ -1231,6 +1231,7 @@
           el("h2", { text: charName }),
           el("span", { class: "bd-progress", text: `${total}칸 중 ${done}칸 셀렉 완료` }),
           el("span", { class: "bd-bar" }, [el("i", { style: `width: ${total ? Math.round((done / total) * 100) : 0}%` })]),
+          leftoverIds({ char: charName }).length ? el("button", { type: "button", class: "btn small secondary bd-leftover", "data-leftover-char": charName, title: "채택이 이미 있는 칸에 남은 미분류를 한꺼번에 탈락으로 (채택이 없는 칸은 그대로)", text: `남은 미분류 ${leftoverIds({ char: charName }).length.toLocaleString("ko-KR")}장 탈락으로` }) : null,
         ]),
         table,
       ]));
@@ -1263,6 +1264,27 @@
     for (const m of comboNames.byChar?.get(char)?.emos || []) if (!set.includes(m)) set.push(m);
     return set;
   }
+  // 미분류 left in 칸 that already have a 채택: the leftovers nobody needs.
+  // 칸 without a 채택 are not touched (nothing has been chosen there yet).
+  function leftoverIds({ char, bg = null, emo = null }) {
+    const out = [];
+    for (const [k, list] of boardCells) {
+      const [c, b, m] = k.split("\u0000");
+      if (c !== char || (emo != null && m !== emo) || (bg != null && b !== bg)) continue;
+      if (!list.some((e) => cullOf(e.id).label === "pick")) continue;
+      for (const e of list) if (!cullOf(e.id).label) out.push(e.id);
+    }
+    return out;
+  }
+  async function rejectLeftovers(slot, title) {
+    const ids = leftoverIds(slot);
+    if (!ids.length) return;
+    const n = ids.length.toLocaleString("ko-KR");
+    if (!(await confirmDialog(`미분류 ${n}장을 탈락으로 보낼까요?`, `${title}에서 채택이 이미 있는 칸에 남은 미분류만 탈락으로 바꿔요. 채택이 없는 칸은 그대로예요. 파일은 옮기지 않아요.`, "탈락으로"))) return;
+    applyCullAction(ids, { label: "reject" });
+    if (state.board) renderBoard({ keepScroll: true });
+    toast(`미분류 ${n}장을 탈락으로 바꿨어요.`, "ok", { label: "되돌리기", run: () => { applyCullAction(ids, { label: null }); if (state.board) renderBoard({ keepScroll: true }); } });
+  }
   const slotTitle = ({ char, bg, emo }) => `${char} · ${bg ? `${bg} · ` : ""}${emo}`;
   function openSlotMenu(x, y, slot) {
     document.querySelectorAll(".menu.ctx").forEach((m) => m.remove());
@@ -1272,6 +1294,8 @@
     const items = [];
     if (list.length) items.push([`표정 이름 바꾸기 · 다른 표정으로 옮기기… (${list.length}장)`, () => void moveSlot(slot)]);
     items.push(["다른 표정에서 복사해 오기…", () => void copyIntoSlot(slot)]);
+    const leftover = leftoverIds(slot).length;
+    if (leftover) items.push([`남은 미분류 ${leftover}장 탈락으로`, () => void rejectLeftovers(slot, slotTitle(slot))]);
     if (list.length > 1 && slot.bg) items.push(["비교하기", () => openCompare(list.map((e) => e.id), { group: groupKeyOf(list[0]), sequence: boardOrder })]);
     if (list.length) items.push([`휴지통으로 (${list.length}장)`, async () => {
       if (await confirmDialog(`${slotTitle(slot)} ${list.length}장을 휴지통으로 보낼까요?`, `파일은 ${TRASH_FOLDER} 폴더로 옮겨지고, 바로 되돌릴 수 있어요.`, "휴지통으로")) await trashEntries(list);
@@ -2639,21 +2663,31 @@
     laneCurrent("b");
     laneCurrent("a");
   }
-  // 「이걸로 확정」: the 기준 stays 채택; every other 채택 or 미분류 of the 칸 → B컷
-  // (탈락 stays 탈락). One click instead of pressing W on each.
-  const finishTargets = (keep) => cmp.ids.filter((id) => id !== keep && (cullOf(id).label === "pick" || !cullOf(id).label));
-  const finishCount = (keep) => finishTargets(keep).length;
+  // 「이걸로 확정」: the 기준 stays 채택; the other 채택 (pictures that were good
+  // enough to keep) → B컷, and the 미분류 left over → 탈락 (B컷 and 탈락 stay).
+  const finishTargets = (keep) => ({
+    hold: cmp.ids.filter((id) => id !== keep && cullOf(id).label === "pick"),
+    reject: cmp.ids.filter((id) => id !== keep && !cullOf(id).label),
+  });
+  const finishCount = (keep) => { const t = finishTargets(keep); return t.hold.length + t.reject.length; };
+  const finishText = (keep) => {
+    const t = finishTargets(keep);
+    return [t.hold.length ? `채택 ${t.hold.length}장 B컷` : "", t.reject.length ? `미분류 ${t.reject.length}장 탈락` : ""].filter(Boolean).join(" · ");
+  };
   function finishGroup() {
     const keep = laneCurrent("b");
     if (!keep) return;
-    const ids = finishTargets(keep);
+    const t = finishTargets(keep);
+    const ids = [...t.hold, ...t.reject];
     if (!ids.length) return;
+    const text = finishText(keep);
     const before = ids.map((id) => [id, cullOf(id).label || null]);
-    applyCullAction(ids, { label: "hold" });
+    applyCullAction(t.hold, { label: "hold" });
+    applyCullAction(t.reject, { label: "reject" });
     cmp.skipped = new Set();
     laneCurrent("a");
     renderCompare({ keepImages: true });
-    toast(`이 칸은 채택 1장으로 확정했어요 · ${ids.length}장 B컷`, "ok", { label: "되돌리기", run: () => {
+    toast(`이 칸은 채택 1장으로 확정했어요 · ${text}`, "ok", { label: "되돌리기", run: () => {
       for (const [id, label] of before) applyCullAction([id], { label });
       renderCompare({ keepImages: true });
     } });
@@ -2894,7 +2928,7 @@
       cell.append(el("div", { class: "cmp-lane-head" }, [
         title,
         side === "b" ? el("button", { class: "cmp-swap", type: "button", "data-swap": "1", title: "왼쪽 그림을 기준으로 (S)", disabled: laneCurrent("a") ? null : "", html: `${icon("swap", 14)}<span>바꾸기</span>` }) : null,
-        side === "b" && id && cmp.lane.right === "pick" && finishCount(id) ? el("button", { class: "cmp-swap cmp-finish", type: "button", "data-finish": "1", title: "이 그림만 채택으로 남기고, 이 칸의 나머지(채택·미분류)는 전부 B컷으로", html: `${icon("check", 14)}<span>이걸로 확정 · 나머지 ${finishCount(id)}장 B컷</span>` }) : null,
+        side === "b" && id && cmp.lane.right === "pick" && finishCount(id) ? el("button", { class: "cmp-swap cmp-finish", type: "button", "data-finish": "1", title: "이 그림만 채택으로 남기고, 이 칸의 다른 채택은 B컷, 남은 미분류는 탈락으로", html: `${icon("check", 14)}<span>이걸로 확정 · ${finishText(id)}</span>` }) : null,
         el("span", { class: "cmp-lane-count", text: list.length ? `${at + 1} / ${list.length}` : "0장" }),
         el("button", { class: "cmp-roll", type: "button", "data-roll": "-1", "aria-label": "이전", disabled: list.length < 2 ? "" : null, text: "‹" }),
         el("button", { class: "cmp-roll", type: "button", "data-roll": "1", "aria-label": "다음", disabled: list.length < 2 ? "" : null, text: "›" }),
@@ -4646,6 +4680,11 @@
         event.stopPropagation(); // the page's "click elsewhere closes menus" would close it at once
         const r = row.getBoundingClientRect();
         openSlotMenu(r.left, r.bottom + 4, { char: row.dataset.rowChar, bg: null, emo: row.dataset.rowEmo });
+        return;
+      }
+      const leftover = event.target.closest("[data-leftover-char]");
+      if (leftover) {
+        void rejectLeftovers({ char: leftover.dataset.leftoverChar }, leftover.dataset.leftoverChar);
         return;
       }
       const empty = event.target.closest("[data-empty]");
