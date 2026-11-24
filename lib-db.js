@@ -157,8 +157,40 @@
     };
   }
 
+  // Saved folders (FileSystemHandle) kept from an earlier Chrome can come
+  // back broken: reading one, or asking it anything, may simply never answer.
+  // `within` gives such a call a time limit (resolving TIMED_OUT past it), and
+  // `getKvWithin` also ends its read on time, since a read left open would
+  // hold up every later save in "kv" (셀렉 표시 included).
+  const TIMED_OUT = Symbol("timed out");
+  function within(promise, ms) {
+    let timer;
+    return Promise.race([promise, new Promise((resolve) => { timer = setTimeout(() => resolve(TIMED_OUT), ms); })])
+      .finally(() => clearTimeout(timer));
+  }
+  async function getKvWithin(key, ms) {
+    const db = await within(open(), ms);
+    if (db === TIMED_OUT) return TIMED_OUT;
+    return new Promise((resolve, reject) => {
+      const t = db.transaction("kv", "readonly");
+      const r = t.objectStore("kv").get(key);
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        try { t.abort(); } catch (error) { void error; }
+        resolve(TIMED_OUT);
+      }, ms);
+      r.onsuccess = () => { if (!settled) { settled = true; clearTimeout(timer); resolve(r.result); } };
+      r.onerror = () => { if (!settled) { settled = true; clearTimeout(timer); reject(r.error); } };
+    });
+  }
+
   const api = {
     open,
+    TIMED_OUT,
+    within,
+    getKvWithin,
     put: (entry) => tx("images", "readwrite", (s) => req(s.put(entry))),
     get: (id) => tx("images", "readonly", (s) => req(s.get(id))),
     remove: (id) => tx("images", "readwrite", (s) => req(s.delete(id))),

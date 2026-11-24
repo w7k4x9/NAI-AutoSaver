@@ -271,7 +271,16 @@ async function pickFolder() {
   // A remembered folder: one permission prompt (or none) instead of a picker.
   if (folder) {
     const mode = { mode: "readwrite" };
-    if ((await folder.queryPermission(mode)) === "granted" || (await folder.requestPermission(mode)) === "granted") {
+    // A folder remembered by an earlier Chrome can come back broken and never
+    // answer: the 업데이트 button then did nothing at all. Past the limit it
+    // is forgotten and the folder is picked once more.
+    const now = await LibDB.within(folder.queryPermission(mode), 3000);
+    if (now === LibDB.TIMED_OUT) {
+      folder = null;
+      void LibDB.within(LibDB.delKv(FOLDER_KEY).catch(() => {}), 3000);
+      throw Object.assign(new Error("stale"), { name: "StaleFolder" });
+    }
+    if (now === "granted" || (await folder.requestPermission(mode)) === "granted") {
       return folder;
     }
     // Declined: next tap opens the picker again.
@@ -316,6 +325,7 @@ async function runUpdate() {
       picked = await pickFolder();
     } catch (error) {
       if (error?.name === "AbortError") return folder ? renderAvailable() : renderPickStep();
+      if (error?.name === "StaleFolder") return renderPickStep("예전에 골라 둔 폴더를 크롬이 열지 못해요. 한 번만 다시 골라 주세요.");
       if (error?.name === "NotAllowedError") {
         return renderPickStep("폴더를 고쳐도 된다는 허락이 있어야 새 파일을 바꿔 넣을 수 있어요. 크롬이 물으면 「수정 허용」을 눌러 주세요.");
       }
@@ -333,7 +343,7 @@ async function runUpdate() {
     }
     const found = match;
     folder = found.dir;
-    await LibDB.setKv(FOLDER_KEY, folder).catch(() => {});
+    await LibDB.within(LibDB.setKv(FOLDER_KEY, folder).catch(() => {}), 3000);
 
     show({ title: `${info.latest}${josaRo(info.latest)} 바꾸는 중`, sub: "창을 닫지 말고 잠깐만 기다려 주세요." });
     progress(0, 1, "바뀐 파일을 찾는 중…");
@@ -425,6 +435,7 @@ globalThis.NAIUpdater = { gitBlobSha, wanted, resolveExtensionFolder, runUpdate 
   // The remembered folder is not waited on forever: a read that never answered
   // left this page blank, so no update could get in. Without it, the folder is
   // simply asked for again.
-  folder = await Promise.race([LibDB.getKv(FOLDER_KEY).catch(() => null), new Promise((resolve) => setTimeout(() => resolve(null), 4000))]);
+  folder = await LibDB.getKvWithin(FOLDER_KEY, 4000).catch(() => null);
+  if (folder === LibDB.TIMED_OUT) folder = null;
   await render();
 })();

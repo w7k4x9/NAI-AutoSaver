@@ -258,11 +258,11 @@
       }));
       return;
     }
-    box.dataset.state = state.root ? "prompt" : "none";
+    box.dataset.state = state.root || state.rootBroken ? "prompt" : "none";
     box.append(connRow({
       iconName: "folder",
-      title: state.root ? "폴더 다시 허락하기" : "NovelAI 폴더 연결",
-      sub: state.root ? "크롬이 다시 물어봐요" : "예전에 저장한 그림도 보여요",
+      title: state.root ? "폴더 다시 허락하기" : state.rootBroken ? "NovelAI 폴더 다시 연결" : "NovelAI 폴더 연결",
+      sub: state.root ? "크롬이 다시 물어봐요" : state.rootBroken ? "예전 연결이 대답을 안 해요 · 한 번만 다시 골라 주세요" : "예전에 저장한 그림도 보여요",
       action: () => void connectFolder(),
       actionTitle: state.root ? "폴더 접근 다시 허락하기" : "다운로드 안의 NovelAI 폴더를 골라 연결해요",
     }));
@@ -2177,7 +2177,14 @@
   async function ensureWritable() {
     if (!state.root && !(await connectFolder())) return false;
     try {
-      if ((await state.root.queryPermission({ mode: "readwrite" })) === "granted") return true;
+      const now = await LibDB.within(state.root.queryPermission({ mode: "readwrite" }), HANDLE_WAIT);
+      if (now === LibDB.TIMED_OUT) {
+        forgetBrokenFolder();
+        renderFolderBox();
+        toast("연결해 둔 폴더가 대답을 안 해요. 왼쪽 아래에서 폴더를 다시 연결해 주세요.", "warn");
+        return false;
+      }
+      if (now === "granted") return true;
       return (await state.root.requestPermission({ mode: "readwrite" })) === "granted";
     } catch (error) {
       return false;
@@ -3335,10 +3342,12 @@
         if (perm !== "granted") return;
       } else {
         handle = await window.showDirectoryPicker({ id: "nai-autosaver-library", mode: "read", startIn: "downloads" });
-        await LibDB.setKv("root", handle);
+        // remembered for next time; a save that hangs does not keep this one from working
+        if ((await LibDB.within(LibDB.setKv("root", handle).catch(() => null), HANDLE_WAIT)) === LibDB.TIMED_OUT) console.warn("보관함 · 연결한 폴더를 기억해 두지 못했어요");
       }
       state.root = handle;
       state.rootPerm = "granted";
+      state.rootBroken = false;
       renderFolderBox();
       void scanFolder().then(() => syncFolder({ quiet: true }));
       return true;
@@ -3348,15 +3357,32 @@
     }
   }
 
+  // The saved folder is read and asked about with a time limit. Until 1.19.6
+  // this waited forever on a saved folder that never answered (a handle kept
+  // from an earlier Chrome can come back like that), and with it the whole
+  // 보관함; 1.19.6 showed the pictures but kept counting the wait.
+  const HANDLE_WAIT = 4000;
   async function restoreFolder() {
     try {
-      const handle = await LibDB.getKv("root");
+      const handle = await LibDB.getKvWithin("root", HANDLE_WAIT);
+      if (handle === LibDB.TIMED_OUT) return forgetBrokenFolder();
       if (!handle) return;
+      const perm = await LibDB.within(handle.queryPermission({ mode: "read" }), HANDLE_WAIT);
+      if (perm === LibDB.TIMED_OUT) return forgetBrokenFolder();
       state.root = handle;
-      state.rootPerm = (await handle.queryPermission({ mode: "read" })) === "granted" ? "granted" : "prompt";
+      state.rootPerm = perm === "granted" ? "granted" : "prompt";
     } catch (error) {
       state.root = null;
     }
+  }
+  // The saved folder does not answer: forget it (so the next opening does not
+  // wait on it again) and ask for the folder once more — picking it again
+  // gives Chrome a fresh, working one.
+  function forgetBrokenFolder() {
+    state.root = null;
+    state.rootBroken = true;
+    console.warn("보관함 · 연결해 둔 폴더가 대답을 안 해서 다시 연결을 부탁해요");
+    void LibDB.within(LibDB.delKv("root").catch(() => {}), HANDLE_WAIT);
   }
 
   // `unreadable` (a Set) collects folders that could not be read (in use,
@@ -4728,12 +4754,18 @@
         el("span", { text: errText(boot.errors.entries) }), el("br"),
         el("span", { text: "크롬 창을 모두 닫았다가 다시 켜 보세요. 그림 파일은 폴더에 그대로 있어요." }),
       );
+    } else if (secs >= 30) {
+      // not slow any more: not answering (no counting on)
+      empty.append(
+        el("strong", { text: "그림 목록이 대답을 안 해요" }),
+        el("span", { text: `기다리는 중: ${waiting.join(" · ")}` }), el("br"),
+        el("span", { text: "「다시 불러오기」를 눌러 보고, 그래도 그대로면 크롬 창을 모두 닫았다가 다시 켜 보세요. 그림 파일은 폴더에 그대로 있어요." }),
+      );
     } else {
       empty.append(el("strong", { text: "그림 목록을 불러오는 중…" }));
       if (secs >= 4) empty.append(el("span", { text: `${secs}초째 · 기다리는 중: ${waiting.join(" · ")}` }));
-      if (secs >= 20) empty.append(el("br"), el("span", { text: "너무 오래 걸리면 크롬 창을 모두 닫았다가 다시 켜 보세요. 그림 파일은 폴더에 그대로 있어요." }));
     }
-    if (failed || secs >= 20) empty.append(el("div", { class: "empty-actions" }, [el("button", { class: "btn small", type: "button", text: "다시 불러오기", onclick: () => location.reload() })]));
+    if (failed || secs >= 30) empty.append(el("div", { class: "empty-actions" }, [el("button", { class: "btn small", type: "button", text: "다시 불러오기", onclick: () => location.reload() })]));
   }
   // Ticks every second until every part is in: what is still loading or
   // could not be read, on top of the pictures.
@@ -4764,22 +4796,32 @@
     const slow = listShowing && bootSecs() >= 4 ? waiting : [];
     // the list's own failure is in the middle of the page until pictures show
     const broken = listShowing ? failed : failed.filter((p) => p !== "entries");
-    note.hidden = !slow.length && !broken.length;
+    // the saved folder did not answer and was let go: ask for it right here
+    const folderGone = listShowing && state.rootBroken && !state.root;
+    note.hidden = !slow.length && !broken.length && !folderGone;
     note.innerHTML = "";
     if (note.hidden) return;
+    // past 30 seconds a part is not slow, it is not answering: say that
+    // instead of counting on (1.19.6 counted to 16,000 seconds and up)
+    const stuck = bootSecs() >= 30;
     const lines = [
+      folderGone ? "연결해 둔 NovelAI 폴더가 대답을 안 해요. 한 번만 다시 골라 주시면 폴더와 맞추기·원본 사본·옮기기가 다시 돼요." : "",
       ...broken.map((p) => `${BOOT_PARTS[p]}: ${errText(boot.errors[p])}`),
-      slow.length ? `${slow.map((p) => BOOT_PARTS[p]).join(" · ")} 기다리는 중 · ${bootSecs()}초째` : "",
+      slow.length ? `${slow.map((p) => BOOT_PARTS[p]).join(" · ")} ${stuck ? "대답이 없어요" : `기다리는 중 · ${bootSecs()}초째`}` : "",
     ].filter(Boolean);
     const cullStuck = broken.includes("cull") || slow.includes("cull");
+    const title = folderGone && !broken.length && !slow.length ? "폴더를 다시 연결해 주세요"
+      : broken.length || stuck ? "보관함 일부를 읽지 못했어요" : "보관함 일부를 아직 불러오는 중이에요";
+    note.dataset.tone = broken.length || stuck || folderGone ? "warn" : "wait";
     note.append(
       el("div", { class: "banner-text" }, [
-        el("strong", { text: broken.length ? "보관함 일부를 읽지 못했어요" : "보관함 일부를 아직 불러오는 중이에요" }),
-        el("span", { text: lines.join(" — ") }),
+        el("strong", { text: title }),
+        ...lines.map((text) => el("span", { text })),
         cullStuck ? el("span", { text: "셀렉 표시가 들어올 때까지 셀렉·옮기기·이름 바꾸기는 막아 둘게요. 예전 표시를 덮어쓰지 않으려고요." }) : null,
-        broken.length || bootSecs() >= 20 ? el("span", { text: "계속 이러면 크롬 창을 모두 닫았다가 다시 켜 보세요." }) : null,
       ]),
-      el("button", { class: "btn small", type: "button", text: "다시 불러오기", onclick: () => location.reload() }),
+      folderGone
+        ? el("button", { class: "btn small", type: "button", text: "폴더 다시 연결", onclick: async () => { if (await connectFolder()) renderBootNote(); } })
+        : el("button", { class: "btn small", type: "button", text: "다시 불러오기", onclick: () => location.reload() }),
     );
   }
 
