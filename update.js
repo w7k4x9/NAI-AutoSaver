@@ -422,6 +422,9 @@ globalThis.NAIUpdater = { gitBlobSha, wanted, resolveExtensionFolder, runUpdate 
 
 (async () => {
   globalThis.NAIIcons?.hydrate();
-  folder = await LibDB.getKv(FOLDER_KEY).catch(() => null);
+  // The remembered folder is not waited on forever: a read that never answered
+  // left this page blank, so no update could get in. Without it, the folder is
+  // simply asked for again.
+  folder = await Promise.race([LibDB.getKv(FOLDER_KEY).catch(() => null), new Promise((resolve) => setTimeout(() => resolve(null), 4000))]);
   await render();
 })();

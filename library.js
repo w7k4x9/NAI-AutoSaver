@@ -54,8 +54,13 @@
   }
   async function loadEntries() {
     const all = (await LibDB.all()).map(fixChar);
+    // pictures saved while the list was loading came in on their own: keep them
+    const have = new Set(all.map((e) => e.id));
+    for (const e of state.entries) if (!have.has(e.id)) all.push(e);
     all.sort((a, b) => b.savedAt - a.savedAt);
     state.entries = all;
+    invalidateGroups();
+    dataVersion += 1;
   }
   // One picture file = one entry. The same file could get in twice: once when
   // it was saved ("NovelAI/…") and once from the linked folder under another
@@ -80,11 +85,12 @@
       if (label && !cullOf(first.id).label) state.cull.set(first.id, { label });
       state.cull.delete(e.id);
     }
-    if (!drop.length) return;
+    if (!drop.length) return false;
     const gone = new Set(drop.map((e) => e.id));
     state.entries = state.entries.filter((e) => !gone.has(e.id));
-    for (const e of drop) await LibDB.remove(e.id).catch(() => {});
     saveCull();
+    for (const e of drop) await LibDB.remove(e.id).catch(() => {});
+    return true;
   }
   function allEntries() {
     return state.dropped.concat(state.entries);
@@ -223,9 +229,16 @@
     return extra ? el("div", { class: "conn-line" }, [row, extra]) : row;
   }
 
+  // A part still loading shows as that, not as "not connected" (pressing
+  // 연결 then would pick the folder again for nothing).
+  function bootRow(box, iconName, title) {
+    box.dataset.state = "none";
+    box.append(connRow({ iconName, title, sub: "확인하는 중…" }));
+  }
   function renderFolderBox() {
     const box = $(".folder-box");
     box.innerHTML = "";
+    if (bootWaiting("root")) return bootRow(box, "folder", "폴더");
     if (state.scan) {
       box.dataset.state = "scan";
       const pct = state.scan.total ? Math.round((state.scan.done / state.scan.total) * 100) : 0;
@@ -293,7 +306,9 @@
     else renderMoreTiles();
     feedAesFromView();
     const empty = $(".empty");
-    if (!state.shown.length) {
+    if (!state.shown.length && !bootOk("entries") && !allEntries().length) {
+      renderBootEmpty();
+    } else if (!state.shown.length) {
       empty.hidden = false;
       empty.innerHTML = allEntries().length
         ? "<strong>찾는 그림이 없어요</strong>다른 단어로 찾아보거나 왼쪽에서 ‘전체’를 눌러 보세요."
@@ -411,6 +426,7 @@
     if (aes.on) await Aesthetic.loadScores();
   }
   function saveAes() {
+    if (bootWaiting("aes")) return;
     void LibDB.setKv(AES_KEY, { ...aes, v: 2 }).catch(() => {});
   }
   const aesReady = () => aes.on && Aesthetic.status().phase === "ready";
@@ -557,6 +573,7 @@
     const box = $(".aes-box");
     if (!box) return;
     box.innerHTML = "";
+    if (bootWaiting("aes")) return bootRow(box, "sparkle", "AI 점수");
     const st = Aesthetic.status();
     const pct = Math.round((st.progress || 0) * 100);
     if (!aes.on) {
@@ -807,6 +824,7 @@
         toast(`점수 낮은 ${fmt(list.length)}장을 골라 뒀어요. 보고 나서 W(B컷)나 E(탈락)로 정해요.`, "ok");
         return;
       }
+      if (cullNotReady()) return;
       applyCullAction(list, { label: action });
       toast(`점수 낮은 ${fmt(list.length)}장을 ${LABELS[action]}으로 바꿨어요.`, "ok", { label: "되돌리기", run: () => applyCullAction(list, { label: null }) });
     });
@@ -1307,6 +1325,7 @@
     return out;
   }
   async function rejectLeftovers(slot, title) {
+    if (cullNotReady()) return;
     const ids = leftoverIds(slot);
     if (!ids.length) return;
     const n = ids.length.toLocaleString("ko-KR");
@@ -1381,6 +1400,7 @@
     return max + 1;
   }
   async function moveSlot(slot) {
+    if (cullNotReady()) return;
     const list = slotEntries(slot);
     const to = await pickEmotion(`${slotTitle(slot)} → 어느 표정으로?`, `${list.length}장의 파일 이름에서 「${slot.emo}」를 바꿔요. 있는 표정을 고르면 그 줄로 합쳐지고, 새 이름을 쓰면 이름만 바뀌어요. 채택·B컷은 그대로예요.`, slot.char, slot.emo, { okLabel: "바꾸기" });
     const toEmo = String(to || "").replace(UNSAFE_NAME, "_").replace(/[_]+$/, "").trim();
@@ -1427,6 +1447,7 @@
   }
   // Fill a 칸/줄 with copies from another 표정 (same character, same 배경).
   async function copyIntoSlot(slot) {
+    if (cullNotReady()) return;
     const from = await pickEmotion(`${slotTitle(slot)} ← 어느 표정에서 가져올까요?`, "고른 표정의 그림을 이 표정 이름으로 복사해 넣어요. 원래 그림은 그대로 있어요.", slot.char, slot.emo, { allowNew: false });
     if (!from) return;
     const source = slotEntries({ char: slot.char, bg: slot.bg, emo: from });
@@ -1530,6 +1551,7 @@
           el("span", { text: `예전에 보관함에 들어온 뒤 지워지거나 옮겨진 그림이에요 (${folders.slice(0, 3).join(", ")}${folders.length > 3 ? ` 외 ${folders.length - 3}곳` : ""}). 파일은 건드리지 않고 목록에서만 빼요.` }),
         ]),
         el("button", { class: "btn small", type: "button", text: "목록에서 빼기", onclick: async () => {
+          if (cullNotReady()) return;
           const list = state.pendingGone || [];
           state.pendingGone = null;
           for (const e of list) await forget(e);
@@ -1898,6 +1920,7 @@
     document.querySelectorAll("[data-lb-label]").forEach((b) => b.setAttribute("aria-pressed", String((c.label || "none") === b.dataset.lbLabel)));
   }
   function lightboxCull(action) {
+    if (cullNotReady()) return;
     if (!lb.id) return;
     applyCullAction([lb.id], action);
     $(".lb-cull").innerHTML = cullSummaryHtml(lb.id);
@@ -1966,25 +1989,38 @@
   const CULL_KV = "cull";
   state.cull = new Map();
   let cullTimer = null;
+  // The marks are saved as one whole map. Until the saved map has been read,
+  // saving would write a nearly empty map over every mark the user made, so
+  // nothing that changes marks runs before then (and not at all if it could
+  // not be read). It used to read "could not read" as "no marks".
+  let cullLoaded = false;
   async function loadCull() {
-    try {
-      const saved = await LibDB.getKv(CULL_KV);
-      if (saved && typeof saved === "object") {
-        // Older marks may carry a 별점 (dropped): keep only the label.
-        state.cull = new Map(Object.entries(saved).filter(([, v]) => v?.label).map(([k, v]) => [k, { label: v.label }]));
-      }
-    } catch (error) {
-      void error;
+    const saved = await LibDB.getKv(CULL_KV);
+    if (saved && typeof saved === "object") {
+      // Older marks may carry a 별점 (dropped): keep only the label.
+      state.cull = new Map(Object.entries(saved).filter(([, v]) => v?.label).map(([k, v]) => [k, { label: v.label }]));
     }
+    cullLoaded = true;
   }
   function saveCull() {
+    if (!cullLoaded) return;
     clearTimeout(cullTimer);
     cullTimer = setTimeout(() => { void LibDB.setKv(CULL_KV, Object.fromEntries(state.cull)).catch(() => {}); }, 200);
+  }
+  // For anything that changes marks or moves files (marks follow the file):
+  // says why it cannot happen yet and returns true.
+  function cullNotReady() {
+    if (cullLoaded) return false;
+    toast(boot.status.cull === "failed"
+      ? "셀렉 표시를 읽지 못해서 지금은 바꿀 수 없어요. 크롬 창을 모두 닫았다가 다시 켜 보세요."
+      : "셀렉 표시를 불러오는 중이에요. 잠시 뒤에 다시 해 주세요.", "warn");
+    return true;
   }
   function cullOf(id) {
     return state.cull.get(id) || {};
   }
   function setCull(ids, patch) {
+    if (cullNotReady()) return;
     for (const id of ids) {
       const next = { ...cullOf(id), ...patch };
       delete next.rating; // 별점 was dropped in 1.13
@@ -2069,6 +2105,7 @@
   // picks and B컷 of every character end up in their own folders.
   const CULL_FOLDER = "_셀렉";
   function openCullExport() {
+    if (cullNotReady()) return;
     const { dialog, body, right: save } = notionDialogShell("폴더로 나눠 저장", { rightLabel: "저장" });
     const scopeIds = new Set((state.shown || []).map((e) => e.id));
     const inScope = (onlyShown) => allEntries().filter((e) => !onlyShown || scopeIds.has(e.id));
@@ -2172,6 +2209,7 @@
     return `${stem} [${Date.now()}]${ext}`;
   }
   async function moveCulled(list, { byChar }) {
+    if (cullNotReady()) return;
     const movable = list.filter((e) => e.source !== "dropped");
     if (!movable.length) {
       toast("불러온 파일은 옮길 수 없어요. 복사를 골라 주세요.", "warn");
@@ -2341,6 +2379,7 @@
   const onDisk = (list) => list.filter((e) => e.source !== "dropped");
 
   async function trashEntries(list) {
+    if (cullNotReady()) return;
     const files = onDisk(list);
     if (!files.length) {
       toast("불러온 파일은 폴더에 있는 파일이 아니라서 휴지통으로 보낼 게 없어요.", "warn");
@@ -2405,6 +2444,7 @@
     }
   }
   async function restoreTrashed(undo) {
+    if (cullNotReady()) return;
     let back = 0;
     for (const u of undo) {
       try {
@@ -2437,6 +2477,7 @@
     }
   }
   async function moveEntriesTo(list) {
+    if (cullNotReady()) return;
     const files = onDisk(list);
     if (!files.length) {
       toast("불러온 파일은 옮길 수 없어요. 「다른 폴더로 복사」를 써 주세요.", "warn");
@@ -2481,6 +2522,7 @@
     toast(moved ? `${moved}장을 ${where}로 옮겼어요${failed.length ? ` · ${failed.length}장은 못 옮겼어요` : ""}.` : "옮기지 못했어요.", moved && !failed.length ? "ok" : "warn");
   }
   async function copyEntriesTo(list) {
+    if (cullNotReady()) return;
     if (!list.length) return;
     const dest = await pickDestination("nai-copy-to");
     if (!dest) return;
@@ -2526,6 +2568,7 @@
     return macAlert({ title, text: hint, okLabel, input: value ?? "" });
   }
   async function renameEntry(entry) {
+    if (cullNotReady()) return;
     if (!entry || entry.source === "dropped") return;
     const raw = await textDialog("이름 바꾸기", entry.name, "바꾸기", "확장자(.webp/.png)는 그대로 둬요.");
     const next = String(raw ?? "").replace(UNSAFE_NAME, "_").trim();
@@ -2585,6 +2628,7 @@
   }
 
   async function exportCulled(list, { byChar, clean }) {
+    if (cullNotReady()) return;
     if (!list.length) return;
     let made = 0;
     let lastId = null;
@@ -2705,6 +2749,7 @@
     return [t.hold.length ? `채택 ${t.hold.length}장 B컷` : "", t.reject.length ? `미분류 ${t.reject.length}장 탈락` : ""].filter(Boolean).join(" · ");
   };
   function finishGroup() {
+    if (cullNotReady()) return;
     const keep = laneCurrent("b");
     if (!keep) return;
     const t = finishTargets(keep);
@@ -2725,6 +2770,7 @@
   // S: the left picture becomes the 기준 and the old 기준 goes to the left —
   // each takes the other's label when the lanes show different ones.
   function swapLanes() {
+    if (cullNotReady()) return;
     const a = laneCurrent("a");
     const b = laneCurrent("b");
     if (!a) return;
@@ -2752,6 +2798,7 @@
     else if (count("hold") > 1) cmp.lane.left = cmp.lane.right = "hold";
   }
   function markInLane(action) {
+    if (cullNotReady()) return;
     const side = cmp.lane.side;
     const id = laneCurrent(side);
     if (!id) return;
@@ -3061,6 +3108,7 @@
         const id = quick.closest(".cmp-cell").dataset.id;
         cmp.focus = compareVisible().indexOf(id);
         if (cmp.mode === "pair") cmp.lane.side = quick.closest(".cmp-cell").dataset.side;
+        if (cullNotReady()) return;
         applyCullAction([id], { label: quick.dataset.quick === "none" ? null : quick.dataset.quick });
         if (cmp.mode === "pair") { followMark(id, quick.closest(".cmp-cell").dataset.side); renderCompare({ keepImages: true }); }
         return;
@@ -3145,7 +3193,7 @@
         event.preventDefault();
         event.stopImmediatePropagation();
         const id = visible[cmp.focus];
-        if (!id) return;
+        if (!id || cullNotReady()) return;
         applyCullAction([id], action);
         // Marked: move on to the next picture (unless it just left the view).
         if ("label" in action && action.label && compareVisible().includes(id)) cmp.focus = Math.min(cmp.focus + 1, compareVisible().length - 1);
@@ -3335,7 +3383,8 @@
   }
 
   async function scanFolder({ quiet = false } = {}) {
-    if (!state.root || state.scan) return;
+    // checked against the whole list (and marks follow moved files): not before both are in
+    if (!state.root || state.scan || !bootOk("entries") || !cullLoaded) return;
     const known = new Set(await LibDB.keys());
     const knownSig = new Set(state.entries.filter((e) => e.bytes).map((e) => pictureSig(e.name, e.bytes)));
     const found = [];
@@ -3432,7 +3481,7 @@
   let sizesChecked = false;
   let syncAgain = null;
   async function syncFolder({ quiet = true } = {}) {
-    if (!state.root || state.rootPerm !== "granted") return;
+    if (!state.root || state.rootPerm !== "granted" || !bootOk("entries") || !cullLoaded) return;
     if (state.scan || syncing || (quiet && Date.now() - lastSync < 5000)) {
       // busy or just done: come back once instead of dropping the change
       clearTimeout(syncAgain);
@@ -4190,6 +4239,7 @@
     const box = $(".notion-box");
     if (!box) return;
     box.innerHTML = "";
+    if (bootWaiting("notion")) return bootRow(box, "notion", "노션");
     box.dataset.state = notionReady() ? "ok" : "none";
     if (notionReady()) {
       const failing = notionCfg.autoSend && notionAutoFailing();
@@ -4628,6 +4678,111 @@
     document.body.dataset.theme = dark ? "dark" : "light";
   }
 
+  // ------------------------------------------------------------------ boot ---
+  // Until 1.19.5 the page drew nothing before every part below had loaded:
+  // one that never finished (a database read or a folder check that never
+  // answered) left the whole 보관함 blank, without a word. Now each part loads
+  // on its own: the pictures show as soon as the list is in, the rest fills in
+  // as it arrives, and a part still missing after a few seconds is named on
+  // screen (and in the console) instead of the page just staying empty.
+  const BOOT_PARTS = { entries: "그림 목록", cull: "셀렉 표시", root: "폴더 연결", notion: "노션 설정", combos: "조합 이름", aes: "AI 점수" };
+  const boot = { at: 0, status: {}, errors: {}, timer: null, warned: false };
+  const bootOk = (part) => boot.status[part] === "ok";
+  const bootWaiting = (part) => boot.status[part] === "wait";
+  const bootSecs = () => Math.round((performance.now() - boot.at) / 1000);
+  const errText = (error) => String(error?.message || error?.name || error || "알 수 없는 오류");
+  function track(part, load) {
+    boot.status[part] = "wait";
+    return Promise.resolve().then(load).then(
+      () => { boot.status[part] = "ok"; },
+      (error) => {
+        boot.status[part] = "failed";
+        boot.errors[part] = error;
+        console.error(`보관함 · 읽지 못함: ${BOOT_PARTS[part]}`, error);
+      },
+    ).finally(renderBootNote);
+  }
+  // One redraw for parts that come in together.
+  let rerenderQueued = false;
+  function rerender() {
+    if (rerenderQueued) return;
+    rerenderQueued = true;
+    requestAnimationFrame(() => {
+      rerenderQueued = false;
+      const y = $(".gallery").scrollTop;
+      render();
+      $(".gallery").scrollTop = y;
+    });
+  }
+  // The middle of the page while the list itself is not in.
+  function renderBootEmpty() {
+    const empty = $(".empty");
+    const failed = boot.status.entries === "failed";
+    const secs = bootSecs();
+    const waiting = Object.keys(BOOT_PARTS).filter(bootWaiting).map((p) => BOOT_PARTS[p]);
+    empty.hidden = false;
+    empty.innerHTML = "";
+    if (failed) {
+      empty.append(
+        el("strong", { text: "그림 목록을 읽지 못했어요" }),
+        el("span", { text: errText(boot.errors.entries) }), el("br"),
+        el("span", { text: "크롬 창을 모두 닫았다가 다시 켜 보세요. 그림 파일은 폴더에 그대로 있어요." }),
+      );
+    } else {
+      empty.append(el("strong", { text: "그림 목록을 불러오는 중…" }));
+      if (secs >= 4) empty.append(el("span", { text: `${secs}초째 · 기다리는 중: ${waiting.join(" · ")}` }));
+      if (secs >= 20) empty.append(el("br"), el("span", { text: "너무 오래 걸리면 크롬 창을 모두 닫았다가 다시 켜 보세요. 그림 파일은 폴더에 그대로 있어요." }));
+    }
+    if (failed || secs >= 20) empty.append(el("div", { class: "empty-actions" }, [el("button", { class: "btn small", type: "button", text: "다시 불러오기", onclick: () => location.reload() })]));
+  }
+  // Ticks every second until every part is in: what is still loading or
+  // could not be read, on top of the pictures.
+  function renderBootNote() {
+    const app = $(".app");
+    app.toggleAttribute("data-loading", !bootOk("entries"));
+    app.toggleAttribute("data-cull-wait", !cullLoaded);
+    const parts = Object.keys(BOOT_PARTS);
+    const waiting = parts.filter(bootWaiting);
+    const failed = parts.filter((p) => boot.status[p] === "failed");
+    if (!waiting.length && boot.timer) {
+      clearInterval(boot.timer);
+      boot.timer = null;
+    }
+    if (waiting.length && !boot.warned && bootSecs() >= 10) {
+      boot.warned = true;
+      console.warn(`보관함 · ${bootSecs()}초째 기다리는 중: ${waiting.map((p) => BOOT_PARTS[p]).join(", ")}`);
+    }
+    // until the list is in, the middle of the page says so; once pictures
+    // show (the list, or a few saved meanwhile), this note does
+    const listShowing = bootOk("entries") || allEntries().length > 0;
+    if (!listShowing) renderBootEmpty();
+    let note = $(".boot-note");
+    if (!note) {
+      note = el("div", { class: "banner boot-note", role: "status", hidden: true });
+      $(".gallery").prepend(note);
+    }
+    const slow = listShowing && bootSecs() >= 4 ? waiting : [];
+    // the list's own failure is in the middle of the page until pictures show
+    const broken = listShowing ? failed : failed.filter((p) => p !== "entries");
+    note.hidden = !slow.length && !broken.length;
+    note.innerHTML = "";
+    if (note.hidden) return;
+    const lines = [
+      ...broken.map((p) => `${BOOT_PARTS[p]}: ${errText(boot.errors[p])}`),
+      slow.length ? `${slow.map((p) => BOOT_PARTS[p]).join(" · ")} 기다리는 중 · ${bootSecs()}초째` : "",
+    ].filter(Boolean);
+    const cullStuck = broken.includes("cull") || slow.includes("cull");
+    note.append(
+      el("div", { class: "banner-text" }, [
+        el("strong", { text: broken.length ? "보관함 일부를 읽지 못했어요" : "보관함 일부를 아직 불러오는 중이에요" }),
+        el("span", { text: lines.join(" — ") }),
+        cullStuck ? el("span", { text: "셀렉 표시가 들어올 때까지 셀렉·옮기기·이름 바꾸기는 막아 둘게요. 예전 표시를 덮어쓰지 않으려고요." }) : null,
+        broken.length || bootSecs() >= 20 ? el("span", { text: "계속 이러면 크롬 창을 모두 닫았다가 다시 켜 보세요." }) : null,
+      ]),
+      el("button", { class: "btn small", type: "button", text: "다시 불러오기", onclick: () => location.reload() }),
+    );
+  }
+
   // ------------------------------------------------------------------ init ---
   async function init() {
     const settings = await chrome.storage.sync.get(["appearance", "saveFolder", "tagHover", "tagHoverMachine"]);
@@ -4653,10 +4808,54 @@
       state.query = q;
       $(".search-input").value = q;
     }
-    await Promise.all([loadEntries(), restoreFolder(), loadNotion(), loadCull(), loadComboNames(), loadAes()]);
-    await dropDuplicateEntries();
-    // nothing selected at first: the first click shows that picture
+    // Each part on its own (see 「boot」 above); nothing here waits for them.
+    boot.at = performance.now();
+    const parts = {
+      entries: track("entries", loadEntries),
+      cull: track("cull", loadCull),
+      root: track("root", restoreFolder),
+      notion: track("notion", loadNotion),
+      combos: track("combos", loadComboNames),
+      aes: track("aes", loadAes),
+    };
+    boot.timer = setInterval(renderBootNote, 1000);
+    renderBootNote();
+    // the frame right away; nothing selected at first: the first click shows that picture
     render();
+    // the pictures as soon as the list is in. 셀렉 normally comes with it (a
+    // short wait spares a second redraw) and fills in when it comes later.
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    void parts.entries.then(() => Promise.race([parts.cull, sleep(1500)])).then(rerender);
+    // 셀렉 later than that: only the marks and counts change, the grid stays put
+    void parts.cull.then(() => {
+      if (!bootOk("entries")) return;
+      refreshCullLook([...document.querySelectorAll(".grid .tile[data-id]")].map((t) => t.dataset.id));
+      if (state.board) renderBoard({ keepScroll: true });
+    });
+    // same picture listed twice: cleared once the list and 셀렉 are both in
+    void Promise.all([parts.entries, parts.cull]).then(async () => {
+      if (bootOk("entries") && cullLoaded && await dropDuplicateEntries()) rerender();
+    });
+    // the linked folder is checked against the list once both are in
+    void parts.root.then(renderFolderBox);
+    void Promise.all([parts.entries, parts.cull, parts.root]).then(() => {
+      if (state.root && state.rootPerm === "granted") void scanFolder().then(() => syncFolder({ quiet: true }));
+    });
+    void parts.notion.then(() => {
+      renderNotionBox();
+      refreshNotionLast();
+      if (location.hash.includes("notion")) void (notionReady() ? openNotionSettings() : openNotionConnect());
+    });
+    void parts.combos.then(() => { if (state.board && bootOk("entries")) renderBoard({ keepScroll: true }); });
+    void parts.aes.then(() => {
+      renderAesBox();
+      if (!aes.on || !bootOk("aes")) return;
+      void Aesthetic.start().catch(() => {});
+      if (bootOk("entries")) {
+        feedAesFromView();
+        if (sortNeedsScores()) rerender();
+      }
+    });
 
     $(".search-input").addEventListener("input", (event) => {
       state.query = event.target.value;
@@ -4695,7 +4894,6 @@
       }
     });
     Aesthetic.on(onAesEvent);
-    if (aes.on) void Aesthetic.start().catch(() => {});
     $(".board").addEventListener("contextmenu", (event) => {
       const cell = event.target.closest(".bd-cell[data-char]");
       const row = event.target.closest("[data-row-emo]");
@@ -4851,14 +5049,12 @@
       if (message?.action === "notionStatus") void loadNotion().then(() => { renderNotionBox(); refreshNotionLast(); });
     });
     for (const type of ["keydown", "pointerdown", "wheel"]) document.addEventListener(type, () => { lastInput = Date.now(); }, { capture: true, passive: true });
-    if (state.root && state.rootPerm === "granted") void scanFolder().then(() => syncFolder({ quiet: true }));
     // Coming back to the page re-checks the folder (at most every 2 minutes);
     // without a folder watcher, a slow check every 5 minutes covers the rest.
     const sometimes = () => { if (!document.hidden && Date.now() - lastSync > 120000) void syncFolder(); };
     document.addEventListener("visibilitychange", sometimes);
     window.addEventListener("focus", sometimes);
     setInterval(() => { if (!folderObserver && !document.hidden) void syncFolder(); }, 300000);
-    if (location.hash.includes("notion")) void (notionReady() ? openNotionSettings() : openNotionConnect());
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area === "local" && changes["naiAutoSaver.generator"]) void loadComboNames().then(() => { if (state.board) renderBoard({ keepScroll: true }); });
       if (area === "local" && changes[NotionSync.CONFIG_KEY]) {
