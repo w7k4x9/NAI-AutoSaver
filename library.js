@@ -1279,7 +1279,6 @@
           el("h2", { text: charName }),
           el("span", { class: "bd-progress", text: `${total}칸 중 ${done}칸 셀렉 완료` }),
           el("span", { class: "bd-bar" }, [el("i", { style: `width: ${total ? Math.round((done / total) * 100) : 0}%` })]),
-          leftoverIds({ char: charName }).length ? el("button", { type: "button", class: "btn small secondary bd-leftover", "data-leftover-char": charName, title: "채택이 이미 있는 칸에 남은 미분류를 한꺼번에 탈락으로 (채택이 없는 칸은 그대로)", text: `남은 미분류 ${leftoverIds({ char: charName }).length.toLocaleString("ko-KR")}장 탈락으로` }) : null,
         ]),
         table,
       ]));
@@ -2692,8 +2691,8 @@
     void error;
   }
   const CMP_HINTS = {
-    grid: "←/→ 고르기 · Q 채택 · W B컷 · E 탈락 · R 미분류 · 두 번 누르면 크게 · M 나란히로 · Esc 닫기",
-    pair: "←/→ 넘기기 · 왼쪽·오른쪽을 눌러(또는 Tab) 넘길 쪽 고르기 · Q 채택 · W B컷 · E 탈락 · R 미분류 · S 왼쪽을 기준으로 · Z 둘 다 확대 · M 한눈에로 · Esc 닫기",
+    grid: "Q로 예쁜 것 채택 → 위 「남은 미분류 탈락」 → 채택 중에서 W로 B컷 · ←/→ 고르기 · E 탈락 · R 미분류 · 두 번 누르면 크게 · M 나란히로 · Esc 닫기",
+    pair: "Q로 예쁜 것 채택 → 위 「남은 미분류 탈락」 → 채택끼리 보면서 W로 B컷 · ←/→ 넘기기 · Tab 넘길 쪽 · E 탈락 · R 미분류 · S 왼쪽을 기준으로 · Z 둘 다 확대 · M 한눈에로 · Esc 닫기",
   };
   const laneLabelOf = (key) => (key === "none" ? null : key);
   function laneList(side) {
@@ -2755,6 +2754,41 @@
     const t = finishTargets(keep);
     return [t.hold.length ? `채택 ${t.hold.length}장 B컷` : "", t.reject.length ? `미분류 ${t.reject.length}장 탈락` : ""].filter(Boolean).join(" · ");
   };
+  // The usual way to cull a 칸: Q the good ones, let every 미분류 left go
+  // (탈락), then pick the B컷 among the 채택 (W). Step 2 sits here, where the
+  // picking happens, once something has been picked in this 칸 (before, it
+  // was a button on 셀렉 현황 for a whole character, new takes included).
+  function compareRest() {
+    if (!cmp.ids.some((id) => cullOf(id).label === "pick")) return [];
+    return cmp.ids.filter((id) => !cullOf(id).label);
+  }
+  function rejectRest() {
+    if (cullNotReady()) return;
+    const ids = compareRest();
+    if (!ids.length) return;
+    applyCullAction(ids, { label: "reject" });
+    const view = { left: cmp.lane.left, right: cmp.lane.right, filter: cmp.filter };
+    // on to step 3: the 채택 against each other, W for the B컷
+    if (cmp.mode === "pair") {
+      cmp.lane.left = "pick";
+      cmp.lane.right = "pick";
+      cmp.lane.a = 0;
+      cmp.lane.aId = null;
+      cmp.lane.side = "a";
+    } else if (cmp.filter === "all") {
+      cmp.filter = "keep";
+    }
+    renderCompare({ keepImages: true });
+    if (state.board) renderBoard({ keepScroll: true });
+    toast(`남은 미분류 ${ids.length.toLocaleString("ko-KR")}장을 탈락으로 바꿨어요. 이제 채택 중에서 B컷을 W로 골라요.`, "ok", { label: "되돌리기", run: () => {
+      applyCullAction(ids, { label: null });
+      // back where it was: the 미분류 on the left again
+      Object.assign(cmp.lane, { left: view.left, right: view.right, a: 0, aId: null });
+      cmp.filter = view.filter;
+      renderCompare({ keepImages: true });
+      if (state.board) renderBoard({ keepScroll: true });
+    } });
+  }
   function finishGroup() {
     if (cullNotReady()) return;
     const keep = laneCurrent("b");
@@ -2949,6 +2983,14 @@
     const left = groups.filter((g) => !groupDone(g.ids)).length;
     $(".cmp-sub").textContent = [cmp.mode === "pair" ? `${cmp.ids.length}장` : `${visible.length} / ${cmp.ids.length}장`, `채택 ${counts.pick}`, `B컷 ${counts.hold}`, `탈락 ${counts.reject}`, `${NONE_LABEL} ${counts.none}`, groups.length > 1 ? (left ? `남은 칸 ${left} / ${groups.length}` : `${groups.length}칸 모두 셀렉 완료 ✓`) : ""].filter(Boolean).join(" · ");
     box.querySelectorAll(".cmp-nav").forEach((b) => { b.hidden = !(groups.length > 1); });
+    let rest = box.querySelector(".cmp-rest");
+    if (!rest) {
+      rest = el("button", { class: "btn small cmp-rest", type: "button", "data-reject-rest": "1", title: "채택을 고른 다음, 이 칸에 남은 미분류를 한꺼번에 탈락으로 (되돌리기 돼요)" });
+      box.querySelector(".cmp-top .grow").before(rest);
+    }
+    const restCount = compareRest().length;
+    rest.hidden = !restCount;
+    rest.textContent = `남은 미분류 ${restCount.toLocaleString("ko-KR")}장 탈락`;
     box.querySelectorAll("[data-cmp-filter]").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.cmpFilter === cmp.filter)));
     box.querySelectorAll("[data-cmp-mode]").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.cmpMode === cmp.mode)));
     box.dataset.mode = cmp.mode;
@@ -3146,6 +3188,7 @@
       }
       if (event.target.closest("[data-swap]")) { swapLanes(); return; }
       if (event.target.closest("[data-finish]")) { finishGroup(); return; }
+      if (event.target.closest("[data-reject-rest]")) { rejectRest(); return; }
       if (event.target.closest("[data-next-group]")) { stepGroup(1); return; }
       const cell = event.target.closest(".cmp-cell");
       if (cell && cmp.mode === "pair") {
@@ -4950,11 +4993,6 @@
         event.stopPropagation(); // the page's "click elsewhere closes menus" would close it at once
         const r = row.getBoundingClientRect();
         openSlotMenu(r.left, r.bottom + 4, { char: row.dataset.rowChar, bg: null, emo: row.dataset.rowEmo });
-        return;
-      }
-      const leftover = event.target.closest("[data-leftover-char]");
-      if (leftover) {
-        void rejectLeftovers({ char: leftover.dataset.leftoverChar }, leftover.dataset.leftoverChar);
         return;
       }
       const empty = event.target.closest("[data-empty]");

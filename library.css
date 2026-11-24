@@ -229,7 +229,6 @@ body[data-selbar] .gallery { padding-bottom: 54px; }
 .bd-head { display: flex; align-items: center; gap: 12px; margin: 0 0 10px; }
 .bd-head h2 { margin: 0; font-size: 16px; font-weight: 750; }
 .bd-progress { font-size: 12.5px; color: var(--text2); }
-.bd-leftover { margin-left: auto; }
 .bd-bar { flex: 0 1 180px; height: 6px; border-radius: 3px; background: var(--elev2); overflow: hidden; }
 .bd-bar i { display: block; height: 100%; background: var(--accent-fill); border-radius: 3px; }
 .bd-table { display: grid; grid-template-columns: minmax(70px, 120px) repeat(var(--cols), minmax(84px, 120px)); gap: 6px; align-items: stretch; }
@@ -267,7 +266,7 @@ body[data-selbar] .gallery { padding-bottom: 54px; }
 .drop-card span[data-icon] { color: var(--accent-text); }
 /* notification banner (macOS): top right of the window, slides in */
 .toast {
-  position: fixed; top: 64px; right: 16px; z-index: 60; width: min(360px, calc(100vw - 32px));
+  position: fixed; top: 64px; right: 16px; z-index: 110; width: min(360px, calc(100vw - 32px));
   border-radius: 12px; padding: 10px 10px 10px 12px; display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--text); line-height: 1.4;
   background: var(--glass); border: 0.5px solid var(--glass-border);
   -webkit-backdrop-filter: blur(30px) saturate(180%); backdrop-filter: blur(30px) saturate(180%);
@@ -704,3 +703,10 @@ button.bd-rowhead:hover { background: var(--elev2); }
 .app[data-loading] .nav-chars:empty::after { content: "불러오는 중…"; }
 .empty-actions { margin-top: 14px; }
 .boot-note .banner-text span + span { margin-top: 2px; }
+
+/* 「남은 미분류 탈락」 in the 칸 view (1.19.8) */
+.cmp-rest { margin-left: 10px; white-space: nowrap; }
+/* Over the 크게 보기 / 칸 비교 screens the notices (and their 되돌리기) used to
+   sit underneath them, unseen; now on top, low on the right, clear of the
+   lane controls. */
+.lightbox:not([hidden]) ~ .toast, .compare:not([hidden]) ~ .toast { top: auto; bottom: 56px; }
